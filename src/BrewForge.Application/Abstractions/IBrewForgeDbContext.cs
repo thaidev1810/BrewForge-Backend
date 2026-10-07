@@ -40,4 +40,10 @@ public interface IBrewForgeDbContext
         long? actorUserId = null);
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs several saves as one unit: all of them are stored, or none is.
+    /// Needed where the order of two changes matters to a database constraint.
+    /// </summary>
+    Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken = default);
 }

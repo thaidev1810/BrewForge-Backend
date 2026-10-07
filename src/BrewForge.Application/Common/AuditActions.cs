@@ -22,6 +22,13 @@ public static class AuditActions
     /// </summary>
     public const string AiRepair = "AI_REPAIR";
     public const string ManualRepair = "MANUAL_REPAIR";
+
+    public const string Review = "REVIEW";
+    public const string Release = "RELEASE";
+    public const string ReleaseRefused = "RELEASE_REFUSED";
+    public const string Supersede = "SUPERSEDE";
+    public const string Rollback = "ROLLBACK";
+    public const string ImportExisting = "IMPORT_EXISTING";
 }
 
 /// <summary>The values written to <c>audit_log.entity_type</c>.</summary>

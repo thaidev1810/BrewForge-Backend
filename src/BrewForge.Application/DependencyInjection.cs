@@ -20,6 +20,7 @@ public static class DependencyInjection
         services.AddScoped<RecipeService>();
         services.AddScoped<RecipeValidationService>();
         services.AddScoped<RecipeDraftingService>();
+        services.AddScoped<RecipeReleaseService>();
         return services;
     }
 }

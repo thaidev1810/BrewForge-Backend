@@ -14,7 +14,7 @@ namespace BrewForge.Api.Controllers;
 [ApiController]
 [Route("api/v1/recipe-versions")]
 public sealed class RecipeVersionsController(RecipeService recipes, RecipeValidationService validation,
-    RecipeDraftingService drafting) : ControllerBase
+    RecipeDraftingService drafting, RecipeReleaseService release) : ControllerBase
 {
     /// <summary>The full tree: steps, dependencies and ingredients.</summary>
     [HttpGet("{id:long}"), Authorize(Policy = Policies.HeadOffice)]
@@ -47,4 +47,27 @@ public sealed class RecipeVersionsController(RecipeService recipes, RecipeValida
     [HttpPost("{id:long}/submit"), Authorize(Policy = Policies.RdSpecialist)]
     public Task<ValidationResultDto> Submit(long id, CancellationToken cancellationToken) =>
         validation.SubmitAsync(id, cancellationToken);
+
+    /// <summary>UC-09. <c>{ "decisions": [ { "stepId": 901, "action": "ACCEPT" | "EDIT" | "REJECT", "editedText": "..." } ] }</c></summary>
+    [HttpPost("{id:long}/review"), Authorize(Policy = Policies.RdManager)]
+    public Task<ReviewResultDto> Review(long id, ReviewRequest request, CancellationToken cancellationToken) =>
+        release.ReviewAsync(id, request, cancellationToken);
+
+    /// <summary>
+    /// UC-10. Re-validates, then seals. 409 MSG-E08 if master data changed,
+    /// 409 BR-12 if the caller is the author, 409 BR-02 if the recipe would
+    /// have two released versions. Accepts an <c>Idempotency-Key</c> header.
+    /// </summary>
+    [HttpPost("{id:long}/release"), Authorize(Policy = Policies.RdManager)]
+    public Task<ReleaseResultDto> Release(long id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken cancellationToken) =>
+        release.ReleaseAsync(id, idempotencyKey, cancellationToken);
+
+    /// <summary>BR-04. Creates a new version whose content is copied from this one. Never restores in place.</summary>
+    [HttpPost("{id:long}/rollback"), Authorize(Policy = Policies.RdManager)]
+    public async Task<ActionResult<RecipeVersionDto>> Rollback(long id, CancellationToken cancellationToken)
+    {
+        var created = await release.RollbackAsync(id, cancellationToken);
+        return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+    }
 }

@@ -20,6 +20,8 @@ public static class AuthorizationMatrix
 
     private static readonly RoleName[] Specialist = [RoleName.RdSpecialist];
 
+    private static readonly RoleName[] Manager = [RoleName.RdManager];
+
     /// <summary>"All head-office roles" in the contract: every role not confined to a branch.</summary>
     private static readonly RoleName[] HeadOffice =
     [
@@ -81,5 +83,9 @@ public static class AuthorizationMatrix
         new("POST", "/recipe-versions/{id}/validate", [RoleName.RdSpecialist, RoleName.RdManager]),
         new("POST", "/recipe-versions/{id}/repair", Specialist),
         new("POST", "/recipe-versions/{id}/submit", Specialist),
+        new("POST", "/recipe-versions/{id}/review", Manager),
+        new("POST", "/recipe-versions/{id}/release", Manager),
+        new("POST", "/recipe-versions/{id}/rollback", Manager),
+        new("POST", "/recipes/import-existing", Specialist),
     ];
 }

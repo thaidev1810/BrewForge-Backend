@@ -144,6 +144,16 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         });
     }
 
+    public async Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken = default)
+    {
+        if (Database.CurrentTransaction is not null) return await work();
+
+        await using var transaction = await Database.BeginTransactionAsync(cancellationToken);
+        var result = await work();
+        await transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
     public override int SaveChanges(bool acceptAllChangesOnSuccess) =>
         SaveChangesAsync(acceptAllChangesOnSuccess).GetAwaiter().GetResult();
 
@@ -205,7 +215,62 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
                 throw DomainException.RuleViolation("AUDIT", "The audit log is append-only.");
             }
         }
+
+        GuardReleasedVersions();
     }
+
+    /// <summary>
+    /// BR-01 at the door of the database. A version that was already
+    /// immutable when it was loaded may change in exactly one way: its state
+    /// moves to SUPERSEDED. Its steps, their ingredients and their
+    /// dependencies may not change at all. The aggregate refuses these
+    /// changes itself; this catches a code path that went around it, and
+    /// answers with the same clean 409 rather than a trigger error.
+    /// </summary>
+    private void GuardReleasedVersions()
+    {
+        string[] allowedOnceImmutable = [nameof(RecipeVersion.State), nameof(RecipeVersion.SupersededAt)];
+        var sealedVersionIds = new HashSet<long>();
+
+        foreach (var entry in ChangeTracker.Entries<RecipeVersion>())
+        {
+            var wasImmutable = entry.State != EntityState.Added
+                               && (bool)entry.Property(nameof(RecipeVersion.IsImmutable)).OriginalValue!;
+            if (!wasImmutable) continue;
+            sealedVersionIds.Add(entry.Entity.Id);
+
+            if (entry.State == EntityState.Modified
+                && entry.Properties.Any(p => p.IsModified && !allowedOnceImmutable.Contains(p.Metadata.Name)))
+            {
+                throw ReleasedVersionIsImmutable();
+            }
+        }
+        if (sealedVersionIds.Count == 0) return;
+
+        var changedSteps = ChangeTracker.Entries<RecipeStep>()
+            .Where(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .ToList();
+        if (changedSteps.Any(entry => sealedVersionIds.Contains(entry.Entity.RecipeVersionId)))
+        {
+            throw ReleasedVersionIsImmutable();
+        }
+
+        var sealedStepIds = ChangeTracker.Entries<RecipeStep>()
+            .Where(entry => sealedVersionIds.Contains(entry.Entity.RecipeVersionId))
+            .Select(entry => entry.Entity.Id)
+            .ToHashSet();
+        var childChanged =
+            ChangeTracker.Entries<StepIngredient>().Any(entry =>
+                entry.State != EntityState.Unchanged && sealedStepIds.Contains(entry.Entity.StepId))
+            || ChangeTracker.Entries<StepDependency>().Any(entry =>
+                entry.State != EntityState.Unchanged && sealedStepIds.Contains(entry.Entity.StepId));
+        if (childChanged) throw ReleasedVersionIsImmutable();
+    }
+
+    private static DomainException ReleasedVersionIsImmutable() =>
+        DomainException.RuleViolation("BR-01",
+            "A released recipe version cannot be modified. Create a new version instead.",
+            ErrorCodes.ReleasedVersionImmutable);
 
     /// <summary>
     /// snake_case names and string-coded enumerations, exactly as the data

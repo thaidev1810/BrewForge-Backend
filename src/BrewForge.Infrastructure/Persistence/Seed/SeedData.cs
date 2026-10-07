@@ -38,6 +38,8 @@ public static class SeedData
         new("admin", "Nguyễn Minh Quản", RoleName.Admin, null),
         new("rdspec", "Trần Thu Hà", RoleName.RdSpecialist, null),
         new("rdmanager", "Lê Hoàng Nam", RoleName.RdManager, null),
+        // A second manager, because the one who edits a draft may not release it (BR-12).
+        new("rdmanager2", "Trịnh Bảo Châu", RoleName.RdManager, null),
         new("trainer", "Phạm Lê Nhật Huy", RoleName.Trainer, null),
         new("auditor", "Đỗ Thị Kim Anh", RoleName.QualityAuditor, null),
         new("trainingmgr", "Võ Thanh Tùng", RoleName.TrainingManager, null),

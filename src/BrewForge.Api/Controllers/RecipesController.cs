@@ -28,6 +28,19 @@ public sealed class RecipesController(RecipeService recipes) : ControllerBase
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
+    /// <summary>
+    /// UC-26. The body is the structured recipe as entered from the current
+    /// document: <c>{ recipeCode, name, category, steps }</c>. The origin is
+    /// forced to EXISTING.
+    /// </summary>
+    [HttpPost("import-existing"), Authorize(Policy = Policies.RdSpecialist)]
+    public async Task<ActionResult<ImportedRecipeDto>> ImportExisting(ImportExistingRecipeRequest request,
+        [FromServices] RecipeReleaseService release, CancellationToken cancellationToken)
+    {
+        var imported = await release.ImportExistingAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(Get), new { id = imported.Recipe.Id }, imported);
+    }
+
     /// <summary>Includes the id of the released version, if there is one.</summary>
     [HttpGet("{id:long}"), Authorize(Policy = Policies.HeadOffice)]
     public Task<RecipeDto> Get(long id, CancellationToken cancellationToken) =>

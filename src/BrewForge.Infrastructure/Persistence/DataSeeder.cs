@@ -1,7 +1,9 @@
 using BrewForge.Application.Abstractions;
+using BrewForge.Application.Common;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
+using BrewForge.Domain.Recipes.Validation;
 using BrewForge.Infrastructure.Persistence.Seed;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -55,10 +57,11 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
         var missing = SeedRecipes.All.Where(seed => !existing.Contains(seed.Code)).ToList();
         if (missing.Count == 0) return;
 
-        var author = await db.Users.IgnoreQueryFilters()
-            .Where(u => u.Role.RoleName == RoleName.RdSpecialist)
-            .OrderBy(u => u.Id).Select(u => u.Id).FirstAsync(cancellationToken);
-        var ingredientIds = await db.Ingredients.ToDictionaryAsync(i => i.IngredientCode, i => i.Id, cancellationToken);
+        var author = await FirstUserOfAsync(RoleName.RdSpecialist, cancellationToken);
+        var approver = await FirstUserOfAsync(RoleName.RdManager, cancellationToken);
+        var ingredients = await db.Ingredients.ToListAsync(cancellationToken);
+        var ingredientIds = ingredients.ToDictionary(i => i.IngredientCode, i => i.Id);
+        var catalog = new ValidationCatalog(await db.StandardEquipment.ToListAsync(cancellationToken), ingredients);
         var now = clock.GetUtcNow();
 
         foreach (var seed in missing)
@@ -77,9 +80,50 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
             ], author);
             db.RecipeVersions.Add(version);
             await db.SaveChangesAsync(cancellationToken);
+
+            if (seed.Code == SeedRecipes.BrokenDemoCode) continue;
+            await SubmitAndReleaseAsync(seed.Code, version, catalog, author, approver, now, cancellationToken);
         }
         logger.LogInformation("Seeded {Count} reference recipes", missing.Count);
     }
+
+    /// <summary>
+    /// Takes a seeded draft down the same path as any other: validated,
+    /// submitted by its author and released by a different user. A reference
+    /// recipe that does not pass stops the seed, because every slice after
+    /// this one is tested against these recipes.
+    /// </summary>
+    private async Task SubmitAndReleaseAsync(string code, RecipeVersion version, ValidationCatalog catalog,
+        long author, long approver, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var report = version.Validate(catalog);
+        if (!report.Passed)
+        {
+            throw new InvalidOperationException(
+                $"Seed recipe {code} does not pass validation: {string.Join("; ", report.Violations.Select(v => v.Message))}");
+        }
+
+        db.ValidationResults.AddRange(ValidationResult.FromReport(version.Id, report, now));
+        version.Submit(report);
+        db.Audit(AuditEntities.RecipeVersion, () => version.Id, AuditActions.Submit, new { version.VersionNo },
+            actorUserId: author);
+        await db.SaveChangesAsync(cancellationToken);
+
+        if (code == SeedRecipes.AwaitingReviewCode) return;
+
+        var release = RecipeRelease.Prepare(version, currentlyReleased: null, report, approver,
+            highestVersionNo: version.VersionNo, now);
+        release.SupersedePrevious();
+        release.Seal();
+        db.Audit(AuditEntities.RecipeVersion, () => version.Id, AuditActions.Release,
+            new { version.VersionNo, version.ContentHash, author, approver }, actorUserId: approver);
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private Task<long> FirstUserOfAsync(RoleName role, CancellationToken cancellationToken) =>
+        db.Users.IgnoreQueryFilters()
+            .Where(u => u.Role.RoleName == role)
+            .OrderBy(u => u.Id).Select(u => u.Id).FirstAsync(cancellationToken);
 
     private async Task<Dictionary<RoleName, Role>> SeedRolesAsync(CancellationToken cancellationToken)
     {

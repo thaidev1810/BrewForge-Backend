@@ -20,7 +20,7 @@ public static class DependencyInjection
         services.Configure<Argon2Options>(configuration.GetSection(Argon2Options.Section));
         services.Configure<SeedOptions>(configuration.GetSection(SeedOptions.Section));
 
-        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<TimeProvider>(new DatabasePrecisionTimeProvider(TimeProvider.System));
 
         services.AddDbContext<BrewForgeDbContext>((provider, options) =>
         {

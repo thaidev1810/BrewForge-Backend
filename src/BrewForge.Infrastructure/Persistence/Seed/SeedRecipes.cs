@@ -19,6 +19,9 @@ public static class SeedRecipes
     /// <summary>The demonstration draft that fails validation. Never released.</summary>
     public const string BrokenDemoCode = "R99";
 
+    /// <summary>Seeded as VALIDATED and left there, so the review workbench has a candidate waiting.</summary>
+    public const string AwaitingReviewCode = "R09";
+
     private const DependencyType Then = DependencyType.FinishToStart;
     private const DependencyType Needs = DependencyType.RequiresOutput;
 
