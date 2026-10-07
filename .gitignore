@@ -1,0 +1,28 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.idea/
+*.DotSettings.user
+TestResults/
+coverage*/
+*.trx
+
+## Local secrets and environment
+appsettings.Local.json
+*.env
+.env
+
+## OS / editors
+Thumbs.db
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+
+## Local PostgreSQL data (scripts/start-db.ps1)
+.pgdata/
+
+## Working notes extracted from the reference documents
+_ref/
