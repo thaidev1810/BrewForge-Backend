@@ -5,7 +5,18 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="JsonSchema.Net" Version="9.4.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
+  </ItemGroup>
+
+  <!-- The fixed schema of the LLM call. docs/reference holds the single copy;
+       it is sent to the model and used to check what comes back. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\docs\reference\recipe-draft.schema.json" LogicalName="recipe-draft.schema.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BrewForge.Api.Tests" />
   </ItemGroup>
 
 </Project>

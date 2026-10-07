@@ -85,6 +85,6 @@ public static class SeedData
         new("EQ-PHIN-01", "PHIN_FILTER", 18.000m, 25.000m, DosingUnit.Gram),
         new("EQ-STM-01", "MILK_STEAMER", 100.000m, 350.000m, DosingUnit.Millilitre),
         new("EQ-SHK-01", "SHAKER", 10.000m, 500.000m, DosingUnit.Millilitre),
-        new("EQ-BLD-01", "BLENDER", 50.000m, 600.000m, DosingUnit.Millilitre),
+        new("EQ-BLD-01", "BLENDER", 10.000m, 600.000m, DosingUnit.Millilitre),
     ];
 }

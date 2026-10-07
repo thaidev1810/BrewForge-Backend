@@ -1,4 +1,6 @@
 using BrewForge.Application.Abstractions;
+using BrewForge.Application.Recipes.Drafting;
+using BrewForge.Infrastructure.Llm;
 using BrewForge.Infrastructure.Persistence;
 using BrewForge.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
@@ -26,7 +28,10 @@ public static class DependencyInjection
                                        .GetConnectionString(ConnectionStringName)
                                    ?? throw new InvalidOperationException(
                                        $"Connection string '{ConnectionStringName}' is not configured.");
-            options.UseNpgsql(connectionString);
+            // An aggregate is loaded with several collections; one query per
+            // collection avoids multiplying its rows by each other.
+            options.UseNpgsql(connectionString,
+                npgsql => npgsql.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery));
         });
         services.AddScoped<IBrewForgeDbContext>(provider => provider.GetRequiredService<BrewForgeDbContext>());
 
@@ -35,6 +40,13 @@ public static class DependencyInjection
 
         services.AddSingleton<IPasswordHasher, Argon2idPasswordHasher>();
         services.AddSingleton<ITokenService, JwtTokenService>();
+
+        services.Configure<LlmOptions>(configuration.GetSection(LlmOptions.Section));
+        services.AddHttpClient<IRecipeDraftModel, OpenAiRecipeDraftModel>(http =>
+        {
+            // The adapter enforces the 30-second limit of MSG-E05 itself.
+            http.Timeout = Timeout.InfiniteTimeSpan;
+        });
 
         return services;
     }

@@ -1,6 +1,7 @@
 using BrewForge.Domain.Audit;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
+using BrewForge.Domain.Recipes;
 using Microsoft.EntityFrameworkCore;
 
 namespace BrewForge.Application.Abstractions;
@@ -18,6 +19,13 @@ public interface IBrewForgeDbContext
     DbSet<StandardEquipment> StandardEquipment { get; }
     DbSet<Ingredient> Ingredients { get; }
     DbSet<AuditLog> AuditLogs { get; }
+
+    DbSet<Recipe> Recipes { get; }
+
+    /// <summary>The aggregate root. Steps, dependencies and ingredients are reached through it.</summary>
+    DbSet<RecipeVersion> RecipeVersions { get; }
+    DbSet<ValidationResult> ValidationResults { get; }
+    DbSet<AiDraftLog> AiDraftLogs { get; }
 
     /// <summary>
     /// Queues an audit entry that is written in the same transaction as the

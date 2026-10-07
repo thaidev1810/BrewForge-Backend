@@ -54,7 +54,7 @@ public sealed class MasterDataIsNeverDeletedTests(BrewForgeApiFactory factory)
         // Deactivation is reversible, which a delete would not be.
         var body = resource == "ingredients"
             ? (object)new { name = "Lemongrass stalk", unit = "pcs", shelfLifeHours = 12, status = "ACTIVE" }
-            : new { minThreshold = 50, maxThreshold = 600, dosingUnit = "ml", status = "ACTIVE" };
+            : new { minThreshold = 10, maxThreshold = 600, dosingUnit = "ml", status = "ACTIVE" };
         var reactivated = await (await admin.PutAsJsonAsync($"/api/v1/{resource}/{id}", body))
             .ShouldBeAsync(HttpStatusCode.OK);
         Assert.Equal("ACTIVE", reactivated.GetProperty("status").GetString());

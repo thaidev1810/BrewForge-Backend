@@ -1,6 +1,7 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
+using BrewForge.Domain.Recipes;
 using BrewForge.Infrastructure.Persistence.Seed;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -41,6 +42,43 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
         await SeedUsersAsync(roles, branches, cancellationToken);
         await SeedIngredientsAsync(cancellationToken);
         await SeedEquipmentAsync(cancellationToken);
+        await SeedRecipesAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// The reference recipes, entered through the aggregate like any other
+    /// draft, so the seed cannot contain content the domain would refuse.
+    /// </summary>
+    private async Task SeedRecipesAsync(CancellationToken cancellationToken)
+    {
+        var existing = await db.Recipes.Select(r => r.RecipeCode).ToListAsync(cancellationToken);
+        var missing = SeedRecipes.All.Where(seed => !existing.Contains(seed.Code)).ToList();
+        if (missing.Count == 0) return;
+
+        var author = await db.Users.IgnoreQueryFilters()
+            .Where(u => u.Role.RoleName == RoleName.RdSpecialist)
+            .OrderBy(u => u.Id).Select(u => u.Id).FirstAsync(cancellationToken);
+        var ingredientIds = await db.Ingredients.ToDictionaryAsync(i => i.IngredientCode, i => i.Id, cancellationToken);
+        var now = clock.GetUtcNow();
+
+        foreach (var seed in missing)
+        {
+            var recipe = Recipe.Create(seed.Code, seed.Name, seed.Category, seed.Origin, author, now);
+            db.Recipes.Add(recipe);
+            await db.SaveChangesAsync(cancellationToken);
+
+            var version = RecipeVersion.CreateDraft(recipe.Id, versionNo: 1, author);
+            version.ReplaceContent(
+            [
+                .. seed.Steps.Select((step, index) => new StepSpec(index + 1, step.Action, step.Equipment, step.Gate,
+                    step.Seconds,
+                    [.. step.Uses.Select(use => new IngredientSpec(ingredientIds[use.Code], use.Quantity, use.Unit))],
+                    [.. step.After.Select(after => new DependencySpec(after.Step, after.Type))])),
+            ], author);
+            db.RecipeVersions.Add(version);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        logger.LogInformation("Seeded {Count} reference recipes", missing.Count);
     }
 
     private async Task<Dictionary<RoleName, Role>> SeedRolesAsync(CancellationToken cancellationToken)

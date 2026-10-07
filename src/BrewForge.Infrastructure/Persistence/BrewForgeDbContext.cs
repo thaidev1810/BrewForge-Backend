@@ -5,6 +5,7 @@ using BrewForge.Domain.Audit;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
+using BrewForge.Domain.Recipes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
@@ -29,6 +30,10 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<StandardEquipment> StandardEquipment => Set<StandardEquipment>();
     public DbSet<Ingredient> Ingredients => Set<Ingredient>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<Recipe> Recipes => Set<Recipe>();
+    public DbSet<RecipeVersion> RecipeVersions => Set<RecipeVersion>();
+    public DbSet<ValidationResult> ValidationResults => Set<ValidationResult>();
+    public DbSet<AiDraftLog> AiDraftLogs => Set<AiDraftLog>();
 
     /// <summary>
     /// Read by the query filters below. A member of the context, not a
@@ -80,7 +85,63 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             audit.Property(a => a.PayloadJson).HasColumnType("jsonb");
         });
 
+        ConfigureRecipes(modelBuilder);
+
         ApplySchemaConventions(modelBuilder);
+    }
+
+    /// <summary>
+    /// The recipe aggregate. The unique indexes repeat constraints the schema
+    /// already has: declaring them tells EF Core that a step number freed by
+    /// a deleted step may be reused by an inserted one, so that replacing the
+    /// content of a draft deletes before it inserts.
+    /// </summary>
+    private static void ConfigureRecipes(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Recipe>();
+
+        modelBuilder.Entity<RecipeVersion>(version =>
+        {
+            version.Property(v => v.ContentHash).HasMaxLength(64).IsFixedLength();
+            version.HasMany(v => v.Steps).WithOne().HasForeignKey(s => s.RecipeVersionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            version.Navigation(v => v.Steps).UsePropertyAccessMode(PropertyAccessMode.Field);
+            version.HasIndex(v => new { v.RecipeId, v.VersionNo }).IsUnique();
+        });
+
+        modelBuilder.Entity<RecipeStep>(step =>
+        {
+            step.HasMany(s => s.Ingredients).WithOne().HasForeignKey(i => i.StepId)
+                .OnDelete(DeleteBehavior.Cascade);
+            step.HasMany(s => s.Dependencies).WithOne(d => d.Step).HasForeignKey(d => d.StepId)
+                .OnDelete(DeleteBehavior.Cascade);
+            step.Navigation(s => s.Ingredients).UsePropertyAccessMode(PropertyAccessMode.Field);
+            step.Navigation(s => s.Dependencies).UsePropertyAccessMode(PropertyAccessMode.Field);
+            step.HasIndex(s => new { s.RecipeVersionId, s.StepOrder }).IsUnique();
+        });
+
+        modelBuilder.Entity<StepDependency>(dependency =>
+        {
+            dependency.HasOne(d => d.DependsOnStep).WithMany().HasForeignKey(d => d.DependsOnStepId)
+                .OnDelete(DeleteBehavior.Cascade);
+            dependency.HasIndex(d => new { d.StepId, d.DependsOnStepId }).IsUnique();
+        });
+
+        modelBuilder.Entity<StepIngredient>(ingredient =>
+        {
+            ingredient.Property(i => i.Quantity).HasPrecision(10, 3);
+            ingredient.HasIndex(i => new { i.StepId, i.IngredientId }).IsUnique();
+        });
+
+        modelBuilder.Entity<ValidationResult>(result =>
+        {
+            result.Property(r => r.ViolationDetail).HasColumnType("jsonb");
+        });
+
+        modelBuilder.Entity<AiDraftLog>(log =>
+        {
+            log.Property(l => l.RawResponse).HasColumnType("jsonb");
+        });
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess) =>

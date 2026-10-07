@@ -18,6 +18,8 @@ public static class AuthorizationMatrix
 
     private static readonly RoleName[] AdminOnly = [RoleName.Admin];
 
+    private static readonly RoleName[] Specialist = [RoleName.RdSpecialist];
+
     /// <summary>"All head-office roles" in the contract: every role not confined to a branch.</summary>
     private static readonly RoleName[] HeadOffice =
     [
@@ -66,5 +68,18 @@ public static class AuthorizationMatrix
         new("GET", "/equipment-classes/{id}", HeadOffice),
         new("PUT", "/equipment-classes/{id}", AdminOnly),
         new("POST", "/equipment-classes/{id}/deactivate", AdminOnly),
+
+        // 4. Recipe authoring and standardization
+        new("GET", "/recipes", HeadOffice),
+        new("POST", "/recipes", Specialist),
+        new("GET", "/recipes/{id}", HeadOffice),
+        new("GET", "/recipes/{id}/versions", HeadOffice),
+        new("POST", "/recipes/{id}/versions", Specialist),
+        new("GET", "/recipe-versions/{id}", HeadOffice),
+        new("PUT", "/recipe-versions/{id}", Specialist),
+        new("POST", "/recipe-versions/{id}/generate-draft", Specialist),
+        new("POST", "/recipe-versions/{id}/validate", [RoleName.RdSpecialist, RoleName.RdManager]),
+        new("POST", "/recipe-versions/{id}/repair", Specialist),
+        new("POST", "/recipe-versions/{id}/submit", Specialist),
     ];
 }
