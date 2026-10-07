@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BrewForge.Api/BrewForge.Api.csproj" />
+    <Project Path="src/BrewForge.Application/BrewForge.Application.csproj" />
+    <Project Path="src/BrewForge.Domain/BrewForge.Domain.csproj" />
+    <Project Path="src/BrewForge.Infrastructure/BrewForge.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BrewForge.Api.Tests/BrewForge.Api.Tests.csproj" />
+    <Project Path="tests/BrewForge.Domain.Tests/BrewForge.Domain.Tests.csproj" />
+  </Folder>
+</Solution>
