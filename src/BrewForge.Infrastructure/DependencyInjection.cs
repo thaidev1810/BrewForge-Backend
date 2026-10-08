@@ -1,5 +1,7 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Recipes.Drafting;
+using BrewForge.Application.Sales;
+using BrewForge.Infrastructure.Files;
 using BrewForge.Infrastructure.Llm;
 using BrewForge.Infrastructure.Persistence;
 using BrewForge.Infrastructure.Security;
@@ -40,6 +42,8 @@ public static class DependencyInjection
 
         services.AddSingleton<IPasswordHasher, Argon2idPasswordHasher>();
         services.AddSingleton<ITokenService, JwtTokenService>();
+
+        services.AddSingleton<IPosFileReader, PosFileReader>();
 
         services.Configure<LlmOptions>(configuration.GetSection(LlmOptions.Section));
         services.AddHttpClient<IRecipeDraftModel, OpenAiRecipeDraftModel>(http =>

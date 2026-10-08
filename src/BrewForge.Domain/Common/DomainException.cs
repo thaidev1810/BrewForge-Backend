@@ -89,6 +89,14 @@ public static class ErrorCodes
     public const string ImportBranchNotLive = "MSG-E22";
     public const string ImportDuplicateDay = "MSG-E23";
 
+    // Reasons a line of a POS file is rejected that the message list has no code for.
+    public const string ImportInvalidQuantity = "IMPORT_INVALID_QUANTITY";
+    public const string ImportInvalidDate = "IMPORT_INVALID_DATE";
+    public const string ImportUnknownBranch = "IMPORT_UNKNOWN_BRANCH";
+    public const string ImportBranchNotPermitted = "IMPORT_BRANCH_NOT_PERMITTED";
+    public const string ImportMissingValue = "IMPORT_MISSING_VALUE";
+    public const string ImportLayout = "IMPORT_LAYOUT";
+
     public const string ValidationFailed = "VALIDATION_FAILED";
     public const string Unauthenticated = "UNAUTHENTICATED";
     public const string NotFound = "NOT_FOUND";

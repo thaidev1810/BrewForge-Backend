@@ -2,6 +2,7 @@ using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
+using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
 using BrewForge.Domain.Recipes.Validation;
@@ -47,7 +48,40 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
         await SeedIngredientsAsync(cancellationToken);
         await SeedEquipmentAsync(cancellationToken);
         await SeedRecipesAsync(cancellationToken);
+        await SeedLaunchStatusesAsync(branches, cancellationToken);
         await SeedRegulationsAsync(cancellationToken);
+    }
+
+    /// <summary>The day the seeded drinks of origin EXISTING have been on sale since.</summary>
+    public static readonly DateTimeOffset ExistingDrinksLiveSince =
+        new DateTimeOffset(2026, 1, 1, 0, 0, 0, TradingCalendar.Offset).ToUniversalTime();
+
+    /// <summary>
+    /// BR-36: the drinks the chain sold before this system existed are on
+    /// sale at every branch without a pilot, LIVE with coverage not met until
+    /// enough staff are certified on them.
+    /// </summary>
+    private async Task SeedLaunchStatusesAsync(Dictionary<string, Branch> branches, CancellationToken cancellationToken)
+    {
+        var codes = SeedRecipes.All.Where(seed => seed.Origin == RecipeOrigin.Existing).Select(seed => seed.Code).ToList();
+        var drinks = await db.RecipeVersions.Where(v => v.State == VersionState.Released)
+            .Join(db.Recipes.Where(r => codes.Contains(r.RecipeCode)), v => v.RecipeId, r => r.Id,
+                (v, r) => new { RecipeId = r.Id, VersionId = v.Id })
+            .ToListAsync(cancellationToken);
+        var covered = (await db.BranchLaunchStatuses.IgnoreQueryFilters()
+                .Select(l => new { l.BranchId, l.RecipeId }).ToListAsync(cancellationToken))
+            .Select(l => (l.BranchId, l.RecipeId)).ToHashSet();
+
+        foreach (var drink in drinks)
+        {
+            foreach (var branch in SeedData.Branches.Select(seed => branches[seed.Code]))
+            {
+                if (covered.Contains((branch.Id, drink.RecipeId))) continue;
+                db.BranchLaunchStatuses.Add(BranchLaunchStatus.LiveForExistingRecipe(branch.Id, drink.RecipeId,
+                    drink.VersionId, minCertifiedStaff: 2, ExistingDrinksLiveSince));
+            }
+        }
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     /// <summary>

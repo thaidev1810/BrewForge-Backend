@@ -23,4 +23,9 @@
     <ProjectReference Include="..\..\src\BrewForge.Api\BrewForge.Api.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The demonstration files of the repository are also the fixtures of the tests. -->
+    <Content Include="..\..\samples\*.csv" Link="Samples\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

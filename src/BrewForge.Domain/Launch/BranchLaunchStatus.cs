@@ -63,7 +63,7 @@ public sealed class BranchLaunchStatus
             RecipeVersionId = recipeVersionId,
             MinCertifiedStaff = minCertifiedStaff,
             Status = LaunchStatus.Live,
-            LiveSince = now,
+            LiveSince = now.ToUniversalTime(),
             CoverageMet = false,
         };
     }
@@ -98,7 +98,7 @@ public sealed class BranchLaunchStatus
                 $"A drink cannot go from {Status.Code()} to LIVE at a branch.");
         }
         Status = LaunchStatus.Live;
-        LiveSince = now;
+        LiveSince = now.ToUniversalTime();
     }
 
     /// <summary>LIVE to WITHDRAWN: the drink is discontinued at the branch.</summary>
@@ -121,6 +121,44 @@ public sealed class BranchLaunchStatus
         RecipeVersionId = recipeVersionId;
         RecomputeCoverage(certifiedCountOnThatVersion);
     }
+
+    /// <summary>
+    /// BR-24: the version a sale on that trading day is attached to. A drink
+    /// is on sale at a branch from the day it went live until the day it was
+    /// withdrawn, and at no other time. The version is the one the branch
+    /// sold on that day, which is not the present one if the branch has
+    /// moved to another version since.
+    /// </summary>
+    public long VersionSoldOn(DateOnly tradingDate, IReadOnlyCollection<LaunchChange> history)
+    {
+        var liveFrom = LiveSince is { } since ? TradingCalendar.DateOf(since) : (DateOnly?)null;
+        var withdrawnOn = history.Where(change => change.Kind == LaunchChangeKind.Withdrawn)
+            .Select(change => (DateOnly?)TradingCalendar.DateOf(change.At)).Max();
+
+        var onSale = Status switch
+        {
+            LaunchStatus.Live => tradingDate >= liveFrom,
+            // Without a record of when it was withdrawn, no day can be shown to lie before it.
+            LaunchStatus.Withdrawn => tradingDate >= liveFrom && tradingDate <= withdrawnOn,
+            _ => false,
+        };
+        if (!onSale) throw NotLiveOn(tradingDate);
+
+        // A move on day M applies from M on: an earlier day belongs to the version before it.
+        var versionThen = history
+            .Where(change => change.Kind == LaunchChangeKind.VersionMoved && change.PreviousVersionId is not null
+                             && TradingCalendar.DateOf(change.At) > tradingDate)
+            .OrderBy(change => change.At)
+            .Select(change => change.PreviousVersionId)
+            .FirstOrDefault() ?? RecipeVersionId;
+        return versionThen ?? throw NotLiveOn(tradingDate);
+    }
+
+    /// <summary>The refusal of BR-24, also raised when a branch has no launch status for the drink at all.</summary>
+    public static DomainException NotLiveOn(DateOnly tradingDate) =>
+        DomainException.RuleViolation("BR-24",
+            $"The drink was not live at this branch on {tradingDate:yyyy-MM-dd}. Sales can only be recorded for a day on which it was on sale there.",
+            ErrorCodes.ImportBranchNotLive, new ErrorDetail("tradingDate", "the branch was not live for this drink on that day"));
 
     private static void EnsureThreshold(int minCertifiedStaff) =>
         new FieldErrors().Check(minCertifiedStaff >= 0, "minCertifiedStaff", "must not be negative").ThrowIfAny();

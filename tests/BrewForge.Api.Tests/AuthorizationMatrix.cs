@@ -146,8 +146,19 @@ public static class AuthorizationMatrix
         new("GET", "/me/certificates", Learners),
         new("GET", "/certificates/{id}", [RoleName.Trainee, RoleName.Trainer, RoleName.QualityAuditor]),
 
+        // 9. Sales capture
+        new("GET", "/sales", [RoleName.BranchManager, RoleName.RdManager, RoleName.QualityAuditor]),
+        new("GET", "/sales/drinks", [RoleName.BranchManager]),
+        new("POST", "/sales", [RoleName.BranchManager]),
+        new("PUT", "/sales/{id}", [RoleName.BranchManager]),
+        new("POST", "/sales/import", [RoleName.BranchManager]),
+        new("GET", "/sales/import/{jobId}", [RoleName.BranchManager]),
+        new("GET", "/sales/aggregate", [RoleName.RdManager, RoleName.TrainingManager]),
+
         // 12. Dashboards
         new("GET", "/dashboards/training-progress",
             [RoleName.Trainer, RoleName.RdManager, RoleName.BranchManager, RoleName.QualityAuditor]),
+        new("GET", "/dashboards/branch-performance",
+            [RoleName.RdManager, RoleName.BranchManager, RoleName.QualityAuditor]),
     ];
 }

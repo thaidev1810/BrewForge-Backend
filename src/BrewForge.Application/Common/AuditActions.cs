@@ -53,6 +53,20 @@ public static class AuditActions
     public const string PracticalEvaluation = "PRACTICAL_EVALUATION";
     public const string IssueCertificate = "ISSUE_CERTIFICATE";
 
+    public const string CorrectSales = "CORRECT_SALES";
+    public const string ReplaceSales = "REPLACE_SALES";
+    public const string PosImport = "POS_IMPORT";
+
+    public const string GoLive = "GO_LIVE";
+
+    /// <summary>
+    /// LIVE to WITHDRAWN, and a move of a live branch to another version. The
+    /// launch status keeps only the present, so these entries are also how a
+    /// sale entered late finds the version that was live on its day (BR-24).
+    /// </summary>
+    public const string Withdraw = "WITHDRAW";
+    public const string MoveVersion = "MOVE_VERSION";
+
     /// <summary>
     /// A notification to a user. The schema has no notification table, so
     /// the message is recorded here, against the user it is for.
@@ -78,6 +92,14 @@ public static class AuditEntities
     public const string Enrollment = "Enrollment";
     public const string Attendance = "Attendance";
     public const string Certificate = "Certificate";
+    public const string BranchLaunchStatus = "BranchLaunchStatus";
+    public const string SalesRecord = "SalesRecord";
+
+    /// <summary>
+    /// One POS import, identified by its job number. The schema has no table
+    /// for import jobs, so the result of an import is its audit entry.
+    /// </summary>
+    public const string SalesImport = "SalesImport";
 
     /// <summary>
     /// A refresh token, identified by its numeric token id. The schema has no

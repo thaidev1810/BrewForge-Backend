@@ -8,6 +8,7 @@ using BrewForge.Domain.Identity;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
+using BrewForge.Domain.Sales;
 using BrewForge.Domain.Training;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
@@ -44,6 +45,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<Attendance> Attendances => Set<Attendance>();
     public DbSet<Certificate> Certificates => Set<Certificate>();
     public DbSet<BranchLaunchStatus> BranchLaunchStatuses => Set<BranchLaunchStatus>();
+    public DbSet<SalesRecord> SalesRecords => Set<SalesRecord>();
 
     /// <summary>
     /// Read by the query filters below. A member of the context, not a
@@ -251,6 +253,14 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         modelBuilder.Entity<BranchLaunchStatus>(launch =>
         {
             launch.HasQueryFilter(l => BranchScope == null || l.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<SalesRecord>(sales =>
+        {
+            // BR-25. Declared so that EF Core knows the key a replaced day keeps.
+            sales.HasIndex(s => new { s.BranchId, s.RecipeId, s.TradingDate }).IsUnique();
+            // A store-level caller sees the sales of its own branch.
+            sales.HasQueryFilter(s => BranchScope == null || s.BranchId == BranchScope);
         });
 
         modelBuilder.Entity<ModuleProgress>(progress =>

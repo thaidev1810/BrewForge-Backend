@@ -37,4 +37,11 @@ public sealed class DashboardsController(DashboardService dashboards) : Controll
     public Task<IReadOnlyList<TrainingProgressRowDto>> TrainingProgress([FromQuery] long? branchId,
         [FromQuery] long? courseId, CancellationToken cancellationToken) =>
         dashboards.TrainingProgressAsync(branchId, courseId, cancellationToken);
+
+    /// <summary>Per branch and drink: sales in the period beside certificate coverage. Defaults to the last four weeks.</summary>
+    [HttpGet("branch-performance")]
+    [AuthorizeRoles(RoleName.RdManager, RoleName.BranchManager, RoleName.QualityAuditor)]
+    public Task<BranchPerformanceDto> BranchPerformance([FromQuery] long? branchId, [FromQuery] long? recipeId,
+        [FromQuery] DateOnly? from, [FromQuery] DateOnly? to, CancellationToken cancellationToken) =>
+        dashboards.BranchPerformanceAsync(branchId, recipeId, from, to, cancellationToken);
 }

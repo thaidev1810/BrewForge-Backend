@@ -21,7 +21,7 @@ rejected.
 | 4 | Course generation and authored modules | done |
 | 5 | Classes, sessions, attendance and eligibility | done |
 | 6 | Assessment, retake limit and certification | done |
-| 7 | Sales capture, POS import and aggregation | not started |
+| 7 | Sales capture, POS import and aggregation | done |
 | 8 | Pilot programs, the launch gate, the rollout decision | not started |
 | 9 | Impact analysis, change propagation, audit trail | not started |
 
@@ -70,6 +70,10 @@ Also seeded: three branches, sixteen ingredients, seven equipment classes and
 eleven recipes — nine released (`R01`–`R08`, `R10`), one validated and waiting
 for review (`R09`), and one draft that deliberately fails all three validator
 checks (`R99`) so the validation and repair screens have something to show.
+The three drinks of origin EXISTING (`R05`, `R07`, `R08`) are on sale at every
+branch since 1 January 2026, so sales can be entered and imported for them
+straight away; `samples/pos-import-sample.csv` is a POS export for branch B01
+with 20 good lines and 4 bad ones.
 
 ### AI drafting
 
@@ -99,9 +103,10 @@ dotnet test
 ```
 db/migrations/        The schema. Authoritative; EF Core never creates or alters tables.
 docs/reference/       The fixed JSON schema of the LLM call. The rest of the developer pack is not published here.
+samples/              Demonstration files that are also test fixtures.
 src/BrewForge.Domain          Entities, state machines, validators. No dependencies.
 src/BrewForge.Application     Use cases, DTOs, ports (persistence, tokens, language model).
-src/BrewForge.Infrastructure  EF Core mapping, Argon2id, JWT, OpenAI adapter, seed.
+src/BrewForge.Infrastructure  EF Core mapping, Argon2id, JWT, OpenAI adapter, CSV and XLSX reader, seed.
 src/BrewForge.Api             Controllers, authorization policies, the error envelope.
 ```
 
@@ -137,6 +142,9 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-21 certificate only when modules, quiz and practical all pass | `Enrollment.TryCertify`, the only producer of a `Certificate`; no POST, PUT or DELETE route | `AssessmentTests.BR_21_*`, `A_certificate_cannot_be_created_any_other_way`, `AssessmentApiTests.BR_21_*`, `A_certificate_cannot_be_created_changed_or_deleted_through_the_api` |
 | BR-13 a certificate is bound to a recipe version | `Enrollment.TryCertify`, `Certificate.Certifies` | `AssessmentTests.BR_13_*`, `AssessmentApiTests.BR_13_*` |
 | Certified staff are recounted when a certificate is issued | `LaunchReadinessService`, `BranchLaunchStatus.RecomputeCoverage` | `AssessmentApiTests.Issuing_a_certificate_recounts_*` |
+| BR-24 a sale belongs to the version live at the branch that day | `SalesRecord.Record`, `BranchLaunchStatus.VersionSoldOn`; the request has no version field | `SalesTests.BR_24_*`, `SalesApiTests.BR_24_*`, `PosImportApiTests.BR_24_*` |
+| BR-25 one sales record per drink, branch and day | `SalesBook`; `SalesRecord.ReplaceFromImport`; `UNIQUE (branch_id, recipe_id, trading_date)` | `SalesTests.BR_25_*`, `SalesApiTests.BR_25_*`, `PosImportApiTests.BR_25_*` |
+| A POS line is accepted whole or rejected with one reason | `PosImportLine.Parse`, `PosImportService` | `SalesTests` (layout, quantity, date), `PosImportApiTests.Sample_file_*`, `Every_kind_of_bad_line_*` |
 | Enrolment state model | `Enrollment` transition table | `TrainingTests.Enrolment_state_model_*`, `Transition_that_is_not_in_the_table_*` |
 | A regulation change spares enrolments in flight | `TrainingRegulation.Resolve`, `EnsureNotRetroactive` | `TrainingTests.Enrolment_keeps_the_rule_*`, `TrainingApiTests.Regulation_change_*` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
@@ -263,6 +271,49 @@ recipe version that has been superseded.
 **`GET /dashboards/training-progress`** returns one row per branch and course:
 learners by enrolment state, overdue, and staff holding a valid certificate or
 one that needs re-certification.
+
+**Trading days** are calendar days in Vietnam (UTC+7): `live_since` is an
+instant, a sale has a date, and the two are compared on that calendar.
+
+**The version a sale belongs to.** `branch_launch_status` keeps only the
+present version and status. A withdrawal and a move of a branch to another
+version are therefore read back from their audit entries (`WITHDRAW`,
+`MOVE_VERSION`), so that a day entered or imported late is attached to the
+version the branch sold on that day, and a withdrawn drink still accepts the
+days of its live period and none after it.
+
+**Duplicate day in an import.** The slice asks for a per-row "duplicate day"
+error and for a re-import to replace. Both hold: a day that appears twice in
+one file is rejected on its second line (`MSG-E23`), because the import cannot
+know which line is right; a day that is already stored, from an earlier import
+or from manual entry, is replaced, and the old figure goes to the audit log as
+`REPLACE_SALES`. Entering a second record for a day by hand is `409 BR-25`;
+the count is corrected with `PUT /sales/{id}`.
+
+**Reasons a POS line is rejected** beyond the three codes of the contract
+(`MSG-E21` unknown drink, `MSG-E22` not live, `MSG-E23` duplicate day) have
+codes of their own, since the message list has none: `IMPORT_INVALID_QUANTITY`,
+`IMPORT_INVALID_DATE`, `IMPORT_UNKNOWN_BRANCH`, `IMPORT_BRANCH_NOT_PERMITTED`
+(a branch manager imports for their own branch) and `IMPORT_MISSING_VALUE`. A
+file that is not in the layout at all is refused whole with `400 IMPORT_LAYOUT`.
+
+**Import jobs.** The schema has no table for them. The result of an import is
+the payload of its `POS_IMPORT` audit entry, the job id is that entry's entity
+id in hexadecimal, and the `Idempotency-Key` is looked up among the caller's
+own imports. Files are read up to 5 MB and 20 000 lines; XLSX is read without
+a spreadsheet library (first sheet, shared and inline strings, date cells).
+
+**`GET /sales/drinks`** is not in the contract table: it lists the drinks on
+sale at a branch on a day, which the entry screen needs for its drink list.
+
+**`GET /sales/aggregate`** also takes `groupBy=day`, `recipeId` (every version
+of the drink), `branchId`, `from`, `to` and `controlRecipeId`. Trading days
+are counted per branch, so cups per day is always cups per day per branch. The
+control drink is counted on the branches and days the drink itself traded.
+
+**`GET /dashboards/branch-performance`** returns one row per branch and drink
+that has a launch status, with the sales of the period (the last four weeks
+unless `from` and `to` say otherwise) beside the coverage figures.
 
 **Rebuilding an out-of-date course** on the new version exists as
 `CourseService.RebuildAsync` and is covered by tests, but has no endpoint yet:

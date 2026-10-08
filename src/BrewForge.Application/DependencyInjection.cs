@@ -5,6 +5,7 @@ using BrewForge.Application.Launch;
 using BrewForge.Application.MasterData;
 using BrewForge.Application.Recipes;
 using BrewForge.Application.Recipes.Drafting;
+using BrewForge.Application.Sales;
 using BrewForge.Application.Training;
 using BrewForge.Application.Users;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,6 +36,11 @@ public static class DependencyInjection
         services.AddScoped<LearningService>();
         services.AddScoped<AssessmentService>();
         services.AddScoped<LaunchReadinessService>();
+        services.AddScoped<LaunchHistory>();
+
+        services.AddScoped<SalesService>();
+        services.AddScoped<PosImportService>();
+        services.AddScoped<SalesAnalyticsService>();
         services.AddScoped<DashboardService>();
         return services;
     }
