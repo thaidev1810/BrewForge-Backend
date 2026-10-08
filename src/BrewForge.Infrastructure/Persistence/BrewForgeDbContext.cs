@@ -7,6 +7,7 @@ using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
+using BrewForge.Domain.Training;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
@@ -36,6 +37,11 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<ValidationResult> ValidationResults => Set<ValidationResult>();
     public DbSet<AiDraftLog> AiDraftLogs => Set<AiDraftLog>();
     public DbSet<Course> Courses => Set<Course>();
+    public DbSet<TrainingRegulation> TrainingRegulations => Set<TrainingRegulation>();
+    public DbSet<TrainingClass> TrainingClasses => Set<TrainingClass>();
+    public DbSet<Enrollment> Enrollments => Set<Enrollment>();
+    public DbSet<Attendance> Attendances => Set<Attendance>();
+    public DbSet<Certificate> Certificates => Set<Certificate>();
 
     /// <summary>
     /// Read by the query filters below. A member of the context, not a
@@ -89,6 +95,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
 
         ConfigureRecipes(modelBuilder);
         ConfigureCourses(modelBuilder);
+        ConfigureTraining(modelBuilder);
 
         ApplySchemaConventions(modelBuilder);
     }
@@ -182,6 +189,57 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         {
             question.Property(q => q.OptionsJson).HasColumnType("jsonb");
         });
+    }
+
+    /// <summary>
+    /// Classes, enrolments, attendance and certificates. A store-level caller
+    /// sees the classes of its own branch and the enrolments and certificates
+    /// of the staff of its own branch.
+    /// </summary>
+    private void ConfigureTraining(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<TrainingRegulation>();
+
+        modelBuilder.Entity<TrainingClass>(trainingClass =>
+        {
+            trainingClass.HasMany(c => c.Sessions).WithOne().HasForeignKey(s => s.TrainingClassId)
+                .OnDelete(DeleteBehavior.Cascade);
+            trainingClass.Navigation(c => c.Sessions).UsePropertyAccessMode(PropertyAccessMode.Field);
+            trainingClass.HasQueryFilter(c => BranchScope == null || c.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<TrainingSession>(session =>
+        {
+            session.HasMany(s => s.Modules).WithOne().HasForeignKey(m => m.SessionId).OnDelete(DeleteBehavior.Cascade);
+            session.Navigation(s => s.Modules).UsePropertyAccessMode(PropertyAccessMode.Field);
+            session.HasIndex(s => new { s.TrainingClassId, s.SessionNo }).IsUnique();
+        });
+
+        modelBuilder.Entity<SessionModule>(module =>
+        {
+            module.HasIndex(m => new { m.SessionId, m.CourseModuleId }).IsUnique();
+        });
+
+        modelBuilder.Entity<Enrollment>(enrollment =>
+        {
+            enrollment.HasOne(e => e.User).WithMany().HasForeignKey(e => e.UserId);
+            enrollment.HasMany(e => e.Modules).WithOne().HasForeignKey(m => m.EnrollmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+            enrollment.Navigation(e => e.Modules).UsePropertyAccessMode(PropertyAccessMode.Field);
+            enrollment.HasQueryFilter(e => BranchScope == null || e.User.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<ModuleProgress>(progress =>
+        {
+            progress.HasIndex(p => new { p.EnrollmentId, p.CourseModuleId }).IsUnique();
+        });
+
+        modelBuilder.Entity<Attendance>(attendance =>
+        {
+            attendance.HasIndex(a => new { a.SessionId, a.EnrollmentId }).IsUnique();
+        });
+
+        modelBuilder.Entity<Certificate>();
     }
 
     public async Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken = default)

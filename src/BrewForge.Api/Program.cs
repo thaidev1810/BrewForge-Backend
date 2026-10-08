@@ -19,7 +19,11 @@ builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services.AddControllers()
-    .AddJsonOptions(json => json.JsonSerializerOptions.Converters.Add(new EnumCodeJsonConverterFactory()))
+    .AddJsonOptions(json =>
+    {
+        json.JsonSerializerOptions.Converters.Add(new EnumCodeJsonConverterFactory());
+        json.JsonSerializerOptions.Converters.Add(new TimeOnlyJsonConverter());
+    })
     .ConfigureApiBehaviorOptions(api => api.InvalidModelStateResponseFactory = ErrorEnvelope.InvalidModelState);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();

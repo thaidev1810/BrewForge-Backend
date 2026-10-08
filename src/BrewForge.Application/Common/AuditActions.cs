@@ -38,6 +38,23 @@ public static class AuditActions
     public const string Approve = "APPROVE";
     public const string Return = "RETURN";
     public const string Rebuild = "REBUILD";
+
+    public const string ScheduleSession = "SCHEDULE_SESSION";
+    public const string RescheduleSession = "RESCHEDULE_SESSION";
+    public const string RemoveSession = "REMOVE_SESSION";
+    public const string Open = "OPEN";
+    public const string Close = "CLOSE";
+    public const string Assign = "ASSIGN";
+    public const string Reset = "RESET";
+    public const string CompleteModule = "COMPLETE_MODULE";
+    public const string RecordAttendance = "RECORD_ATTENDANCE";
+    public const string CorrectAttendance = "CORRECT_ATTENDANCE";
+
+    /// <summary>
+    /// A notification to a user. The schema has no notification table, so
+    /// the message is recorded here, against the user it is for.
+    /// </summary>
+    public const string Notify = "NOTIFY";
 }
 
 /// <summary>The values written to <c>audit_log.entity_type</c>.</summary>
@@ -52,6 +69,11 @@ public static class AuditEntities
     public const string Course = "Course";
     public const string CourseModule = "CourseModule";
     public const string Lesson = "Lesson";
+    public const string TrainingRegulation = "TrainingRegulation";
+    public const string TrainingClass = "TrainingClass";
+    public const string TrainingSession = "TrainingSession";
+    public const string Enrollment = "Enrollment";
+    public const string Attendance = "Attendance";
 
     /// <summary>
     /// A refresh token, identified by its numeric token id. The schema has no

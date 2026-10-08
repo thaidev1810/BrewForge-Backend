@@ -3,6 +3,7 @@ using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
+using BrewForge.Domain.Training;
 using Microsoft.EntityFrameworkCore;
 
 namespace BrewForge.Application.Abstractions;
@@ -30,6 +31,16 @@ public interface IBrewForgeDbContext
 
     /// <summary>The aggregate root. Modules, lessons and the quiz are reached through it.</summary>
     DbSet<Course> Courses { get; }
+
+    DbSet<TrainingRegulation> TrainingRegulations { get; }
+
+    /// <summary>The aggregate root. Sessions and the modules they cover are reached through it.</summary>
+    DbSet<TrainingClass> TrainingClasses { get; }
+
+    /// <summary>The aggregate root. Module progress is reached through it.</summary>
+    DbSet<Enrollment> Enrollments { get; }
+    DbSet<Attendance> Attendances { get; }
+    DbSet<Certificate> Certificates { get; }
 
     /// <summary>
     /// Queues an audit entry that is written in the same transaction as the

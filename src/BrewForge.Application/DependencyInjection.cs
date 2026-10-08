@@ -3,6 +3,7 @@ using BrewForge.Application.Courses;
 using BrewForge.Application.MasterData;
 using BrewForge.Application.Recipes;
 using BrewForge.Application.Recipes.Drafting;
+using BrewForge.Application.Training;
 using BrewForge.Application.Users;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -25,6 +26,11 @@ public static class DependencyInjection
 
         services.AddScoped<CourseRenderer>();
         services.AddScoped<CourseService>();
+
+        services.AddScoped<EnrollmentEvaluator>();
+        services.AddScoped<TrainingRegulationService>();
+        services.AddScoped<TrainingClassService>();
+        services.AddScoped<LearningService>();
         return services;
     }
 }

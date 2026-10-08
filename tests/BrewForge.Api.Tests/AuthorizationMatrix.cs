@@ -24,6 +24,8 @@ public static class AuthorizationMatrix
 
     private static readonly RoleName[] TrainerOnly = [RoleName.Trainer];
 
+    private static readonly RoleName[] Learners = [RoleName.Trainee, RoleName.Trainer];
+
     /// <summary>"All head-office roles" in the contract: every role not confined to a branch.</summary>
     private static readonly RoleName[] HeadOffice =
     [
@@ -109,5 +111,33 @@ public static class AuthorizationMatrix
         new("POST", "/courses/{id}/submit", TrainerOnly),
         new("POST", "/courses/{id}/approve", [RoleName.TrainingManager]),
         new("POST", "/courses/{id}/return", [RoleName.TrainingManager]),
+
+        // 6. Training regulation
+        new("GET", "/training-regulations", [RoleName.TrainingManager, RoleName.Admin]),
+        new("POST", "/training-regulations", [RoleName.TrainingManager]),
+        new("PUT", "/training-regulations/{id}", [RoleName.TrainingManager]),
+
+        // 7. Classes, sessions and attendance
+        new("GET", "/training-needs", [RoleName.Trainer, RoleName.TrainingManager]),
+        new("GET", "/training-classes", TrainerOnly),
+        new("POST", "/training-classes", TrainerOnly),
+        new("GET", "/training-classes/{id}", TrainerOnly),
+        new("PUT", "/training-classes/{id}", TrainerOnly),
+        new("POST", "/training-classes/{id}/sessions", TrainerOnly),
+        new("POST", "/training-classes/{id}/open", TrainerOnly),
+        new("POST", "/training-classes/{id}/close", TrainerOnly),
+        new("PUT", "/training-sessions/{id}", TrainerOnly),
+        new("DELETE", "/training-sessions/{id}", TrainerOnly),
+        new("GET", "/training-sessions/{id}/attendance", TrainerOnly),
+        new("PUT", "/training-sessions/{id}/attendance", TrainerOnly),
+
+        // 8. Learning. "Own" endpoints admit a trainer too: see EnrollmentsController.
+        new("GET", "/me/enrollments", Learners),
+        new("GET", "/enrollments/{id}", Learners),
+        new("GET", "/enrollments/{id}/modules", Learners),
+        new("POST", "/enrollments/{id}/modules/{moduleId}/complete", Learners),
+        new("GET", "/enrollments/{id}/eligibility", Learners),
+        new("POST", "/enrollments/{id}/close", [RoleName.TrainingManager]),
+        new("POST", "/enrollments/{id}/reset", [RoleName.TrainingManager]),
     ];
 }

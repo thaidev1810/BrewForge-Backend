@@ -1,9 +1,11 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
 using BrewForge.Domain.Recipes.Validation;
+using BrewForge.Domain.Training;
 using BrewForge.Infrastructure.Persistence.Seed;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -45,6 +47,33 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
         await SeedIngredientsAsync(cancellationToken);
         await SeedEquipmentAsync(cancellationToken);
         await SeedRecipesAsync(cancellationToken);
+        await SeedRegulationsAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// One regulation per course type, in force since the start of the year:
+    /// induction and product training are mandatory for trainees, and product
+    /// training comes after induction.
+    /// </summary>
+    private async Task SeedRegulationsAsync(CancellationToken cancellationToken)
+    {
+        var covered = await db.TrainingRegulations.Select(r => r.CourseType).Distinct().ToListAsync(cancellationToken);
+        var author = await FirstUserOfAsync(RoleName.TrainingManager, cancellationToken);
+        var effectiveFrom = new DateOnly(2026, 1, 1);
+
+        (CourseType Type, RoleName? MandatoryFor, CourseType? Prerequisite, int DueDays)[] defaults =
+        [
+            (CourseType.Induction, RoleName.Trainee, null, 7),
+            (CourseType.Product, RoleName.Trainee, CourseType.Induction, 14),
+            (CourseType.Equipment, null, null, 14),
+            (CourseType.Recertification, null, null, 7),
+        ];
+        foreach (var (type, mandatoryFor, prerequisite, dueDays) in defaults.Where(d => !covered.Contains(d.Type)))
+        {
+            db.TrainingRegulations.Add(TrainingRegulation.Create(type, mandatoryFor, prerequisite, dueDays,
+                TrainingRules.Default.MaxRetakes, TrainingRules.Default.MinAttendancePct, effectiveFrom, author));
+        }
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     /// <summary>

@@ -19,7 +19,7 @@ rejected.
 | 2 | Structured recipe model, the three validators, the dependency graph | done |
 | 3 | Review, approval and immutable release | done |
 | 4 | Course generation and authored modules | done |
-| 5 | Classes, sessions, attendance and eligibility | not started |
+| 5 | Classes, sessions, attendance and eligibility | done |
 | 6 | Assessment, retake limit and certification | not started |
 | 7 | Sales capture, POS import and aggregation | not started |
 | 8 | Pilot programs, the launch gate, the rollout decision | not started |
@@ -129,6 +129,10 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-29 exactly seven modules in fixed order | `CourseModuleGenerator.CreateModules`; DB unique and check constraints | `CourseTests.BR_29_*`, `CourseApiTests.Course_is_created_*` |
 | BR-30 generated modules are not edited, authored modules are not regenerated | `CourseModule.EnsureAuthorable`, `CourseModuleGenerator.Generate` | `CourseTests.BR_30_*`, `CourseApiTests.BR_30_*` |
 | BR-35 every quiz question is tagged with a module | `Quiz.AddQuestion` | `CourseTests.BR_35_*`, `CourseApiTests.BR_35_*` |
+| BR-32 eligible only with all modules and enough attendance | `Enrollment.EvaluateEligibility`, `EnsureEligibleForAssessment`, `AttendanceSummary` | `TrainingTests.BR_32_*`, `TrainingApiTests.BR_32_*` |
+| BR-34 a trainer must be certified on the bound version | `TrainingClass.AddSession` | `TrainingTests.BR_34_*`, `TrainingApiTests.BR_34_*` |
+| Enrolment state model | `Enrollment` transition table | `TrainingTests.Enrolment_state_model_*`, `Transition_that_is_not_in_the_table_*` |
+| A regulation change spares enrolments in flight | `TrainingRegulation.Resolve`, `EnsureNotRetroactive` | `TrainingTests.Enrolment_keeps_the_rule_*`, `TrainingApiTests.Regulation_change_*` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -192,6 +196,39 @@ cannot be edited (BR-30) and every module needs a duration (BR-31).
 
 **A course needs at least one quiz question to be submitted.** Without one no
 trainee could ever be certified on it (BR-21), so submission is refused.
+
+**Which regulation applies to an enrolment.** The schema keeps no copy of the
+rules on the enrolment, so they are resolved by date: the regulation for the
+course type most recently in force on the day the enrolment was created. To
+keep that stable, a regulation may not take effect on or before the day of an
+existing enrolment of that type (`409 REGULATION_RETROACTIVE`); a rule is
+changed by adding a regulation that takes effect later.
+
+**Attendance.** A session counts once it exists; an EXCUSED session is left out
+of the count; a session not yet recorded counts as not attended. A trainee is
+flagged as soon as the remaining sessions can no longer reach the minimum.
+
+**ELIGIBLE is re-checked at the gate.** The state model has no way back from
+ELIGIBLE, but attendance can be corrected afterwards, so the assessment gate
+runs the eligibility check again instead of trusting the state alone.
+
+**Who is in a class.** `POST /training-classes/{id}/open` enrols every active
+trainee of the class's branch, or the users named in an optional
+`{ traineeIds }`. A trainer may be named: that is how a trainer becomes
+certified on a version before teaching it (BR-34), which is also why the
+"TRAINEE (own)" endpoints of the contract admit a TRAINER acting on their own
+enrolment.
+
+**Enrolment close and reset** (`POST /enrollments/{id}/close`, `/reset`) are
+not in the contract table. The state model gives both to the Training Manager
+and names no endpoint, so these two were added.
+
+**Notifications** are recorded as `NOTIFY` entries of the audit log against
+the user they are for; the schema has no notification table and no channel is
+integrated yet.
+
+**Prerequisites** of a regulation are reported by `GET /training-needs` but
+not enforced when a course is assigned.
 
 **Rebuilding an out-of-date course** on the new version exists as
 `CourseService.RebuildAsync` and is covered by tests, but has no endpoint yet:
