@@ -73,6 +73,11 @@ public static class AuditActions
     public const string Cancel = "CANCEL";
     public const string Decide = "DECIDE";
 
+    public const string MarkOutOfDate = "MARK_OUT_OF_DATE";
+    public const string FlagRecertification = "FLAG_RECERT";
+    public const string CommitImpact = "COMMIT_IMPACT";
+    public const string ExportCompliance = "EXPORT_COMPLIANCE";
+
     /// <summary>
     /// A notification to a user. The schema has no notification table, so
     /// the message is recorded here, against the user it is for.

@@ -1,4 +1,5 @@
 using BrewForge.Application.Abstractions;
+using BrewForge.Application.Audit;
 using BrewForge.Application.Recipes.Drafting;
 using BrewForge.Application.Sales;
 using BrewForge.Infrastructure.Files;
@@ -44,6 +45,7 @@ public static class DependencyInjection
         services.AddSingleton<ITokenService, JwtTokenService>();
 
         services.AddSingleton<IPosFileReader, PosFileReader>();
+        services.AddSingleton<IReportExporter, ReportExporter>();
 
         services.Configure<LlmOptions>(configuration.GetSection(LlmOptions.Section));
         services.AddHttpClient<IRecipeDraftModel, OpenAiRecipeDraftModel>(http =>

@@ -205,6 +205,15 @@ public sealed class Course : INeverDeleted
                 "This course cannot be published: its quiz has no questions, so no trainee could pass it.",
                 details: new ErrorDetail("quiz", "has no questions"));
         }
+        // The same goes for the practical: its checklist is made of steps of the bound version.
+        if (RecipeVersionId is not null
+            && !_modules.Single(module => module.ModuleType == ModuleType.Technique).Lessons.Any(lesson => lesson.RecipeStepId is not null))
+        {
+            throw DomainException.RuleViolation("BR-21",
+                "This course cannot be published: its practical checklist is empty, so no trainee could pass the practical. " +
+                "Put at least one step of the recipe on it.",
+                details: new ErrorDetail("practicalChecklist", "is empty"));
+        }
 
         TransitionTo(CourseState.PendingApproval);
     }

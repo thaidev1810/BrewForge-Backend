@@ -82,6 +82,15 @@ public sealed class CoursesController(CourseService courses) : ControllerBase
     [HttpPost("{id:long}/return"), Authorize(Policy = Policies.TrainingManager)]
     public Task<CourseDetailDto> Return(long id, ReturnCourseRequest request, CancellationToken cancellationToken) =>
         courses.ReturnAsync(id, request, cancellationToken);
+
+    /// <summary>
+    /// OUT_OF_DATE to DRAFT on the version now released for the recipe:
+    /// generated modules are regenerated, authored modules are kept (BR-30).
+    /// Not in the contract table; the state model gives it to the Trainer.
+    /// </summary>
+    [HttpPost("{id:long}/rebuild"), Authorize(Policy = Policies.Trainer)]
+    public Task<CourseDetailDto> Rebuild(long id, CancellationToken cancellationToken) =>
+        courses.RebuildAsync(id, cancellationToken);
 }
 
 [ApiController]

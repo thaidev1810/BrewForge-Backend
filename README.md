@@ -23,7 +23,7 @@ rejected.
 | 6 | Assessment, retake limit and certification | done |
 | 7 | Sales capture, POS import and aggregation | done |
 | 8 | Pilot programs, the launch gate, the rollout decision | done |
-| 9 | Impact analysis, change propagation, audit trail | not started |
+| 9 | Impact analysis, change propagation, audit trail | done |
 
 This repository is the backend only. The slice prompts also describe a React
 frontend; it is not part of this repository.
@@ -151,6 +151,10 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-28 one DRAFT or RUNNING pilot per version, which cannot be superseded meanwhile | `PilotProgram.Create`, `RecipeRelease.Prepare`; index `ux_pilot_active_version` | `PilotTests.BR_28_*`, `PilotApiTests.BR_28_*` |
 | BR-36 an existing drink is LIVE without a pilot, coverage not met and not blocked | `BranchLaunchStatus.LiveForExistingRecipe`, `LaunchReadinessService.GoLiveWithoutPilotAsync`, `PilotProgram.Create` | `PilotTests.BR_36_*`, `PilotApiTests.BR_36_*` |
 | A branch with missing trading days is incomplete, not scored | `PilotEvaluator` | `PilotTests.Branch_with_missing_trading_days_*`, `PilotApiTests.Branch_with_missing_trading_days_*` |
+| BR-15 propagation flags and never deletes | `ImpactRun.Commit`, `Course.MarkOutOfDate`, `Certificate.FlagForRecertification`; `INeverDeleted` guard | `ImpactTests.BR_15_*`, `ImpactApiTests.BR_15_*`, `Releasing_a_new_version_*` |
+| A what-if writes nothing but uncommitted `change_impact` rows | `ImpactAnalysisService.AnalyzeAsync` (no audit entry, nothing tracked) | `ImpactTests.What_if_*`, `ImpactApiTests.What_if_leaves_the_database_unchanged_*` (row count of all 34 tables) |
+| The affected set is complete at commit | `ImpactRun.Resume`, `DependencyGraph` | `ImpactTests.Commit_takes_in_*`, `ImpactApiTests.Commit_takes_in_*` |
+| A module markedly below the others is highlighted | `CourseEffectiveness.PerModule` | `ImpactTests.First_attempt_pass_rate_*`, `AuditApiTests.Course_effectiveness_*` |
 | Enrolment state model | `Enrollment` transition table | `TrainingTests.Enrolment_state_model_*`, `Transition_that_is_not_in_the_table_*` |
 | A regulation change spares enrolments in flight | `TrainingRegulation.Resolve`, `EnsureNotRetroactive` | `TrainingTests.Enrolment_keeps_the_rule_*`, `TrainingApiTests.Regulation_change_*` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
@@ -373,9 +377,72 @@ its criteria as `criteria: [ ... ]`; they are stored as `{ "criteria": [...] }`.
 branch whose coverage of a drink is not met and who hold no valid certificate
 on the version bound there, against the published course of that version.
 
-**Rebuilding an out-of-date course** on the new version exists as
-`CourseService.RebuildAsync` and is covered by tests, but has no endpoint yet:
-a course only becomes OUT_OF_DATE through change propagation (slice 9).
+**What an impact analysis starts from.** `entityType` is `Ingredient`,
+`StandardEquipment` or `RecipeVersion`. The graph reaches the versions that
+have been in production (RELEASED or SUPERSEDED) and use the trigger; a draft
+is re-validated when it is released and nothing was built on it. Of what is
+bound to those versions, a course is affected while PUBLISHED, a certificate
+while VALID, a branch while the version is LIVE there.
+
+**What-if and commit.** `impact_type` has three values, so a run stores rows
+for courses, certificates and branches only; the affected versions are derived
+from the trigger. A what-if writes those rows and nothing else, not even an
+audit entry, and a run that affects nothing leaves no rows and so cannot be
+read back. Committing computes the affected set again at that moment and adds
+rows for whatever became affected since, so that a certificate issued after
+the what-if is not left valid. A run is committed once
+(`409 IMPACT_ALREADY_COMMITTED`). Live branches are reported and not changed;
+their certified staff are recounted, so `coverage_met` may fall to false.
+
+**Propagation on release.** Releasing a version that supersedes another runs
+the same analysis for the superseded version and commits it at once, as the
+state models require: its published course becomes OUT_OF_DATE and the
+certificates bound to it NEEDS_RECERT, with notices to the certificate holders
+and to the trainer who built the course. The trainer then rebuilds the course
+with `POST /courses/{id}/rebuild`, which is not in the contract table.
+
+**A course needs a practical checklist to be submitted.** Like the quiz
+without questions, a course built on a recipe version whose checklist is
+empty could never certify anyone (BR-21), so submission is refused; the
+trainer puts at least one step on it with `PUT /courses/{id}/practical-checklist`.
+
+**The audit log endpoint** filters by entity, action, actor, the branch of the
+actor and a period in whole UTC days. Entries the system keeps in the log for
+want of a table (notifications, import jobs, token revocations) are part of it.
+
+**The trace** follows a recipe version; `Course`, `Certificate` and `Recipe`
+are accepted as starting points and lead to their version. It lists everyone
+ever certified on the version, whatever the status of the certificate now.
+
+**The compliance report** has one line per certificate ever issued, narrowed
+by day of issue, branch, course or version. CSV is UTF-8 with a byte order
+mark; a text cell that begins like a formula is written with a leading
+apostrophe. XLSX is written without a spreadsheet library, with text as inline
+strings. Every export is recorded as `EXPORT_COMPLIANCE`.
+
+**Course effectiveness.** A module is passed on an attempt when all of its
+questions were answered correctly; the rate is over the first attempt of each
+enrolment. A module is highlighted when its rate lies at least 20 points below
+the average of the other modules. On-time completion is judged for enrolments
+that were passed or whose due date has gone by. Sales are the cups of the
+bound version at the branches where at least one enrolment was passed.
+
+## Known gaps
+
+- A course that is not bound to a recipe version (INDUCTION, for instance) has
+  no practical checklist, because checklist items are steps of a version. Such
+  a course can be authored, published, assigned and studied, and its quiz can
+  be taken, but nobody can be certified on it until the practical evaluation
+  is given a checklist that does not come from a recipe.
+- There is no scheduler. Pilots end, and nothing else is time-driven, the
+  first time something looks at them after their last day.
+- Notifications are recorded, not delivered: no e-mail or push channel is
+  integrated.
+- Prerequisites of a training regulation are reported and not enforced.
+- A branch opened after an existing drink was released does not get that
+  drink automatically.
+- The React frontend described by the developer pack is not part of this
+  repository.
 
 ## Reference documents
 

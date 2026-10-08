@@ -397,6 +397,33 @@ public sealed class CourseTests
     }
 
     [Fact]
+    public void Course_whose_practical_checklist_is_empty_cannot_be_submitted()
+    {
+        // Everything else is in place, but the trainer took every step off the checklist.
+        var version = ReleasedVersion();
+        var course = Authored(version);
+        var technique = ModuleOf(course, ModuleType.Technique);
+        course.SetPracticalChecklist([], version);
+        course.AddLesson(technique, "General technique", "Work clean, work in order.", null);
+
+        var refusal = Refused(course.Submit);
+
+        // Nobody could pass a practical that has nothing to observe, so nobody could be certified (BR-21).
+        Assert.Equal("BR-21", refusal.Rule);
+        Assert.Contains(refusal.Details, d => d is { Field: "practicalChecklist", Issue: "is empty" });
+        Assert.Equal(CourseState.Draft, course.State);
+
+        // With one step back on it, the course can go for approval.
+        course.SetPracticalChecklist([version.Steps[0].Id], version);
+        foreach (var gate in technique.Lessons.Where(l => l.RecipeStepId is not null && l.Content is null).ToList())
+        {
+            course.UpdateLesson(technique, gate, null, "Prose", null);
+        }
+        course.Submit();
+        Assert.Equal(CourseState.PendingApproval, course.State);
+    }
+
+    [Fact]
     public void Fully_authored_course_is_submitted_and_approved()
     {
         var course = Authored();

@@ -157,17 +157,11 @@ public sealed class CourseApiTests(BrewForgeApiFactory factory)
         Assert.Equal(18m, Reference(before.Module("SOP")).GetProperty("ingredients")[0].GetProperty("quantity").GetDecimal());
 
         // A new version of the recipe is released: 16 g, gate "Water at 85 C".
+        // Its release supersedes the version the course was built on, which puts the course out of date (BR-15).
         var secondVersion = await factory.ReleaseNewVersionAsync(recipeId, LighterContent());
-        await factory.WithDbAsync(async db =>
-        {
-            var course = await db.Courses.SingleAsync(c => c.Id == courseId);
-            course.MarkOutOfDate();
-            await db.SaveChangesAsync();
-        });
-        await using (var scope = factory.Services.CreateAsyncScope())
-        {
-            await scope.ServiceProvider.GetRequiredService<CourseService>().RebuildAsync(courseId, CancellationToken.None);
-        }
+        Assert.Equal("OUT_OF_DATE", (await factory.GetCourseAsync(courseId)).GetProperty("state").GetString());
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        await (await trainer.PostAsync($"{Courses}/{courseId}/rebuild", null)).ShouldBeAsync(HttpStatusCode.OK);
 
         var after = await factory.GetCourseAsync(courseId);
         Assert.Equal("DRAFT", after.GetProperty("state").GetString());

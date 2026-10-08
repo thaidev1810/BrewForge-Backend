@@ -1,6 +1,8 @@
+using BrewForge.Application.Audit;
 using BrewForge.Application.Auth;
 using BrewForge.Application.Courses;
 using BrewForge.Application.Dashboards;
+using BrewForge.Application.Impact;
 using BrewForge.Application.Launch;
 using BrewForge.Application.MasterData;
 using BrewForge.Application.Recipes;
@@ -39,6 +41,10 @@ public static class DependencyInjection
         services.AddScoped<LaunchHistory>();
         services.AddScoped<LaunchStatusService>();
         services.AddScoped<PilotService>();
+
+        services.AddScoped<ImpactAnalysisService>();
+        services.AddScoped<AuditService>();
+        services.AddScoped<ComplianceReportService>();
 
         services.AddScoped<SalesService>();
         services.AddScoped<PosImportService>();

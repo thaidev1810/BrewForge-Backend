@@ -5,6 +5,7 @@ using BrewForge.Domain.Audit;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
+using BrewForge.Domain.Impact;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
@@ -47,6 +48,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<BranchLaunchStatus> BranchLaunchStatuses => Set<BranchLaunchStatus>();
     public DbSet<SalesRecord> SalesRecords => Set<SalesRecord>();
     public DbSet<PilotProgram> PilotPrograms => Set<PilotProgram>();
+    public DbSet<ChangeImpact> ChangeImpacts => Set<ChangeImpact>();
 
     /// <summary>
     /// Read by the query filters below. A member of the context, not a
@@ -273,6 +275,8 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             branch.HasIndex(b => new { b.PilotProgramId, b.BranchId }).IsUnique();
             branch.HasQueryFilter(b => BranchScope == null || b.BranchId == BranchScope);
         });
+
+        modelBuilder.Entity<ChangeImpact>();
 
         modelBuilder.Entity<LaunchDecision>(decision =>
         {

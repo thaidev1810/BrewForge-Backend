@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Application.Impact;
 using BrewForge.Application.Launch;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Recipes;
@@ -29,8 +30,8 @@ public sealed record ImportedRecipeDto(RecipeDto Recipe, RecipeVersionDto Versio
 
 /// <summary>UC-09, UC-10, the rollback of BR-04 and UC-26.</summary>
 public sealed class RecipeReleaseService(IBrewForgeDbContext db, RecipeService recipes,
-    RecipeValidationService validation, PilotService pilots, LaunchReadinessService launch, ICurrentUser currentUser,
-    TimeProvider clock)
+    RecipeValidationService validation, PilotService pilots, LaunchReadinessService launch,
+    ImpactAnalysisService impact, ICurrentUser currentUser, TimeProvider clock)
 {
     public async Task<ReviewResultDto> ReviewAsync(long versionId, ReviewRequest request,
         CancellationToken cancellationToken)
@@ -144,6 +145,12 @@ public sealed class RecipeReleaseService(IBrewForgeDbContext db, RecipeService r
             var recipe = await db.Recipes.AsNoTracking().SingleAsync(r => r.Id == version.RecipeId, cancellationToken);
             await launch.GoLiveWithoutPilotAsync(recipe, version, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
+
+            // UC-10 step 4: what was built on the superseded version is now behind (BR-15).
+            if (release.Superseded is { } superseded)
+            {
+                await impact.PropagateSupersededAsync(superseded.Id, cancellationToken);
+            }
 
             return new ReleaseResultDto(await db.ToDtoAsync(version, cancellationToken), release.Superseded?.Id,
                 Replayed: false);

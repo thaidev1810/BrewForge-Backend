@@ -111,6 +111,7 @@ public static class AuthorizationMatrix
         new("POST", "/courses/{id}/submit", TrainerOnly),
         new("POST", "/courses/{id}/approve", [RoleName.TrainingManager]),
         new("POST", "/courses/{id}/return", [RoleName.TrainingManager]),
+        new("POST", "/courses/{id}/rebuild", TrainerOnly),
 
         // 6. Training regulation
         new("GET", "/training-regulations", [RoleName.TrainingManager, RoleName.Admin]),
@@ -169,10 +170,19 @@ public static class AuthorizationMatrix
         new("GET", "/branch-launch-status", [RoleName.RdManager, RoleName.BranchManager]),
         new("POST", "/branch-launch-status/{id}/withdraw", Manager),
 
-        // 12. Dashboards
+        // 11. Change propagation
+        new("POST", "/impact-analysis", Manager),
+        new("GET", "/impact-analysis/{runId}", Manager),
+        new("POST", "/impact-analysis/{runId}/commit", Manager),
+
+        // 12. Dashboards and audit
         new("GET", "/dashboards/training-progress",
             [RoleName.Trainer, RoleName.RdManager, RoleName.BranchManager, RoleName.QualityAuditor]),
         new("GET", "/dashboards/branch-performance",
             [RoleName.RdManager, RoleName.BranchManager, RoleName.QualityAuditor]),
+        new("GET", "/dashboards/course-effectiveness", [RoleName.TrainingManager, RoleName.RdManager]),
+        new("GET", "/audit-log", [RoleName.QualityAuditor, RoleName.RdManager, RoleName.Admin]),
+        new("GET", "/audit-log/trace/{entityType}/{entityId}", [RoleName.QualityAuditor, RoleName.RdManager]),
+        new("GET", "/reports/compliance", [RoleName.QualityAuditor, RoleName.RdManager]),
     ];
 }

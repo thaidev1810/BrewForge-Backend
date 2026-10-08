@@ -44,4 +44,10 @@ public sealed class DashboardsController(DashboardService dashboards) : Controll
     public Task<BranchPerformanceDto> BranchPerformance([FromQuery] long? branchId, [FromQuery] long? recipeId,
         [FromQuery] DateOnly? from, [FromQuery] DateOnly? to, CancellationToken cancellationToken) =>
         dashboards.BranchPerformanceAsync(branchId, recipeId, from, to, cancellationToken);
+
+    /// <summary>UC-31. Per course: pass rate per module, retakes, attendance, time to certification, beside the cups sold (SCR-33).</summary>
+    [HttpGet("course-effectiveness"), AuthorizeRoles(RoleName.TrainingManager, RoleName.RdManager)]
+    public Task<IReadOnlyList<CourseEffectivenessDto>> CourseEffectiveness([FromQuery] long? courseId,
+        CancellationToken cancellationToken) =>
+        dashboards.CourseEffectivenessAsync(courseId, cancellationToken);
 }
