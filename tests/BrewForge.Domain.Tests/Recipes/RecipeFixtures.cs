@@ -58,6 +58,35 @@ internal static class RecipeFixtures
         Step(2, "Add the milk", seconds: 20, uses: [(Milk, 120m, "ml")], dependsOn: [1]),
         Step(3, "Garnish with peach", seconds: 15, uses: [(Peach, 2m, "pcs")], dependsOn: [2]));
 
+    /// <summary>
+    /// A RELEASED version with ids on itself and its steps, as it would have
+    /// after being stored. Steps 1 and 2 carry a technique gate; step 3 does not.
+    /// </summary>
+    public static RecipeVersion ReleasedVersion(long versionId = 310, long recipeId = 12, int versionNo = 1,
+        decimal oolongGrams = 18m, string firstGate = "Water at 90 C")
+    {
+        var version = RecipeVersion.CreateDraft(recipeId, versionNo, Author);
+        version.ReplaceContent(
+        [
+            new StepSpec(1, "Brew the oolong", "TEA_BREWER", firstGate, 480,
+                [new IngredientSpec(Oolong, oolongGrams, "g"), new IngredientSpec(Water, 300m, "ml")], []),
+            new StepSpec(2, "Add the milk", null, "Pour down the side of the cup", 20,
+                [new IngredientSpec(Milk, 120m, "ml")], [new DependencySpec(1, DependencyType.FinishToStart)]),
+            new StepSpec(3, "Garnish with peach", null, null, 15,
+                [new IngredientSpec(Peach, 2m, "pcs")], [new DependencySpec(2, DependencyType.FinishToStart)]),
+        ], Author);
+        WithId(version, versionId);
+        foreach (var step in version.Steps) WithId(step, versionId * 10 + step.StepOrder);
+
+        var report = version.Validate(Catalog());
+        version.Submit(report);
+        var release = RecipeRelease.Prepare(version, null, report, approverId: Author + 100, versionNo,
+            new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
+        release.SupersedePrevious();
+        release.Seal();
+        return version;
+    }
+
     public static CheckResult Check(this ValidationReport report, CheckType type) =>
         report.Checks.Single(check => check.CheckType == type);
 

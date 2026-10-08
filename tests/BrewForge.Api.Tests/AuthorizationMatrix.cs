@@ -22,6 +22,8 @@ public static class AuthorizationMatrix
 
     private static readonly RoleName[] Manager = [RoleName.RdManager];
 
+    private static readonly RoleName[] TrainerOnly = [RoleName.Trainer];
+
     /// <summary>"All head-office roles" in the contract: every role not confined to a branch.</summary>
     private static readonly RoleName[] HeadOffice =
     [
@@ -87,5 +89,25 @@ public static class AuthorizationMatrix
         new("POST", "/recipe-versions/{id}/release", Manager),
         new("POST", "/recipe-versions/{id}/rollback", Manager),
         new("POST", "/recipes/import-existing", Specialist),
+
+        // 5. Course authoring
+        new("GET", "/courses", [RoleName.Trainer, RoleName.TrainingManager, RoleName.RdManager]),
+        new("POST", "/courses", TrainerOnly),
+        new("GET", "/courses/{id}", [RoleName.Trainer, RoleName.TrainingManager]),
+        new("GET", "/courses/{id}/modules", [RoleName.Trainer, RoleName.TrainingManager]),
+        new("PUT", "/course-modules/{id}", TrainerOnly),
+        new("POST", "/course-modules/{id}/regenerate", TrainerOnly),
+        new("GET", "/course-modules/{id}/lessons", TrainerOnly),
+        new("POST", "/course-modules/{id}/lessons", TrainerOnly),
+        new("PUT", "/lessons/{id}", TrainerOnly),
+        new("DELETE", "/lessons/{id}", TrainerOnly),
+        new("GET", "/courses/{id}/quiz", TrainerOnly),
+        new("PUT", "/courses/{id}/quiz", TrainerOnly),
+        new("GET", "/courses/{id}/quiz/questions", TrainerOnly),
+        new("POST", "/courses/{id}/quiz/questions", TrainerOnly),
+        new("PUT", "/courses/{id}/practical-checklist", TrainerOnly),
+        new("POST", "/courses/{id}/submit", TrainerOnly),
+        new("POST", "/courses/{id}/approve", [RoleName.TrainingManager]),
+        new("POST", "/courses/{id}/return", [RoleName.TrainingManager]),
     ];
 }

@@ -3,6 +3,7 @@ using System.Text.Json;
 using BrewForge.Application.Abstractions;
 using BrewForge.Domain.Audit;
 using BrewForge.Domain.Common;
+using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
@@ -34,6 +35,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<RecipeVersion> RecipeVersions => Set<RecipeVersion>();
     public DbSet<ValidationResult> ValidationResults => Set<ValidationResult>();
     public DbSet<AiDraftLog> AiDraftLogs => Set<AiDraftLog>();
+    public DbSet<Course> Courses => Set<Course>();
 
     /// <summary>
     /// Read by the query filters below. A member of the context, not a
@@ -86,6 +88,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         });
 
         ConfigureRecipes(modelBuilder);
+        ConfigureCourses(modelBuilder);
 
         ApplySchemaConventions(modelBuilder);
     }
@@ -141,6 +144,43 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         modelBuilder.Entity<AiDraftLog>(log =>
         {
             log.Property(l => l.RawResponse).HasColumnType("jsonb");
+        });
+    }
+
+    /// <summary>The course aggregate: seven modules, their lessons, and one quiz with its questions.</summary>
+    private static void ConfigureCourses(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Course>(course =>
+        {
+            course.HasMany(c => c.Modules).WithOne().HasForeignKey(m => m.CourseId).OnDelete(DeleteBehavior.Cascade);
+            course.Navigation(c => c.Modules).UsePropertyAccessMode(PropertyAccessMode.Field);
+            course.HasOne(c => c.Quiz).WithOne().HasForeignKey<Quiz>(q => q.CourseId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CourseModule>(module =>
+        {
+            module.HasMany(m => m.Lessons).WithOne().HasForeignKey(l => l.CourseModuleId)
+                .OnDelete(DeleteBehavior.Cascade);
+            module.Navigation(m => m.Lessons).UsePropertyAccessMode(PropertyAccessMode.Field);
+            module.HasIndex(m => new { m.CourseId, m.ModuleType }).IsUnique();
+            module.HasIndex(m => new { m.CourseId, m.ModuleOrder }).IsUnique();
+        });
+
+        modelBuilder.Entity<Lesson>(lesson =>
+        {
+            lesson.HasIndex(l => new { l.CourseModuleId, l.LessonOrder }).IsUnique();
+        });
+
+        modelBuilder.Entity<Quiz>(quiz =>
+        {
+            quiz.HasMany(q => q.Questions).WithOne().HasForeignKey(question => question.QuizId)
+                .OnDelete(DeleteBehavior.Cascade);
+            quiz.Navigation(q => q.Questions).UsePropertyAccessMode(PropertyAccessMode.Field);
+        });
+
+        modelBuilder.Entity<QuizQuestion>(question =>
+        {
+            question.Property(q => q.OptionsJson).HasColumnType("jsonb");
         });
     }
 

@@ -29,6 +29,15 @@ public static class AuditActions
     public const string Supersede = "SUPERSEDE";
     public const string Rollback = "ROLLBACK";
     public const string ImportExisting = "IMPORT_EXISTING";
+
+    public const string Delete = "DELETE";
+    public const string Regenerate = "REGENERATE";
+    public const string UpdateQuiz = "UPDATE_QUIZ";
+    public const string AddQuestion = "ADD_QUESTION";
+    public const string UpdateChecklist = "UPDATE_CHECKLIST";
+    public const string Approve = "APPROVE";
+    public const string Return = "RETURN";
+    public const string Rebuild = "REBUILD";
 }
 
 /// <summary>The values written to <c>audit_log.entity_type</c>.</summary>
@@ -40,6 +49,9 @@ public static class AuditEntities
     public const string StandardEquipment = "StandardEquipment";
     public const string Recipe = "Recipe";
     public const string RecipeVersion = "RecipeVersion";
+    public const string Course = "Course";
+    public const string CourseModule = "CourseModule";
+    public const string Lesson = "Lesson";
 
     /// <summary>
     /// A refresh token, identified by its numeric token id. The schema has no

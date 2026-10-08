@@ -18,7 +18,7 @@ rejected.
 | 1 | Master data and authorization | done |
 | 2 | Structured recipe model, the three validators, the dependency graph | done |
 | 3 | Review, approval and immutable release | done |
-| 4 | Course generation and authored modules | not started |
+| 4 | Course generation and authored modules | done |
 | 5 | Classes, sessions, attendance and eligibility | not started |
 | 6 | Assessment, retake limit and certification | not started |
 | 7 | Sales capture, POS import and aggregation | not started |
@@ -122,6 +122,13 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-11 ingredient within its shelf life | `IngredientCheck` | `IngredientCheckTests` |
 | BR-12 approver is not the author | `RecipeVersion.EnsureReleasable`; DB check | `RecipeReleaseTests.BR_12_*`, `ReleaseTests.BR_12_*` |
 | BR-16 master data is never deleted | no DELETE route; `INeverDeleted` guard in the DbContext | `MasterDataIsNeverDeletedTests`, `MasterDataTests` (domain) |
+| BR-18 a course is bound to one version | `Course.RebuildOn` is the only way a binding moves; index `ux_course_one_per_version` | `CourseTests.BR_18_*`, `CourseApiTests.BR_18_*` |
+| BR-19, BR-31 no submission with an empty module | `Course.Submit` | `CourseTests.BR_31_*`, `BR_19_*`, `CourseApiTests.BR_31_*` |
+| BR-20 only a released version is a source | `Course.EnsureUsableAsSource` | `CourseTests.BR_20_*`, `CourseApiTests.BR_20_*` |
+| BR-22 reference values are read at render time | `CourseRenderer`; generated lessons store no content | `CourseTests.BR_22_*`, `CourseApiTests.BR_22_*` |
+| BR-29 exactly seven modules in fixed order | `CourseModuleGenerator.CreateModules`; DB unique and check constraints | `CourseTests.BR_29_*`, `CourseApiTests.Course_is_created_*` |
+| BR-30 generated modules are not edited, authored modules are not regenerated | `CourseModule.EnsureAuthorable`, `CourseModuleGenerator.Generate` | `CourseTests.BR_30_*`, `CourseApiTests.BR_30_*` |
+| BR-35 every quiz question is tagged with a module | `Quiz.AddQuestion` | `CourseTests.BR_35_*`, `CourseApiTests.BR_35_*` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -173,6 +180,22 @@ branch, through the persistence query filter.
 
 **Model answers that invent an ingredient code** are treated as non-conforming
 (BR-07), because such a draft cannot be stored at all.
+
+**The practical checklist.** The schema has no table for it. Its items are the
+gate lessons of the TECHNIQUE module, each linked to a step of the bound
+version; by default one per step that has a technique gate.
+`PUT /courses/{id}/practical-checklist` chooses which steps are on it.
+
+**Durations of generated modules** are estimated from the recipe (step
+durations, number of ingredients and machines), because a generated module
+cannot be edited (BR-30) and every module needs a duration (BR-31).
+
+**A course needs at least one quiz question to be submitted.** Without one no
+trainee could ever be certified on it (BR-21), so submission is refused.
+
+**Rebuilding an out-of-date course** on the new version exists as
+`CourseService.RebuildAsync` and is covered by tests, but has no endpoint yet:
+a course only becomes OUT_OF_DATE through change propagation (slice 9).
 
 ## Reference documents
 

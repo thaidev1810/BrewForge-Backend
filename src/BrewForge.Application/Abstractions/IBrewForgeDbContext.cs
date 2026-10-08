@@ -1,4 +1,5 @@
 using BrewForge.Domain.Audit;
+using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
@@ -26,6 +27,9 @@ public interface IBrewForgeDbContext
     DbSet<RecipeVersion> RecipeVersions { get; }
     DbSet<ValidationResult> ValidationResults { get; }
     DbSet<AiDraftLog> AiDraftLogs { get; }
+
+    /// <summary>The aggregate root. Modules, lessons and the quiz are reached through it.</summary>
+    DbSet<Course> Courses { get; }
 
     /// <summary>
     /// Queues an audit entry that is written in the same transaction as the

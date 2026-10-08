@@ -105,6 +105,44 @@ public static class RecipeScenario
         return (recipeId, versionId);
     }
 
+    /// <summary>A lighter variant of <see cref="ValidContent"/>: 16 g of leaf instead of 18, and no garnish.</summary>
+    public static object LighterContent() => new
+    {
+        steps = new[]
+        {
+            Step(1, "Brew a lighter oolong", "TEA_BREWER", 420, [Use("ING-OOLONG", 16m, "g")], gate: "Water at 85 C"),
+            Step(2, "Add the milk base", seconds: 20, uses: [Use("ING-MILKBASE", 100m, "ml")], dependsOn: [1]),
+        },
+    };
+
+    /// <summary>
+    /// Adds a version to the recipe and takes it all the way to RELEASED:
+    /// authored and submitted by the specialist, released by the manager.
+    /// </summary>
+    public static async Task<long> ReleaseNewVersionAsync(this BrewForgeApiFactory factory, long recipeId,
+        object? content = null)
+    {
+        using var specialist = await factory.ClientForAsync(TestUsers.RdSpecialist);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
+
+        var created = await (await specialist.PostAsJsonAsync($"{Recipes}/{recipeId}/versions", new { }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        var versionId = created.GetProperty("id").GetInt64();
+        await (await specialist.PutAsJsonAsync($"{Versions}/{versionId}", content ?? ValidContent()))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        await (await specialist.PostAsync($"{Versions}/{versionId}/submit", null)).ShouldBeAsync(HttpStatusCode.OK);
+        await (await manager.PostAsync($"{Versions}/{versionId}/release", null)).ShouldBeAsync(HttpStatusCode.OK);
+        return versionId;
+    }
+
+    /// <summary>A new recipe whose first version is RELEASED.</summary>
+    public static async Task<(long RecipeId, long VersionId)> NewReleasedRecipeAsync(this BrewForgeApiFactory factory,
+        object? content = null, string origin = "NEW")
+    {
+        var recipeId = await factory.NewRecipeAsync(origin: origin);
+        return (recipeId, await factory.ReleaseNewVersionAsync(recipeId, content));
+    }
+
     public static async Task<JsonElement> GetVersionAsync(this BrewForgeApiFactory factory, long versionId)
     {
         using var specialist = await factory.ClientForAsync(TestUsers.RdSpecialist);
