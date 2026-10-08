@@ -46,6 +46,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<Certificate> Certificates => Set<Certificate>();
     public DbSet<BranchLaunchStatus> BranchLaunchStatuses => Set<BranchLaunchStatus>();
     public DbSet<SalesRecord> SalesRecords => Set<SalesRecord>();
+    public DbSet<PilotProgram> PilotPrograms => Set<PilotProgram>();
 
     /// <summary>
     /// Read by the query filters below. A member of the context, not a
@@ -253,6 +254,29 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         modelBuilder.Entity<BranchLaunchStatus>(launch =>
         {
             launch.HasQueryFilter(l => BranchScope == null || l.BranchId == BranchScope);
+        });
+
+        // A store-level caller sees the pilots its branch takes part in, and of those its own branch only.
+        modelBuilder.Entity<PilotProgram>(pilot =>
+        {
+            pilot.Property(p => p.CriteriaJson).HasColumnType("jsonb");
+            pilot.HasMany(p => p.Branches).WithOne().HasForeignKey(b => b.PilotProgramId)
+                .OnDelete(DeleteBehavior.Cascade);
+            pilot.Navigation(p => p.Branches).UsePropertyAccessMode(PropertyAccessMode.Field);
+            pilot.HasOne(p => p.Decision).WithOne().HasForeignKey<LaunchDecision>(d => d.PilotProgramId)
+                .OnDelete(DeleteBehavior.Cascade);
+            pilot.HasQueryFilter(p => BranchScope == null || p.Branches.Any(b => b.BranchId == BranchScope));
+        });
+
+        modelBuilder.Entity<PilotBranch>(branch =>
+        {
+            branch.HasIndex(b => new { b.PilotProgramId, b.BranchId }).IsUnique();
+            branch.HasQueryFilter(b => BranchScope == null || b.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<LaunchDecision>(decision =>
+        {
+            decision.Property(d => d.EvaluatedJson).HasColumnType("jsonb");
         });
 
         modelBuilder.Entity<SalesRecord>(sales =>

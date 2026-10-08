@@ -69,15 +69,70 @@ public sealed class BranchLaunchStatus
     }
 
     /// <summary>
+    /// A drink is planned again for a branch that does not sell it: a branch
+    /// that never got through the gate, or one where the drink was withdrawn.
+    /// It prepares for the given version from the start.
+    /// </summary>
+    public void Replan(long recipeVersionId, int minCertifiedStaff)
+    {
+        if (Status == LaunchStatus.Live)
+        {
+            throw DomainException.RuleViolation(StateRule, "A drink that is LIVE at a branch is not planned again.");
+        }
+        EnsureThreshold(minCertifiedStaff);
+        RecipeVersionId = recipeVersionId;
+        MinCertifiedStaff = minCertifiedStaff;
+        Status = LaunchStatus.Preparing;
+        CertifiedCount = 0;
+        CoverageMet = false;
+        LiveSince = null;
+    }
+
+    /// <summary>
     /// The readiness checker. Stores the number of staff of the branch who
-    /// hold a valid certificate on the bound version; PREPARING becomes READY
-    /// once that number reaches the threshold.
+    /// hold a valid certificate on the bound version. PREPARING becomes READY
+    /// once that number reaches the threshold, and READY is lost again if the
+    /// number falls below it before the branch has gone live: READY means the
+    /// threshold is met, not that it once was.
     /// </summary>
     public void RecomputeCoverage(int certifiedCount)
     {
         CertifiedCount = Math.Max(0, certifiedCount);
         CoverageMet = CertifiedCount >= MinCertifiedStaff;
         if (Status == LaunchStatus.Preparing && CoverageMet) Status = LaunchStatus.Ready;
+        else if (Status == LaunchStatus.Ready && !CoverageMet) Status = LaunchStatus.Preparing;
+    }
+
+    /// <summary>
+    /// The launch gate (BR-23) for a drink being launched on a version. The
+    /// certified staff are counted by the caller at this moment. A branch
+    /// that does not sell the drink goes READY to LIVE, and only from READY.
+    /// A branch that sells another version of it moves to this one, and only
+    /// if it is covered on this one: it does not start selling a version
+    /// nobody there is certified on. Returns the version sold until now, when
+    /// the branch moved from one.
+    /// </summary>
+    public long? OpenForSale(long recipeVersionId, int minCertifiedStaff, int certifiedCount, DateTimeOffset now)
+    {
+        EnsureThreshold(minCertifiedStaff);
+        if (Status == LaunchStatus.Live)
+        {
+            if (RecipeVersionId == recipeVersionId)
+            {
+                throw DomainException.RuleViolation(StateRule, "The drink is already LIVE at this branch on this version.");
+            }
+            if (certifiedCount < minCertifiedStaff) throw NotReady(certifiedCount, minCertifiedStaff);
+
+            var previous = RecipeVersionId;
+            MinCertifiedStaff = minCertifiedStaff;
+            MoveToVersion(recipeVersionId, certifiedCount);
+            return previous;
+        }
+
+        if (RecipeVersionId != recipeVersionId || Status == LaunchStatus.Withdrawn) Replan(recipeVersionId, minCertifiedStaff);
+        RecomputeCoverage(certifiedCount);
+        GoLive(now);
+        return null;
     }
 
     /// <summary>
@@ -86,12 +141,7 @@ public sealed class BranchLaunchStatus
     /// </summary>
     public void GoLive(DateTimeOffset now)
     {
-        if (Status == LaunchStatus.Preparing)
-        {
-            throw DomainException.RuleViolation("BR-23",
-                $"This branch is not ready: {CertifiedCount} of the {MinCertifiedStaff} certified staff it needs.",
-                details: new ErrorDetail("certifiedCount", $"{CertifiedCount} is below {MinCertifiedStaff}"));
-        }
+        if (Status == LaunchStatus.Preparing) throw NotReady(CertifiedCount, MinCertifiedStaff);
         if (Status != LaunchStatus.Ready)
         {
             throw DomainException.RuleViolation(StateRule,
@@ -159,6 +209,11 @@ public sealed class BranchLaunchStatus
         DomainException.RuleViolation("BR-24",
             $"The drink was not live at this branch on {tradingDate:yyyy-MM-dd}. Sales can only be recorded for a day on which it was on sale there.",
             ErrorCodes.ImportBranchNotLive, new ErrorDetail("tradingDate", "the branch was not live for this drink on that day"));
+
+    private static DomainException NotReady(int certifiedCount, int minCertifiedStaff) =>
+        DomainException.RuleViolation("BR-23",
+            $"This branch is not ready: {certifiedCount} of the {minCertifiedStaff} certified staff it needs.",
+            details: new ErrorDetail("certifiedCount", $"{certifiedCount} is below {minCertifiedStaff}"));
 
     private static void EnsureThreshold(int minCertifiedStaff) =>
         new FieldErrors().Check(minCertifiedStaff >= 0, "minCertifiedStaff", "must not be negative").ThrowIfAny();

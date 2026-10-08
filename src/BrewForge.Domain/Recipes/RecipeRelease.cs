@@ -1,4 +1,5 @@
 using BrewForge.Domain.Common;
+using BrewForge.Domain.Launch;
 using BrewForge.Domain.Recipes.Validation;
 
 namespace BrewForge.Domain.Recipes;
@@ -62,8 +63,10 @@ public sealed class RecipeRelease
     /// <param name="currentlyReleased">The RELEASED version of the same recipe, if it has one.</param>
     /// <param name="freshReport">A validation run made now, not the one made at submission.</param>
     /// <param name="highestVersionNo">The highest version number the recipe has used so far.</param>
+    /// <param name="pilotsOfReleased">The pilots of the version that would be superseded (BR-28).</param>
     public static RecipeRelease Prepare(RecipeVersion candidate, RecipeVersion? currentlyReleased,
-        ValidationReport freshReport, long approverId, int highestVersionNo, DateTimeOffset now)
+        ValidationReport freshReport, long approverId, int highestVersionNo, DateTimeOffset now,
+        IEnumerable<PilotProgram>? pilotsOfReleased = null)
     {
         if (currentlyReleased is not null)
         {
@@ -78,6 +81,15 @@ public sealed class RecipeRelease
         }
 
         candidate.EnsureReleasable(freshReport, approverId);
+
+        // BR-28: a version under test stays the released one until its pilot has ended or been cancelled.
+        if (currentlyReleased is not null
+            && (pilotsOfReleased ?? []).Any(pilot => pilot.RecipeVersionId == currentlyReleased.Id && pilot.IsActive))
+        {
+            throw DomainException.RuleViolation("BR-28",
+                $"Version {currentlyReleased.VersionNo} has a pilot in DRAFT or RUNNING state and cannot be superseded " +
+                "until that pilot has ended or been cancelled.");
+        }
 
         return new RecipeRelease(candidate, currentlyReleased, approverId,
             AllocateVersionNo(candidate, currentlyReleased, highestVersionNo), now);

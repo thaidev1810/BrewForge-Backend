@@ -67,6 +67,12 @@ public static class AuditActions
     public const string Withdraw = "WITHDRAW";
     public const string MoveVersion = "MOVE_VERSION";
 
+    public const string Plan = "PLAN";
+    public const string Start = "START";
+    public const string End = "END";
+    public const string Cancel = "CANCEL";
+    public const string Decide = "DECIDE";
+
     /// <summary>
     /// A notification to a user. The schema has no notification table, so
     /// the message is recorded here, against the user it is for.
@@ -93,6 +99,7 @@ public static class AuditEntities
     public const string Attendance = "Attendance";
     public const string Certificate = "Certificate";
     public const string BranchLaunchStatus = "BranchLaunchStatus";
+    public const string PilotProgram = "PilotProgram";
     public const string SalesRecord = "SalesRecord";
 
     /// <summary>

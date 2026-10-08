@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Application.Launch;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Recipes;
 using Microsoft.EntityFrameworkCore;
@@ -28,7 +29,8 @@ public sealed record ImportedRecipeDto(RecipeDto Recipe, RecipeVersionDto Versio
 
 /// <summary>UC-09, UC-10, the rollback of BR-04 and UC-26.</summary>
 public sealed class RecipeReleaseService(IBrewForgeDbContext db, RecipeService recipes,
-    RecipeValidationService validation, ICurrentUser currentUser, TimeProvider clock)
+    RecipeValidationService validation, PilotService pilots, LaunchReadinessService launch, ICurrentUser currentUser,
+    TimeProvider clock)
 {
     public async Task<ReviewResultDto> ReviewAsync(long versionId, ReviewRequest request,
         CancellationToken cancellationToken)
@@ -86,6 +88,13 @@ public sealed class RecipeReleaseService(IBrewForgeDbContext db, RecipeService r
                                        && v.Id != version.Id, cancellationToken);
         var highestVersionNo = await recipes.NextVersionNoAsync(version.RecipeId, cancellationToken) - 1;
 
+        // BR-28: the version that would be superseded may be under test in a pilot.
+        await pilots.EndDueAsync(cancellationToken);
+        var pilotsOfReleased = currentlyReleased is null
+            ? []
+            : await db.PilotPrograms.IgnoreQueryFilters().AsNoTracking()
+                .Where(p => p.RecipeVersionId == currentlyReleased.Id).ToListAsync(cancellationToken);
+
         // 1. Master data may have changed since the version was validated.
         var (report, _) = await validation.RunAsync(version, cancellationToken);
 
@@ -94,7 +103,7 @@ public sealed class RecipeReleaseService(IBrewForgeDbContext db, RecipeService r
         {
             // 2. Separation of duty, and every other condition of release.
             release = RecipeRelease.Prepare(version, currentlyReleased, report, approverId, highestVersionNo,
-                clock.GetUtcNow());
+                clock.GetUtcNow(), pilotsOfReleased);
         }
         catch (DomainException refusal) when (refusal.Code == ErrorCodes.MasterDataChanged)
         {
@@ -129,6 +138,11 @@ public sealed class RecipeReleaseService(IBrewForgeDbContext db, RecipeService r
                 superseded = release.Superseded?.Id,
                 idempotencyKey,
             });
+            await db.SaveChangesAsync(cancellationToken);
+
+            // BR-36: a drink the chain already sells is on sale on its released version without a pilot.
+            var recipe = await db.Recipes.AsNoTracking().SingleAsync(r => r.Id == version.RecipeId, cancellationToken);
+            await launch.GoLiveWithoutPilotAsync(recipe, version, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
 
             return new ReleaseResultDto(await db.ToDtoAsync(version, cancellationToken), release.Superseded?.Id,

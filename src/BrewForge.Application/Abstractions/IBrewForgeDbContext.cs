@@ -46,6 +46,9 @@ public interface IBrewForgeDbContext
     DbSet<BranchLaunchStatus> BranchLaunchStatuses { get; }
     DbSet<SalesRecord> SalesRecords { get; }
 
+    /// <summary>The aggregate root. Pilot branches and the launch decision are reached through it.</summary>
+    DbSet<PilotProgram> PilotPrograms { get; }
+
     /// <summary>
     /// Queues an audit entry that is written in the same transaction as the
     /// next <see cref="SaveChangesAsync"/>. The entity id is read after the

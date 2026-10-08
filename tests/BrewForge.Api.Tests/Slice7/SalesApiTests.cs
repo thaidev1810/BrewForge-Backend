@@ -387,15 +387,10 @@ public sealed class SalesApiTests(BrewForgeApiFactory factory)
     [Fact]
     public async Task Branch_performance_shows_sales_beside_certificate_coverage_for_the_same_branch()
     {
-        // An existing drink: live, selling, and not covered by certified staff (BR-36).
+        // An existing drink: live since its release, selling, and not covered by certified staff (BR-36).
         var (recipeId, versionId) = await factory.NewReleasedRecipeAsync(origin: "EXISTING");
         var b01 = await factory.BranchIdAsync("B01");
-        await factory.WithDbAsync(async db =>
-        {
-            db.BranchLaunchStatuses.Add(BranchLaunchStatus.LiveForExistingRecipe(b01, recipeId, versionId, minCertifiedStaff: 2,
-                DateTimeOffset.UtcNow.AddDays(-60)));
-            await db.SaveChangesAsync();
-        });
+        await factory.BackdateLaunchAsync(recipeId, days: 60); // as if it had been released two months ago
         var recipeCode = await factory.WithDbAsync(db => db.Recipes.Where(r => r.Id == recipeId).Select(r => r.RecipeCode).SingleAsync());
         var drink = new LiveDrink(b01, "B01", recipeId, recipeCode, versionId, 0);
         await factory.RecordSaleAsync(drink, Today.AddDays(-1), 60);
@@ -408,8 +403,9 @@ public sealed class SalesApiTests(BrewForgeApiFactory factory)
 
         Assert.Equal(Today.ToString("yyyy-MM-dd"), dashboard.GetProperty("to").GetString());
         Assert.Equal(Today.AddDays(-27).ToString("yyyy-MM-dd"), dashboard.GetProperty("from").GetString());
-        var row = Assert.Single(dashboard.GetProperty("rows").EnumerateArray());
-        Assert.Equal(("B01", recipeCode), (row.GetProperty("branchCode").GetString(), row.GetProperty("recipeCode").GetString()));
+        // One row per branch that sells it; this is the one of B01.
+        var row = Assert.Single(dashboard.GetProperty("rows").EnumerateArray(), r => r.GetProperty("branchCode").GetString() == "B01");
+        Assert.Equal(recipeCode, row.GetProperty("recipeCode").GetString());
         Assert.Equal(versionId, row.GetProperty("recipeVersionId").GetInt64());
         // The sales...
         Assert.Equal((105, 2, 52.5m), (row.GetProperty("cupsTotal").GetInt32(), row.GetProperty("tradingDays").GetInt32(),
@@ -421,8 +417,8 @@ public sealed class SalesApiTests(BrewForgeApiFactory factory)
             row.GetProperty("coverageMet").GetBoolean()));
 
         // A wider period takes in the older day.
-        var wider = await (await rdManager.GetAsync($"{url}&from={Today.AddDays(-45):yyyy-MM-dd}")).ShouldBeAsync(HttpStatusCode.OK);
-        Assert.Equal(605, wider.GetProperty("rows")[0].GetProperty("cupsTotal").GetInt32());
+        var wider = await (await rdManager.GetAsync($"{url}&branchId={b01}&from={Today.AddDays(-45):yyyy-MM-dd}")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(605, Assert.Single(wider.GetProperty("rows").EnumerateArray()).GetProperty("cupsTotal").GetInt32());
 
         // A branch manager is shown their own branch, and no other.
         using var ownManager = await factory.ClientForAsync(TestUsers.BranchManager);

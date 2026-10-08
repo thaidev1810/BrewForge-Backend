@@ -1,13 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using BrewForge.Domain.Common;
 
-namespace BrewForge.Api.Json;
+namespace BrewForge.Domain.Common;
 
 /// <summary>
 /// Reads and writes every enum as the code the data dictionary lists for it
-/// (<c>RD_MANAGER</c>, <c>FINISH_TO_START</c>, <c>ml</c>), so the API speaks
-/// the same vocabulary as the database.
+/// (<c>RD_MANAGER</c>, <c>FINISH_TO_START</c>, <c>ml</c>), so the API and the JSON
+/// documents stored in the database speak the same vocabulary as its columns.
 /// </summary>
 public sealed class EnumCodeJsonConverterFactory : JsonConverterFactory
 {

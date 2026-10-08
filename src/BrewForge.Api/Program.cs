@@ -3,6 +3,7 @@ using BrewForge.Api.Errors;
 using BrewForge.Api.Json;
 using BrewForge.Application;
 using BrewForge.Application.Abstractions;
+using BrewForge.Domain.Common;
 using BrewForge.Infrastructure;
 using BrewForge.Infrastructure.Persistence;
 using BrewForge.Infrastructure.Security;

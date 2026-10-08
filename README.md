@@ -22,7 +22,7 @@ rejected.
 | 5 | Classes, sessions, attendance and eligibility | done |
 | 6 | Assessment, retake limit and certification | done |
 | 7 | Sales capture, POS import and aggregation | done |
-| 8 | Pilot programs, the launch gate, the rollout decision | not started |
+| 8 | Pilot programs, the launch gate, the rollout decision | done |
 | 9 | Impact analysis, change propagation, audit trail | not started |
 
 This repository is the backend only. The slice prompts also describe a React
@@ -145,6 +145,12 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-24 a sale belongs to the version live at the branch that day | `SalesRecord.Record`, `BranchLaunchStatus.VersionSoldOn`; the request has no version field | `SalesTests.BR_24_*`, `SalesApiTests.BR_24_*`, `PosImportApiTests.BR_24_*` |
 | BR-25 one sales record per drink, branch and day | `SalesBook`; `SalesRecord.ReplaceFromImport`; `UNIQUE (branch_id, recipe_id, trading_date)` | `SalesTests.BR_25_*`, `SalesApiTests.BR_25_*`, `PosImportApiTests.BR_25_*` |
 | A POS line is accepted whole or rejected with one reason | `PosImportLine.Parse`, `PosImportService` | `SalesTests` (layout, quantity, date), `PosImportApiTests.Sample_file_*`, `Every_kind_of_bad_line_*` |
+| BR-23 PREPARING never goes straight to LIVE | `BranchLaunchStatus.GoLive`, `OpenForSale`, `RecomputeCoverage`; `PilotProgram.GoLive` counts the certified staff at that moment | `PilotTests.BR_23_*`, `PilotApiTests.BR_23_*`, `Readiness_checker_*`, `Rollout_plans_*` |
+| BR-26 criteria are read-only once the pilot runs | `PilotProgram.EnsureEditable`, `Update` | `PilotTests.BR_26_*`, `PilotApiTests.BR_26_*` |
+| BR-27 a decision only on an ENDED pilot, with the figures of that moment | `PilotProgram.Decide`; `LaunchDecision` has no mutators; `UNIQUE (pilot_program_id)` | `PilotTests.BR_27_*`, `PilotApiTests.BR_27_*` |
+| BR-28 one DRAFT or RUNNING pilot per version, which cannot be superseded meanwhile | `PilotProgram.Create`, `RecipeRelease.Prepare`; index `ux_pilot_active_version` | `PilotTests.BR_28_*`, `PilotApiTests.BR_28_*` |
+| BR-36 an existing drink is LIVE without a pilot, coverage not met and not blocked | `BranchLaunchStatus.LiveForExistingRecipe`, `LaunchReadinessService.GoLiveWithoutPilotAsync`, `PilotProgram.Create` | `PilotTests.BR_36_*`, `PilotApiTests.BR_36_*` |
+| A branch with missing trading days is incomplete, not scored | `PilotEvaluator` | `PilotTests.Branch_with_missing_trading_days_*`, `PilotApiTests.Branch_with_missing_trading_days_*` |
 | Enrolment state model | `Enrollment` transition table | `TrainingTests.Enrolment_state_model_*`, `Transition_that_is_not_in_the_table_*` |
 | A regulation change spares enrolments in flight | `TrainingRegulation.Resolve`, `EnsureNotRetroactive` | `TrainingTests.Enrolment_keeps_the_rule_*`, `TrainingApiTests.Regulation_change_*` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
@@ -314,6 +320,58 @@ control drink is counted on the branches and days the drink itself traded.
 **`GET /dashboards/branch-performance`** returns one row per branch and drink
 that has a launch status, with the sales of the period (the last four weeks
 unless `from` and `to` say otherwise) beside the coverage figures.
+
+**When a pilot ends.** RUNNING to ENDED belongs to the calendar: a pilot ends
+the day after its `end_date`. There is no scheduler; the transition is made
+the first time anything looks at pilots after that day (a pilot endpoint, or a
+release, which needs to know for BR-28), and is audited as `END`.
+
+**The gate and two records of it.** `branch_launch_status` says what a branch
+sells; `pilot_branch` says how far a branch is through the gate of one pilot.
+Starting a pilot plans the drink at its branches (PREPARING, or READY at once
+where enough staff are already certified). `go-live` counts the certified
+staff at that moment rather than trusting a stored READY, and READY falls back
+to PREPARING if coverage is lost before the branch opens. A branch that sells
+an earlier version of the drink moves to the pilot's version through the same
+gate, and that move is recorded for BR-24.
+
+**Planning a drink again.** The data dictionary has no transition out of
+WITHDRAWN, and a branch has one row per drink. A later pilot or a rollout at a
+branch where the drink was withdrawn, or never got through the gate, plans the
+same row again from PREPARING.
+
+**Pilots are for drinks being launched.** A pilot for a recipe of origin
+EXISTING is refused with `409 BR-36`. Such a drink is LIVE at every active
+branch the moment a version of it is released, with `coverage_met` counted and
+normally false, and a later version replaces the earlier one at the branches
+that sell it. A branch opened afterwards does not get the existing drinks
+automatically.
+
+**Evaluation.** A branch is expected to have a sales record for every day from
+the day it went live (or the pilot's first day) to the pilot's last; a day
+with nothing sold is recorded as 0 cups. A branch short of that is INCOMPLETE
+and left out of the scoring, and `coverageComplete` is false. ABSOLUTE is cups
+per day per branch over the scored branches; RELATIVE counts the control drink
+on the same branches and days; RETENTION compares cups per day per branch of
+the two halves of the period (the first half has the extra day of an odd
+period, and growth is a negative drop). A criterion that cannot be computed is
+INCOMPLETE, and so is the pilot if no branch can be scored. A running pilot
+is evaluated up to today.
+
+**The decision.** `evaluated_json` holds the whole evaluation as it stood.
+ROLLOUT plans the drink at every other active branch, each of which then goes
+live through the same `go-live` endpoint and the same gate; DISCONTINUE
+withdraws it from the pilot branches; REVISE changes nothing at the branches.
+A note sent with the decision is kept in its audit entry.
+
+**Pilot endpoints beyond the contract table:** `POST /pilots/{id}/cancel` and
+`POST /branch-launch-status/{id}/withdraw`. The state models give both
+transitions to the R&D Manager and name no endpoint. The pilot body carries
+its criteria as `criteria: [ ... ]`; they are stored as `{ "criteria": [...] }`.
+
+**Training needs from a branch shortfall** list the active trainees of a
+branch whose coverage of a drink is not met and who hold no valid certificate
+on the version bound there, against the published course of that version.
 
 **Rebuilding an out-of-date course** on the new version exists as
 `CourseService.RebuildAsync` and is covered by tests, but has no endpoint yet:

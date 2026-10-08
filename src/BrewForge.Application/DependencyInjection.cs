@@ -37,6 +37,8 @@ public static class DependencyInjection
         services.AddScoped<AssessmentService>();
         services.AddScoped<LaunchReadinessService>();
         services.AddScoped<LaunchHistory>();
+        services.AddScoped<LaunchStatusService>();
+        services.AddScoped<PilotService>();
 
         services.AddScoped<SalesService>();
         services.AddScoped<PosImportService>();

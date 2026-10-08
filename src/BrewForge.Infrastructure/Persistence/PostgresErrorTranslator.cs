@@ -34,6 +34,10 @@ public static class PostgresErrorTranslator
             ("BR-25", "A sales record already exists for this drink, branch and day.", ErrorCodes.ImportDuplicateDay),
         ["ux_pilot_active_version"] =
             ("BR-28", "This recipe version already has a pilot in DRAFT or RUNNING state.", null),
+        ["launch_decision_pilot_program_id_key"] =
+            ("BR-27", "The decision of this pilot was already recorded.", null),
+        ["branch_launch_status_branch_id_recipe_id_key"] =
+            ("LAUNCH_STATUS_EXISTS", "This drink already has a launch status at this branch.", null),
     };
 
     public static DomainException? Translate(Exception exception)

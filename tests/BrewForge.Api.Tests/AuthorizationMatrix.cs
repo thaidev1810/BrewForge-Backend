@@ -155,6 +155,20 @@ public static class AuthorizationMatrix
         new("GET", "/sales/import/{jobId}", [RoleName.BranchManager]),
         new("GET", "/sales/aggregate", [RoleName.RdManager, RoleName.TrainingManager]),
 
+        // 10. Pilot and rollout
+        new("GET", "/pilots", Manager),
+        new("POST", "/pilots", Manager),
+        new("GET", "/pilots/{id}", [RoleName.RdManager, RoleName.BranchManager]),
+        new("PUT", "/pilots/{id}", Manager),
+        new("GET", "/pilots/{id}/readiness", Manager),
+        new("POST", "/pilots/{id}/start", Manager),
+        new("POST", "/pilots/{id}/cancel", Manager),
+        new("POST", "/pilots/{id}/branches/{branchId}/go-live", Manager),
+        new("GET", "/pilots/{id}/evaluation", Manager),
+        new("POST", "/pilots/{id}/decision", Manager),
+        new("GET", "/branch-launch-status", [RoleName.RdManager, RoleName.BranchManager]),
+        new("POST", "/branch-launch-status/{id}/withdraw", Manager),
+
         // 12. Dashboards
         new("GET", "/dashboards/training-progress",
             [RoleName.Trainer, RoleName.RdManager, RoleName.BranchManager, RoleName.QualityAuditor]),

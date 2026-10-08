@@ -58,6 +58,21 @@ public static class SalesScenario
         return new LiveDrink(branchId, branchCode, recipeId, recipeCode, versionId, launchId);
     }
 
+    /// <summary>
+    /// Moves the day a drink went live back in time, at every branch or at
+    /// one: the arrangement for "it has been on sale for a while", which no
+    /// endpoint can make because going live always happens now.
+    /// </summary>
+    public static Task BackdateLaunchAsync(this BrewForgeApiFactory factory, long recipeId, int days, long? branchId = null) =>
+        factory.WithDbAsync(async db =>
+        {
+            var only = branchId ?? -1; // -1 names no branch: every branch
+            await db.Database.ExecuteSqlAsync(
+                $"UPDATE branch_launch_status SET live_since = live_since - make_interval(days => {days}) WHERE recipe_id = {recipeId} AND ({only} = -1 OR branch_id = {only})");
+            await db.Database.ExecuteSqlAsync(
+                $"UPDATE pilot_branch SET went_live_at = went_live_at - make_interval(days => {days}) WHERE ({only} = -1 OR branch_id = {only}) AND pilot_program_id IN (SELECT p.id FROM pilot_program p JOIN recipe_version v ON v.id = p.recipe_version_id WHERE v.recipe_id = {recipeId})");
+        });
+
     /// <summary>The branch moves to another version of the drink, now, and the move is recorded as the application records it.</summary>
     public static Task MoveToVersionAsync(this BrewForgeApiFactory factory, LiveDrink drink, long newVersionId) =>
         factory.WithDbAsync(async db =>
