@@ -49,6 +49,9 @@ public static class AuditActions
     public const string CompleteModule = "COMPLETE_MODULE";
     public const string RecordAttendance = "RECORD_ATTENDANCE";
     public const string CorrectAttendance = "CORRECT_ATTENDANCE";
+    public const string QuizAttempt = "QUIZ_ATTEMPT";
+    public const string PracticalEvaluation = "PRACTICAL_EVALUATION";
+    public const string IssueCertificate = "ISSUE_CERTIFICATE";
 
     /// <summary>
     /// A notification to a user. The schema has no notification table, so
@@ -74,6 +77,7 @@ public static class AuditEntities
     public const string TrainingSession = "TrainingSession";
     public const string Enrollment = "Enrollment";
     public const string Attendance = "Attendance";
+    public const string Certificate = "Certificate";
 
     /// <summary>
     /// A refresh token, identified by its numeric token id. The schema has no

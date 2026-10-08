@@ -139,5 +139,15 @@ public static class AuthorizationMatrix
         new("GET", "/enrollments/{id}/eligibility", Learners),
         new("POST", "/enrollments/{id}/close", [RoleName.TrainingManager]),
         new("POST", "/enrollments/{id}/reset", [RoleName.TrainingManager]),
+        new("GET", "/enrollments/{id}/quiz", Learners),
+        new("POST", "/enrollments/{id}/quiz-attempts", Learners),
+        new("GET", "/enrollments/{id}/quiz-attempts", Learners),
+        new("POST", "/enrollments/{id}/practical-evaluation", TrainerOnly),
+        new("GET", "/me/certificates", Learners),
+        new("GET", "/certificates/{id}", [RoleName.Trainee, RoleName.Trainer, RoleName.QualityAuditor]),
+
+        // 12. Dashboards
+        new("GET", "/dashboards/training-progress",
+            [RoleName.Trainer, RoleName.RdManager, RoleName.BranchManager, RoleName.QualityAuditor]),
     ];
 }

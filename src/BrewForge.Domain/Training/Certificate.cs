@@ -51,10 +51,22 @@ public sealed class Certificate : INeverDeleted
         if (Status == CertificateStatus.Valid) Status = CertificateStatus.NeedsRecert;
     }
 
-    /// <summary>The holder earned a newer certificate that replaces this one.</summary>
+    /// <summary>The certificate that replaces this one, kept as an object until both have ids.</summary>
+    public Certificate? Successor { get; private set; }
+
+    /// <summary>The holder earned a newer certificate that replaces this one. This one is kept (BR-15).</summary>
     internal void SupersedeBy(Certificate newer)
     {
         Status = CertificateStatus.Superseded;
-        SupersededBy = newer.Id;
+        Successor = newer;
+    }
+
+    /// <summary>The holder passed again on the same version: the certificate is valid again as of now.</summary>
+    internal void Renew(DateTimeOffset now)
+    {
+        Status = CertificateStatus.Valid;
+        IssuedAt = now;
+        Successor = null;
+        SupersededBy = null;
     }
 }

@@ -74,7 +74,7 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
         return new EligibilityDto(result.Eligible && enrollment.State == EnrollmentState.Eligible,
             [.. result.MissingModuleIds.Select(moduleId => new MissingModuleDto(moduleId, moduleTypes[moduleId]))],
             result.AttendancePercent, result.MinAttendancePercent, result.AttendanceStillReachable,
-            await RetakesLeftAsync(enrollment, rules, cancellationToken), rules.RegulationId, enrollment.State);
+            enrollment.RetakesLeft(rules), rules.RegulationId, enrollment.State);
     }
 
     /// <summary>The training manager withdraws an enrolment: the trainee left, or the course was withdrawn.</summary>
@@ -91,17 +91,19 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
     public async Task<EnrollmentDto> ResetAsync(long id, CancellationToken cancellationToken)
     {
         var enrollment = await FindAsync(id, ownerOnly: false, cancellationToken);
-        enrollment.ResetForRetake();
-        db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Reset);
+        var now = clock.GetUtcNow();
+        var rules = await evaluator.RulesAsync(await CourseTypeAsync(enrollment.CourseId, cancellationToken),
+            DateOnly.FromDateTime(now.UtcDateTime), cancellationToken);
+
+        enrollment.ResetForRetake(rules, now);
+        db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Reset,
+            new { enrollment.DueDate, regulationId = rules.RegulationId });
         db.Audit(AuditEntities.User, () => enrollment.UserId, AuditActions.Notify,
             new { subject = "Course reset", message = "Your enrolment was reset. Start the course again from the first module." });
         await db.SaveChangesAsync(cancellationToken);
         return (await ToDtosAsync([enrollment], cancellationToken))[0];
     }
 
-    /// <summary>How many retakes of the quiz the enrolment still has under its regulation (BR-33).</summary>
-    internal Task<int> RetakesLeftAsync(Enrollment enrollment, TrainingRules rules, CancellationToken cancellationToken) =>
-        Task.FromResult(rules.MaxRetakes);
 
     /// <summary>
     /// Loads an enrolment the caller may see. A trainee sees only their own;
@@ -111,7 +113,8 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
     /// </summary>
     internal async Task<Enrollment> FindAsync(long id, bool ownerOnly, CancellationToken cancellationToken)
     {
-        var enrollment = await db.Enrollments.Include(e => e.Modules)
+        var enrollment = await db.Enrollments
+                             .Include(e => e.Modules).Include(e => e.QuizAttempts).Include(e => e.PracticalEvaluations)
                              .SingleOrDefaultAsync(e => e.Id == id, cancellationToken)
                          ?? throw DomainException.NotFound("Enrolment", id);
 

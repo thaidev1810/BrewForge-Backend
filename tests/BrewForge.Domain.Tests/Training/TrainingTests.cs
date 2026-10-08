@@ -252,12 +252,12 @@ public sealed class TrainingTests
         closed.Close();
 
         Assert.Equal(Enrollment.StateRule, Refused(closed.Close).Rule);                                   // CLOSED -> CLOSED
-        Assert.Equal(Enrollment.StateRule, Refused(closed.ResetForRetake).Rule);                          // CLOSED -> ASSIGNED
+        Assert.Equal(Enrollment.StateRule, Refused(() => closed.ResetForRetake(Rules, Now)).Rule);        // CLOSED -> ASSIGNED
         Assert.Equal(Enrollment.StateRule, Refused(() => closed.CompleteModule(closed.Modules[0].CourseModuleId, Now)).Rule);
         Assert.Equal(EnrollmentState.Closed, closed.State);
 
         var assigned = Assigned();
-        Assert.Equal(Enrollment.StateRule, Refused(assigned.ResetForRetake).Rule);                        // ASSIGNED -> ASSIGNED
+        Assert.Equal(Enrollment.StateRule, Refused(() => assigned.ResetForRetake(Rules, Now)).Rule);      // ASSIGNED -> ASSIGNED
         // ASSIGNED cannot jump to ELIGIBLE: the checker only promotes IN_PROGRESS, and with no module done it reports false.
         Assert.False(assigned.EvaluateEligibility(Attended(5, of: 5), Rules).Eligible);
         Assert.Equal(EnrollmentState.Assigned, assigned.State);

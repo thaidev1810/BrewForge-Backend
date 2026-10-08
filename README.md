@@ -20,7 +20,7 @@ rejected.
 | 3 | Review, approval and immutable release | done |
 | 4 | Course generation and authored modules | done |
 | 5 | Classes, sessions, attendance and eligibility | done |
-| 6 | Assessment, retake limit and certification | not started |
+| 6 | Assessment, retake limit and certification | done |
 | 7 | Sales capture, POS import and aggregation | not started |
 | 8 | Pilot programs, the launch gate, the rollout decision | not started |
 | 9 | Impact analysis, change propagation, audit trail | not started |
@@ -131,6 +131,12 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-35 every quiz question is tagged with a module | `Quiz.AddQuestion` | `CourseTests.BR_35_*`, `CourseApiTests.BR_35_*` |
 | BR-32 eligible only with all modules and enough attendance | `Enrollment.EvaluateEligibility`, `EnsureEligibleForAssessment`, `AttendanceSummary` | `TrainingTests.BR_32_*`, `TrainingApiTests.BR_32_*` |
 | BR-34 a trainer must be certified on the bound version | `TrainingClass.AddSession` | `TrainingTests.BR_34_*`, `TrainingApiTests.BR_34_*` |
+| BR-33 the retake limit locks the enrolment | `Enrollment.AttemptQuiz`, `RetakesLeft` | `AssessmentTests.BR_33_*`, `AssessmentApiTests.BR_33_*` |
+| BR-14 a trainee never evaluates themselves | `Enrollment.EvaluatePractical` (403) | `AssessmentTests.BR_14_*`, `AssessmentApiTests.BR_14_*` |
+| BR-17 no automated assessment of movement | `PracticalEvaluation` holds a pass flag per checklist item and nothing else | `AssessmentTests.BR_17_*` |
+| BR-21 certificate only when modules, quiz and practical all pass | `Enrollment.TryCertify`, the only producer of a `Certificate`; no POST, PUT or DELETE route | `AssessmentTests.BR_21_*`, `A_certificate_cannot_be_created_any_other_way`, `AssessmentApiTests.BR_21_*`, `A_certificate_cannot_be_created_changed_or_deleted_through_the_api` |
+| BR-13 a certificate is bound to a recipe version | `Enrollment.TryCertify`, `Certificate.Certifies` | `AssessmentTests.BR_13_*`, `AssessmentApiTests.BR_13_*` |
+| Certified staff are recounted when a certificate is issued | `LaunchReadinessService`, `BranchLaunchStatus.RecomputeCoverage` | `AssessmentApiTests.Issuing_a_certificate_recounts_*` |
 | Enrolment state model | `Enrollment` transition table | `TrainingTests.Enrolment_state_model_*`, `Transition_that_is_not_in_the_table_*` |
 | A regulation change spares enrolments in flight | `TrainingRegulation.Resolve`, `EnsureNotRetroactive` | `TrainingTests.Enrolment_keeps_the_rule_*`, `TrainingApiTests.Regulation_change_*` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
@@ -229,6 +235,34 @@ integrated yet.
 
 **Prerequisites** of a regulation are reported by `GET /training-needs` but
 not enforced when a course is assigned.
+
+**The quiz as the learner sees it.** `GET /enrollments/{id}/quiz` is not in the
+contract table; the quiz screen needs the questions, and the trainer's
+`GET /courses/{id}/quiz/questions` carries the answers. It serves questions and
+options only, behind the same eligibility gate as the attempt.
+
+**Retakes.** `max_retakes` counts attempts after the first: with two retakes
+the third failure locks the enrolment. A failed attempt resets the modules in
+which a question was answered wrongly, so the gate (BR-32) stays closed until
+they are studied again. `quiz_attempt` has no cycle column, so a reset by the
+Training Manager restarts the enrolment as of that moment (`enrolled_at`, the
+due date and the regulation in force); attempts made before it stay in the
+history and no longer count against the limit.
+
+**The practical verdict that counts** is the latest one. The marks must cover
+the checklist exactly: an item left out is not an item passed.
+
+**Re-certification on the same version** renews the existing certificate
+instead of adding a second row for the same user, course and version. A
+certificate earned on a newer version supersedes the older one, which is kept.
+
+**A course that is OUT_OF_DATE** refuses the quiz (`409 MSG-W05`) and the
+practical (`409 MSG-W02`), both with rule BR-15: nobody is assessed against a
+recipe version that has been superseded.
+
+**`GET /dashboards/training-progress`** returns one row per branch and course:
+learners by enrolment state, overdue, and staff holding a valid certificate or
+one that needs re-certification.
 
 **Rebuilding an out-of-date course** on the new version exists as
 `CourseService.RebuildAsync` and is covered by tests, but has no endpoint yet:

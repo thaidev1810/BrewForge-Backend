@@ -5,6 +5,7 @@ using BrewForge.Domain.Audit;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
+using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
 using BrewForge.Domain.Training;
@@ -42,6 +43,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<Enrollment> Enrollments => Set<Enrollment>();
     public DbSet<Attendance> Attendances => Set<Attendance>();
     public DbSet<Certificate> Certificates => Set<Certificate>();
+    public DbSet<BranchLaunchStatus> BranchLaunchStatuses => Set<BranchLaunchStatus>();
 
     /// <summary>
     /// Read by the query filters below. A member of the context, not a
@@ -226,7 +228,29 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             enrollment.HasMany(e => e.Modules).WithOne().HasForeignKey(m => m.EnrollmentId)
                 .OnDelete(DeleteBehavior.Cascade);
             enrollment.Navigation(e => e.Modules).UsePropertyAccessMode(PropertyAccessMode.Field);
+            enrollment.HasMany(e => e.QuizAttempts).WithOne().HasForeignKey(a => a.EnrollmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+            enrollment.Navigation(e => e.QuizAttempts).UsePropertyAccessMode(PropertyAccessMode.Field);
+            enrollment.HasMany(e => e.PracticalEvaluations).WithOne().HasForeignKey(p => p.EnrollmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+            enrollment.Navigation(e => e.PracticalEvaluations).UsePropertyAccessMode(PropertyAccessMode.Field);
             enrollment.HasQueryFilter(e => BranchScope == null || e.User.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<QuizAttempt>(attempt =>
+        {
+            attempt.Property(a => a.AnswersJson).HasColumnType("jsonb");
+            attempt.HasIndex(a => new { a.EnrollmentId, a.AttemptNo }).IsUnique();
+        });
+
+        modelBuilder.Entity<PracticalEvaluation>(evaluation =>
+        {
+            evaluation.Property(p => p.ChecklistJson).HasColumnType("jsonb");
+        });
+
+        modelBuilder.Entity<BranchLaunchStatus>(launch =>
+        {
+            launch.HasQueryFilter(l => BranchScope == null || l.BranchId == BranchScope);
         });
 
         modelBuilder.Entity<ModuleProgress>(progress =>
@@ -239,7 +263,12 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             attendance.HasIndex(a => new { a.SessionId, a.EnrollmentId }).IsUnique();
         });
 
-        modelBuilder.Entity<Certificate>();
+        modelBuilder.Entity<Certificate>(certificate =>
+        {
+            // superseded_by points at the certificate that replaced this one.
+            certificate.HasOne(c => c.Successor).WithMany().HasForeignKey(c => c.SupersededBy)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
     }
 
     public async Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken = default)

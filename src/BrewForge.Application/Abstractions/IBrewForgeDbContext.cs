@@ -1,6 +1,7 @@
 using BrewForge.Domain.Audit;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
+using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
 using BrewForge.Domain.Training;
@@ -41,6 +42,7 @@ public interface IBrewForgeDbContext
     DbSet<Enrollment> Enrollments { get; }
     DbSet<Attendance> Attendances { get; }
     DbSet<Certificate> Certificates { get; }
+    DbSet<BranchLaunchStatus> BranchLaunchStatuses { get; }
 
     /// <summary>
     /// Queues an audit entry that is written in the same transaction as the

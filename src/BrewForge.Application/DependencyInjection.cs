@@ -1,5 +1,7 @@
 using BrewForge.Application.Auth;
 using BrewForge.Application.Courses;
+using BrewForge.Application.Dashboards;
+using BrewForge.Application.Launch;
 using BrewForge.Application.MasterData;
 using BrewForge.Application.Recipes;
 using BrewForge.Application.Recipes.Drafting;
@@ -31,6 +33,9 @@ public static class DependencyInjection
         services.AddScoped<TrainingRegulationService>();
         services.AddScoped<TrainingClassService>();
         services.AddScoped<LearningService>();
+        services.AddScoped<AssessmentService>();
+        services.AddScoped<LaunchReadinessService>();
+        services.AddScoped<DashboardService>();
         return services;
     }
 }

@@ -152,6 +152,34 @@ public sealed class EnrollmentsController(LearningService learning) : Controller
     public Task<EligibilityDto> Eligibility(long id, CancellationToken cancellationToken) =>
         learning.EligibilityAsync(id, cancellationToken);
 
+    /// <summary>
+    /// The quiz as the learner takes it: questions and options, never the
+    /// answers. Not in the contract table; the quiz screen needs it. Behind
+    /// the same eligibility gate as the attempt (BR-32).
+    /// </summary>
+    [HttpGet("enrollments/{id:long}/quiz"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
+    public Task<LearnerQuizDto> Quiz(long id, [FromServices] AssessmentService assessment,
+        CancellationToken cancellationToken) =>
+        assessment.GetQuizAsync(id, cancellationToken);
+
+    /// <summary>UC-15. <c>{ answers: [ { questionId, selectedOption } ] }</c>. 409 BR-32 if not eligible, 409 BR-33 if no retakes are left.</summary>
+    [HttpPost("enrollments/{id:long}/quiz-attempts"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
+    public Task<QuizAttemptResultDto> AttemptQuiz(long id, QuizAttemptRequest request,
+        [FromServices] AssessmentService assessment, CancellationToken cancellationToken) =>
+        assessment.AttemptQuizAsync(id, request, cancellationToken);
+
+    /// <summary>Every attempt, each with its per-module breakdown.</summary>
+    [HttpGet("enrollments/{id:long}/quiz-attempts"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
+    public Task<IReadOnlyList<QuizAttemptResultDto>> QuizAttempts(long id, [FromServices] AssessmentService assessment,
+        CancellationToken cancellationToken) =>
+        assessment.ListAttemptsAsync(id, cancellationToken);
+
+    /// <summary>UC-16. <c>{ items: [ { recipeStepId, passed, note } ] }</c>. 403 BR-14 if the evaluator is the trainee.</summary>
+    [HttpPost("enrollments/{id:long}/practical-evaluation"), Authorize(Policy = Policies.Trainer)]
+    public Task<PracticalEvaluationDto> EvaluatePractical(long id, PracticalEvaluationRequest request,
+        [FromServices] AssessmentService assessment, CancellationToken cancellationToken) =>
+        assessment.EvaluatePracticalAsync(id, request, cancellationToken);
+
     /// <summary>Withdraws an enrolment. Not in the contract table; the state model gives it to the Training Manager.</summary>
     [HttpPost("enrollments/{id:long}/close"), Authorize(Policy = Policies.TrainingManager)]
     public Task<EnrollmentDto> Close(long id, CancellationToken cancellationToken) =>

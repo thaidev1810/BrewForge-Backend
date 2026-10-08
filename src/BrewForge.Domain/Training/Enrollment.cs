@@ -154,6 +154,8 @@ public sealed class Enrollment
     ];
 
     private readonly List<ModuleProgress> _modules = [];
+    private readonly List<QuizAttempt> _quizAttempts = [];
+    private readonly List<PracticalEvaluation> _practicalEvaluations = [];
 
     private Enrollment() { }
 
@@ -169,6 +171,10 @@ public sealed class Enrollment
     public DateTimeOffset? CompletedAt { get; private set; }
 
     public IReadOnlyList<ModuleProgress> Modules => _modules;
+
+    /// <summary>Every quiz attempt ever made on this enrolment, including those before a reset.</summary>
+    public IReadOnlyList<QuizAttempt> QuizAttempts => _quizAttempts;
+    public IReadOnlyList<PracticalEvaluation> PracticalEvaluations => _practicalEvaluations;
 
     /// <summary>Whether the state model has a transition from one state to the other.</summary>
     public static bool IsAllowed(EnrollmentState from, EnrollmentState to) => Transitions.Contains((from, to));
@@ -270,27 +276,192 @@ public sealed class Enrollment
     /// <summary>Withdrawn by the training manager: the trainee left, or the course was withdrawn.</summary>
     public void Close() => TransitionTo(EnrollmentState.Closed);
 
-    /// <summary>LOCKED to ASSIGNED: the trainee retakes the course from the start.</summary>
-    public void ResetForRetake()
+    /// <summary>
+    /// LOCKED to ASSIGNED: the trainee retakes the course from the start. The
+    /// enrolment starts over as of now, under the regulation in force now:
+    /// progress is cleared, the deadline is set again, and attempts made
+    /// before this moment no longer count against the retake limit.
+    /// </summary>
+    public void ResetForRetake(TrainingRules rules, DateTimeOffset now)
     {
         TransitionTo(EnrollmentState.Assigned);
         foreach (var module in _modules) module.Reset();
+        EnrolledAt = now;
+        DueDate = DateOnly.FromDateTime(now.UtcDateTime).AddDays(rules.DueDays);
         CompletedAt = null;
         RefreshProgress();
     }
 
-    // ---------------------------------------------------------------- assessment (driven by the domain, never by a caller)
+    // ---------------------------------------------------------------- assessment
 
-    internal void MarkPassed(DateTimeOffset now)
+    /// <summary>The attempts of the current cycle: those made since the enrolment was created or last reset.</summary>
+    public IReadOnlyList<QuizAttempt> CurrentAttempts() =>
+        [.. _quizAttempts.Where(attempt => attempt.AttemptedAt >= EnrolledAt).OrderBy(attempt => attempt.AttemptNo)];
+
+    /// <summary>BR-33: how many more times the quiz may be attempted after a failure.</summary>
+    public int RetakesLeft(TrainingRules rules) =>
+        Math.Max(0, rules.MaxRetakes - Math.Max(0, CurrentAttempts().Count - 1));
+
+    public bool HasPassedQuiz => CurrentAttempts().Any(attempt => attempt.Passed);
+
+    /// <summary>The verdict that counts is the most recent one of the current cycle.</summary>
+    public PracticalEvaluation? LatestPractical() =>
+        _practicalEvaluations.Where(evaluation => evaluation.EvaluatedAt >= EnrolledAt)
+            .OrderByDescending(evaluation => evaluation.EvaluatedAt).ThenByDescending(evaluation => evaluation.Id)
+            .FirstOrDefault();
+
+    /// <summary>
+    /// UC-15. Scores an attempt against the pass mark of the quiz and says,
+    /// module by module, where the trainee went wrong. Refused when no retake
+    /// is left (BR-33) and unless the enrolment passes the eligibility gate
+    /// at this moment (BR-32).
+    ///
+    /// On a failure the modules the trainee got wrong are reset, so they are
+    /// studied again before the next attempt, and the enrolment is LOCKED
+    /// when that was the last attempt the regulation allows.
+    /// </summary>
+    public QuizResult AttemptQuiz(Course course, IReadOnlyDictionary<long, string?> answers,
+        AttendanceSummary attendance, TrainingRules rules, DateTimeOffset now)
+    {
+        EnsureCourseIsCurrent(course, ErrorCodes.CourseBeingUpdated,
+            "This course is being updated to a newer recipe version. Wait for the updated course before taking the quiz.");
+
+        var attemptsSoFar = CurrentAttempts().Count;
+        if (State == EnrollmentState.Locked || attemptsSoFar > rules.MaxRetakes)
+        {
+            throw DomainException.RuleViolation("BR-33",
+                $"No retakes are left: the regulation allows {rules.MaxRetakes} after the first attempt. " +
+                "The training manager can reset the enrolment.",
+                details: new ErrorDetail("attempts", $"{attemptsSoFar} of {rules.MaxRetakes + 1} used"));
+        }
+        EnsureEligibleForAssessment(attendance, rules);
+        if (HasPassedQuiz)
+        {
+            throw DomainException.RuleViolation("QUIZ_ALREADY_PASSED", "The quiz of this enrolment has already been passed.");
+        }
+
+        var questions = course.Quiz.Questions;
+        var unknown = answers.Keys.Where(id => questions.All(question => question.Id != id)).ToList();
+        new FieldErrors()
+            .Check(unknown.Count == 0, "answers", $"refers to questions that are not in this quiz: {string.Join(", ", unknown)}")
+            .ThrowIfAny();
+
+        var moduleTypes = course.Modules.ToDictionary(module => module.Id, module => module.ModuleType);
+        var perModule = questions
+            .GroupBy(question => question.CourseModuleId)
+            .Select(group => new ModuleScore(group.Key, moduleTypes[group.Key],
+                group.Count(question => answers.GetValueOrDefault(question.Id) == question.CorrectOption), group.Count()))
+            .OrderBy(score => score.ModuleType)
+            .ToList();
+        var correct = perModule.Sum(score => score.Correct);
+        var score = questions.Count == 0 ? 0 : correct * 100 / questions.Count;
+        var passed = questions.Count > 0 && score >= course.Quiz.PassScore;
+
+        var attemptNo = _quizAttempts.Count == 0 ? 1 : _quizAttempts.Max(attempt => attempt.AttemptNo) + 1;
+        var attempt = new QuizAttempt(course.Quiz.Id, attemptNo, score, passed, new QuizAnswerSheet(answers, perModule), now);
+        _quizAttempts.Add(attempt);
+
+        if (!passed)
+        {
+            ResetModules(perModule.Where(module => module.Failed).Select(module => module.CourseModuleId));
+            // That was the last attempt the regulation allows.
+            if (CurrentAttempts().Count > rules.MaxRetakes) Lock();
+        }
+        return new QuizResult(attempt, course.Quiz.PassScore, RetakesLeft(rules), perModule);
+    }
+
+    /// <summary>
+    /// UC-16. Records the trainer's observation of every item of the
+    /// practical checklist. The evaluator may never be the trainee (BR-14),
+    /// and the marks must cover the checklist exactly: an item left out
+    /// cannot be an item passed.
+    /// </summary>
+    public PracticalEvaluation EvaluatePractical(Course course, long evaluatorId, IReadOnlyList<ChecklistMark> marks,
+        IReadOnlyCollection<long> checklistStepIds, DateTimeOffset now)
+    {
+        if (evaluatorId == UserId)
+        {
+            throw DomainException.Forbidden("BR-14", "A trainee can never evaluate or certify themselves.");
+        }
+        EnsureCourseIsCurrent(course, ErrorCodes.SourceVersionSuperseded,
+            "The recipe version behind this course was superseded. Reload the current course before submitting.");
+        if (State != EnrollmentState.Eligible)
+        {
+            throw DomainException.RuleViolation("BR-32",
+                $"The practical evaluation opens once the enrolment is ELIGIBLE; this one is {State.Code()}.",
+                details: new ErrorDetail("state", $"is {State.Code()}, not ELIGIBLE"));
+        }
+
+        var marked = marks.Select(mark => mark.RecipeStepId).ToList();
+        new FieldErrors()
+            .Check(checklistStepIds.Count > 0, "items", "this course has no practical checklist to evaluate")
+            .Check(marked.Distinct().Count() == marked.Count, "items", "marks the same step more than once")
+            .Check(marked.All(checklistStepIds.Contains), "items", "marks a step that is not on the practical checklist")
+            .Check(checklistStepIds.All(marked.Contains), "items", "must mark every item of the practical checklist")
+            .Check(marks.All(mark => mark.Note is null || mark.Note.Length <= 500), "items", "a note may have at most 500 characters")
+            .ThrowIfAny();
+
+        var evaluation = new PracticalEvaluation(evaluatorId, marks, now);
+        _practicalEvaluations.Add(evaluation);
+        return evaluation;
+    }
+
+    /// <summary>
+    /// UC-17. Issues the certificate when, and only when, all three
+    /// conditions hold: every module complete, the quiz passed and every
+    /// practical item passed (BR-21). The certificate is bound to the recipe
+    /// version the course was built from (BR-13), any older certificate of
+    /// the same user for the course is superseded, and the enrolment becomes
+    /// PASSED. Returns null while a condition is still open.
+    ///
+    /// This is the only place in the system that creates a certificate.
+    /// </summary>
+    public Certificate? TryCertify(Course course, IReadOnlyCollection<Certificate> certificatesOfUser,
+        DateTimeOffset now)
+    {
+        if (course.Id != CourseId) throw new ArgumentException("Not the course of this enrolment.", nameof(course));
+        if (State != EnrollmentState.Eligible) return null;
+        if (_modules.Any(module => !module.IsComplete)) return null;
+        if (!HasPassedQuiz || LatestPractical() is not { Passed: true }) return null;
+
+        var ofThisCourse = certificatesOfUser.Where(c => c.UserId == UserId && c.CourseId == CourseId).ToList();
+        var certificate = ofThisCourse.SingleOrDefault(c => c.RecipeVersionId == course.RecipeVersionId);
+        if (certificate is null)
+        {
+            certificate = new Certificate(UserId, CourseId, course.RecipeVersionId, now);
+        }
+        else
+        {
+            certificate.Renew(now);
+        }
+        foreach (var older in ofThisCourse.Where(c => !ReferenceEquals(c, certificate) && c.Status != CertificateStatus.Superseded))
+        {
+            older.SupersedeBy(certificate);
+        }
+
+        MarkPassed(now);
+        return certificate;
+    }
+
+    private static void EnsureCourseIsCurrent(Course course, string code, string message)
+    {
+        if (course.State != CourseState.Published)
+        {
+            throw DomainException.RuleViolation("BR-15", message, code,
+                new ErrorDetail("course", $"is {course.State.Code()}"));
+        }
+    }
+
+    private void MarkPassed(DateTimeOffset now)
     {
         TransitionTo(EnrollmentState.Passed);
         CompletedAt = now;
     }
 
-    internal void Lock() => TransitionTo(EnrollmentState.Locked);
+    private void Lock() => TransitionTo(EnrollmentState.Locked);
 
     /// <summary>The modules a trainee failed in the quiz have to be studied again.</summary>
-    internal void ResetModules(IEnumerable<long> courseModuleIds)
+    private void ResetModules(IEnumerable<long> courseModuleIds)
     {
         var ids = courseModuleIds.ToHashSet();
         foreach (var module in _modules.Where(module => ids.Contains(module.CourseModuleId))) module.Reset();

@@ -73,6 +73,8 @@ public sealed class DomainException : Exception
 public static class ErrorCodes
 {
     public const string Forbidden = "MSG-E01";
+    public const string SourceVersionSuperseded = "MSG-W02";
+    public const string CourseBeingUpdated = "MSG-W05";
     public const string ValidationFailedOnChecks = "MSG-E03";
     public const string LlmSchemaMismatch = "MSG-E04";
     public const string LlmTimeout = "MSG-E05";
