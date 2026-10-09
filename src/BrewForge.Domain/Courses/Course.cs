@@ -162,6 +162,25 @@ public sealed class Course : INeverDeleted
         technique.ConfirmReviewed();
     }
 
+    /// <summary>
+    /// What the trainer observes in the practical. On a course built from a
+    /// recipe version these are the technique gates of the steps chosen with
+    /// <see cref="SetPracticalChecklist"/>. A course that is bound to no
+    /// version has no steps to choose from: there the trainer writes the
+    /// TECHNIQUE module, and every lesson of it is an item to observe.
+    /// </summary>
+    public IReadOnlyList<Lesson> PracticalChecklist()
+    {
+        var technique = _modules.Single(module => module.ModuleType == ModuleType.Technique);
+        return RecipeVersionId is null
+            ? [.. technique.Lessons.OrderBy(lesson => lesson.LessonOrder)]
+            : [.. technique.Lessons.Where(lesson => lesson.RecipeStepId is not null)];
+    }
+
+    /// <summary>The id an item of the checklist is marked by: its recipe step, or its lesson where there is no recipe.</summary>
+    public IReadOnlyList<long> PracticalChecklistItemIds() =>
+        [.. PracticalChecklist().Select(lesson => lesson.RecipeStepId ?? lesson.Id)];
+
     public void UpdateQuiz(string? title, int? passScore)
     {
         EnsureEditable();
@@ -205,13 +224,14 @@ public sealed class Course : INeverDeleted
                 "This course cannot be published: its quiz has no questions, so no trainee could pass it.",
                 details: new ErrorDetail("quiz", "has no questions"));
         }
-        // The same goes for the practical: its checklist is made of steps of the bound version.
-        if (RecipeVersionId is not null
-            && !_modules.Single(module => module.ModuleType == ModuleType.Technique).Lessons.Any(lesson => lesson.RecipeStepId is not null))
+        // The same goes for the practical: an empty checklist can be passed by nobody.
+        if (PracticalChecklist().Count == 0)
         {
             throw DomainException.RuleViolation("BR-21",
                 "This course cannot be published: its practical checklist is empty, so no trainee could pass the practical. " +
-                "Put at least one step of the recipe on it.",
+                (RecipeVersionId is null
+                    ? "Write at least one lesson of the TECHNIQUE module."
+                    : "Put at least one step of the recipe on it."),
                 details: new ErrorDetail("practicalChecklist", "is empty"));
         }
 

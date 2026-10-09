@@ -41,7 +41,8 @@ public sealed record PracticalVideoContent(Stream Content, string ContentType, s
 
 public sealed record PracticalEvaluationRequest(long? PracticalVideoId, IReadOnlyList<ChecklistMarkRequest>? Items);
 
-public sealed record ChecklistMarkRequest(long? RecipeStepId, bool? Passed, string? Note);
+/// <summary>An item is named by <c>recipeStepId</c>, or by <c>lessonId</c> on a course that is built from no recipe.</summary>
+public sealed record ChecklistMarkRequest(long? RecipeStepId, long? LessonId, bool? Passed, string? Note);
 
 public sealed record PracticalEvaluationDto(long Id, long EnrollmentId, long EvaluatedBy, bool Passed,
     DateTimeOffset EvaluatedAt, IReadOnlyList<ChecklistMark> Items, long? PracticalVideoId,
@@ -222,16 +223,17 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
 
         var items = request.Items ?? throw DomainException.Validation("The evaluation has no items.",
             new ErrorDetail("items", "is required"));
+        var bySteps = course.RecipeVersionId is not null;
         var errors = new FieldErrors();
         for (var i = 0; i < items.Count; i++)
         {
-            errors.Check(items[i].RecipeStepId is not null, $"items[{i}].recipeStepId", "is required")
+            errors.Check(bySteps ? items[i].RecipeStepId is not null : items[i].LessonId is not null,
+                    $"items[{i}].{(bySteps ? "recipeStepId" : "lessonId")}", "is required")
                 .Check(items[i].Passed is not null, $"items[{i}].passed", "is required");
         }
         errors.ThrowIfAny();
 
-        var checklist = course.Modules.Single(m => m.ModuleType == ModuleType.Technique).Lessons
-            .Where(lesson => lesson.RecipeStepId is not null).Select(lesson => lesson.RecipeStepId!.Value).ToList();
+        var checklist = course.PracticalChecklistItemIds();
         var video = enrollment.PracticalVideos.SingleOrDefault(v => v.Id == request.PracticalVideoId);
         if (request.PracticalVideoId is not null && video is null)
         {
@@ -239,7 +241,8 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
                 new ErrorDetail("practicalVideoId", "is not a recording of this enrolment"));
         }
         var evaluation = enrollment.EvaluatePractical(course, currentUser.RequireUserId(),
-            [.. items.Select(i => new ChecklistMark(i.RecipeStepId!.Value, i.Passed!.Value, string.IsNullOrWhiteSpace(i.Note) ? null : i.Note.Trim()))],
+            [.. items.Select(i => new ChecklistMark(bySteps ? i.RecipeStepId : null, i.Passed!.Value,
+                string.IsNullOrWhiteSpace(i.Note) ? null : i.Note.Trim(), bySteps ? null : i.LessonId))],
             checklist, video, clock.GetUtcNow());
 
         db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.PracticalEvaluation,

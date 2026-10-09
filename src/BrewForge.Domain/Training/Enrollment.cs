@@ -415,7 +415,7 @@ public sealed class Enrollment
     /// evaluation, and one recording is the evidence of one evaluation.
     /// </summary>
     public PracticalEvaluation EvaluatePractical(Course course, long evaluatorId, IReadOnlyList<ChecklistMark> marks,
-        IReadOnlyCollection<long> checklistStepIds, PracticalVideo? video, DateTimeOffset now)
+        IReadOnlyCollection<long> checklistItemIds, PracticalVideo? video, DateTimeOffset now)
     {
         if (evaluatorId == UserId)
         {
@@ -447,12 +447,18 @@ public sealed class Enrollment
                 details: new ErrorDetail("practicalVideoId", "is already used by another evaluation"));
         }
 
-        var marked = marks.Select(mark => mark.RecipeStepId).ToList();
+        // Items are steps of the recipe, or lessons where the course is built from no recipe.
+        var bySteps = course.RecipeVersionId is not null;
+        var marked = marks.Select(mark => mark.ItemId()).ToList();
         new FieldErrors()
-            .Check(checklistStepIds.Count > 0, "items", "this course has no practical checklist to evaluate")
-            .Check(marked.Distinct().Count() == marked.Count, "items", "marks the same step more than once")
-            .Check(marked.All(checklistStepIds.Contains), "items", "marks a step that is not on the practical checklist")
-            .Check(checklistStepIds.All(marked.Contains), "items", "must mark every item of the practical checklist")
+            .Check(checklistItemIds.Count > 0, "items", "this course has no practical checklist to evaluate")
+            .Check(marks.All(mark => bySteps
+                    ? mark is { RecipeStepId: not null, LessonId: null }
+                    : mark is { LessonId: not null, RecipeStepId: null }),
+                "items", bySteps ? "every item is marked by its recipeStepId" : "every item is marked by its lessonId")
+            .Check(marked.Distinct().Count() == marked.Count, "items", "marks the same item more than once")
+            .Check(marked.All(checklistItemIds.Contains), "items", "marks an item that is not on the practical checklist")
+            .Check(checklistItemIds.All(marked.Contains), "items", "must mark every item of the practical checklist")
             .Check(marks.All(mark => mark.Note is null || mark.Note.Length <= 500), "items", "a note may have at most 500 characters")
             .ThrowIfAny();
 

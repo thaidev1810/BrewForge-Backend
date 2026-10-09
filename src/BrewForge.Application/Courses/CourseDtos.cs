@@ -29,8 +29,13 @@ public sealed record QuizDto(long Id, long CourseId, string Title, int PassScore
 public sealed record QuizQuestionDto(long Id, long CourseModuleId, ModuleType ModuleType, string QuestionText,
     IReadOnlyList<QuizOption> Options, string CorrectOption);
 
-/// <summary>One step of the bound version the trainer observes in the practical evaluation.</summary>
-public sealed record ChecklistItemDto(long LessonId, long RecipeStepId, int StepOrder, string ActionText,
+/// <summary>
+/// One item the trainer observes in the practical evaluation: a step of the
+/// bound version, or, on a course built from no recipe, a lesson of the
+/// TECHNIQUE module. In that case <c>RecipeStepId</c> is null, the order is
+/// that of the lesson and the text is its title.
+/// </summary>
+public sealed record ChecklistItemDto(long LessonId, long? RecipeStepId, int StepOrder, string ActionText,
     string? TechniqueGate);
 
 // ---------------------------------------------------------------- reference values (rendered, never stored)

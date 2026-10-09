@@ -48,8 +48,16 @@ public sealed class QuizAttempt
 /// <summary>The outcome of a quiz attempt, as the trainee is told it.</summary>
 public sealed record QuizResult(QuizAttempt Attempt, int PassScore, int RetakesLeft, IReadOnlyList<ModuleScore> PerModule);
 
-/// <summary>The trainer's verdict on one item of the practical checklist.</summary>
-public sealed record ChecklistMark(long RecipeStepId, bool Passed, string? Note);
+/// <summary>
+/// The trainer's verdict on one item of the practical checklist. An item is a
+/// step of the recipe, or a lesson of the TECHNIQUE module where the course is
+/// built from no recipe: one of the two ids is set, never both.
+/// </summary>
+public sealed record ChecklistMark(long? RecipeStepId, bool Passed, string? Note, long? LessonId = null)
+{
+    /// <summary>The id the item is marked by; see <c>Course.PracticalChecklistItemIds</c>.</summary>
+    public long ItemId() => RecipeStepId ?? LessonId ?? 0;
+}
 
 /// <summary>
 /// A trainer's structured observation of a trainee performing the procedure

@@ -57,9 +57,21 @@ public sealed class CourseRenderer(IBrewForgeDbContext db)
 
     public static QuizDto ToDto(Quiz quiz) => new(quiz.Id, quiz.CourseId, quiz.Title, quiz.PassScore, quiz.QuestionCount);
 
-    /// <summary>The practical checklist: the gate items of the TECHNIQUE module, with their steps as they are now.</summary>
+    /// <summary>
+    /// The practical checklist: the gate items of the TECHNIQUE module, with
+    /// their steps as they are now, or its lessons where the course is built
+    /// from no recipe.
+    /// </summary>
     public static IReadOnlyList<ChecklistItemDto> RenderChecklist(Course course, Source? source)
     {
+        if (course.RecipeVersionId is null)
+        {
+            return
+            [
+                .. course.PracticalChecklist().Select(lesson =>
+                    new ChecklistItemDto(lesson.Id, null, lesson.LessonOrder, lesson.Title, null)),
+            ];
+        }
         if (source is null) return [];
         var steps = source.Version.Steps.ToDictionary(step => step.Id);
         var technique = course.Modules.Single(module => module.ModuleType == ModuleType.Technique);

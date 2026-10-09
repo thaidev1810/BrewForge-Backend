@@ -427,7 +427,7 @@ public sealed class AssessmentTests
         var mark = typeof(ChecklistMark).GetProperties().Select(p => p.Name).Order();
 
         Assert.Equal(["ChecklistJson", "EnrollmentId", "EvaluatedAt", "EvaluatedBy", "Id", "Passed", "PracticalVideoId", "Video"], evaluation);
-        Assert.Equal(["Note", "Passed", "RecipeStepId"], mark);
+        Assert.Equal(["LessonId", "Note", "Passed", "RecipeStepId"], mark);
     }
 
     // ---------------------------------------------------------------- UC-17: BR-13, BR-21

@@ -159,6 +159,7 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | A module markedly below the others is highlighted | `CourseEffectiveness.PerModule` | `ImpactTests.First_attempt_pass_rate_*`, `AuditApiTests.Course_effectiveness_*` |
 | Enrolment state model | `Enrollment` transition table | `TrainingTests.Enrolment_state_model_*`, `Transition_that_is_not_in_the_table_*` |
 | A regulation change spares enrolments in flight | `TrainingRegulation.Resolve`, `EnsureNotRetroactive` | `TrainingTests.Enrolment_keeps_the_rule_*`, `TrainingApiTests.Regulation_change_*` |
+| A course built from no recipe is certified through a checklist of its TECHNIQUE lessons | `Course.PracticalChecklist`, `Enrollment.EvaluatePractical` | `CourseWithoutRecipeApiTests` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -216,7 +217,12 @@ branch, through the persistence query filter.
 **The practical checklist.** The schema has no table for it. Its items are the
 gate lessons of the TECHNIQUE module, each linked to a step of the bound
 version; by default one per step that has a technique gate.
-`PUT /courses/{id}/practical-checklist` chooses which steps are on it.
+`PUT /courses/{id}/practical-checklist` chooses which steps are on it. A course
+that is built from no recipe version (INDUCTION, for instance) has no steps:
+its checklist is every lesson of the TECHNIQUE module, which the trainer writes
+there, in lesson order. Such an item has `recipeStepId: null` in
+`practicalChecklist` and is marked by `lessonId` in the evaluation instead of
+`recipeStepId`. The certificate that follows is bound to no version.
 
 **Durations of generated modules** are estimated from the recipe (step
 durations, number of ingredients and machines), because a generated module
@@ -412,9 +418,10 @@ and to the trainer who built the course. The trainer then rebuilds the course
 with `POST /courses/{id}/rebuild`, which is not in the contract table.
 
 **A course needs a practical checklist to be submitted.** Like the quiz
-without questions, a course built on a recipe version whose checklist is
-empty could never certify anyone (BR-21), so submission is refused; the
-trainer puts at least one step on it with `PUT /courses/{id}/practical-checklist`.
+without questions, a course whose checklist is empty could never certify
+anyone (BR-21), so submission is refused; the trainer puts at least one step
+on it with `PUT /courses/{id}/practical-checklist`, or, on a course built from
+no recipe, writes at least one lesson of the TECHNIQUE module.
 
 **The audit log endpoint** filters by entity, action, actor, the branch of the
 actor and a period in whole UTC days. Entries the system keeps in the log for
@@ -479,11 +486,6 @@ or .webm, at most 200 MB) answers `201` with the id of the recording, and
 
 ## Known gaps
 
-- A course that is not bound to a recipe version (INDUCTION, for instance) has
-  no practical checklist, because checklist items are steps of a version. Such
-  a course can be authored, published, assigned and studied, and its quiz can
-  be taken, but nobody can be certified on it until the practical evaluation
-  is given a checklist that does not come from a recipe.
 - Notifications are recorded, not delivered: no e-mail or push channel is
   integrated.
 - Prerequisites of a training regulation are reported and not enforced.
