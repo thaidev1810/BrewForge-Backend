@@ -47,6 +47,9 @@ public static class DependencyInjection
         services.AddSingleton<IPosFileReader, PosFileReader>();
         services.AddSingleton<IReportExporter, ReportExporter>();
 
+        services.Configure<StorageOptions>(configuration.GetSection(StorageOptions.Section));
+        services.AddSingleton<IPracticalVideoStorage, LocalPracticalVideoStorage>();
+
         services.Configure<LlmOptions>(configuration.GetSection(LlmOptions.Section));
         services.AddHttpClient<IRecipeDraftModel, OpenAiRecipeDraftModel>(http =>
         {

@@ -1,7 +1,9 @@
 using BrewForge.Api.Auth;
 using BrewForge.Application.Common;
 using BrewForge.Application.Training;
+using BrewForge.Domain.Common;
 using BrewForge.Domain.Identity;
+using BrewForge.Domain.Training;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -174,7 +176,52 @@ public sealed class EnrollmentsController(LearningService learning) : Controller
         CancellationToken cancellationToken) =>
         assessment.ListAttemptsAsync(id, cancellationToken);
 
-    /// <summary>UC-16. <c>{ items: [ { recipeStepId, passed, note } ] }</c>. 403 BR-14 if the evaluator is the trainee.</summary>
+    /// <summary>
+    /// The recording of the practical: <c>multipart/form-data</c> with one
+    /// .mp4, .mov or .webm of at most 200 MB in the field <c>file</c>. Not in
+    /// the contract table. Uploaded by the trainer who runs the practical;
+    /// 403 BR-14 for the trainee.
+    /// </summary>
+    [HttpPost("enrollments/{id:long}/practical-videos"), Authorize(Policy = Policies.Trainer)]
+    [RequestSizeLimit(PracticalVideo.MaxBytes + 64 * 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = PracticalVideo.MaxBytes + 64 * 1024)]
+    public async Task<ActionResult<PracticalVideoDto>> UploadPracticalVideo(long id,
+        [FromServices] AssessmentService assessment, CancellationToken cancellationToken)
+    {
+        // Read here rather than bound, for the reason given at the POS import.
+        var file = Request.HasFormContentType
+            ? (await Request.ReadFormAsync(cancellationToken)).Files.GetFile("file")
+            : null;
+        if (file is null)
+        {
+            throw DomainException.Validation("A video is required, sent as multipart/form-data in the field 'file'.",
+                new ErrorDetail("file", "is required"));
+        }
+        await using var content = file.OpenReadStream();
+        var video = await assessment.UploadPracticalVideoAsync(id, file.FileName, file.Length, content, cancellationToken);
+        return Created($"/api/v1/practical-videos/{video.Id}", video);
+    }
+
+    /// <summary>The recordings of an enrolment, each with the evaluation it was used for. Not in the contract table.</summary>
+    [HttpGet("enrollments/{id:long}/practical-videos"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
+    public Task<IReadOnlyList<PracticalVideoDto>> PracticalVideos(long id, [FromServices] AssessmentService assessment,
+        CancellationToken cancellationToken) =>
+        assessment.ListPracticalVideosAsync(id, cancellationToken);
+
+    /// <summary>The recording itself, with range requests so that a player can seek. Not in the contract table.</summary>
+    [HttpGet("practical-videos/{id:long}")]
+    [AuthorizeRoles(RoleName.Trainee, RoleName.Trainer, RoleName.TrainingManager, RoleName.QualityAuditor)]
+    public async Task<IActionResult> PracticalVideoContent(long id, [FromServices] AssessmentService assessment,
+        CancellationToken cancellationToken)
+    {
+        var video = await assessment.OpenPracticalVideoAsync(id, cancellationToken);
+        return File(video.Content, video.ContentType, video.FileName, enableRangeProcessing: true);
+    }
+
+    /// <summary>
+    /// UC-16. <c>{ practicalVideoId, items: [ { recipeStepId, passed, note } ] }</c>. 403 BR-14 if the evaluator
+    /// is the trainee; 409 without the recording of the practical.
+    /// </summary>
     [HttpPost("enrollments/{id:long}/practical-evaluation"), Authorize(Policy = Policies.Trainer)]
     public Task<PracticalEvaluationDto> EvaluatePractical(long id, PracticalEvaluationRequest request,
         [FromServices] AssessmentService assessment, CancellationToken cancellationToken) =>

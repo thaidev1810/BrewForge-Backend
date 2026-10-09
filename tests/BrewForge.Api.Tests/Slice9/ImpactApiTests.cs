@@ -30,7 +30,7 @@ public sealed class ImpactApiTests(BrewForgeApiFactory factory)
         // One row for the course, two for the certificates, one for the live branch: and nothing else, anywhere.
         Assert.Equal(before["change_impact"] + 4, after["change_impact"]);
         Assert.Equal(before.Where(table => table.Key != "change_impact"), after.Where(table => table.Key != "change_impact"));
-        Assert.Equal(34, after.Count);
+        Assert.Equal(35, after.Count);
 
         var runId = Guid.Parse(result.GetProperty("runId").GetString()!);
         var rows = await factory.WithDbAsync(db => db.ChangeImpacts.AsNoTracking().Where(r => r.AnalysisRunId == runId).ToListAsync());

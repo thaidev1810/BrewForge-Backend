@@ -1,11 +1,14 @@
 using BrewForge.Api.Tests.Infrastructure;
+using BrewForge.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BrewForge.Api.Tests;
 
 /// <summary>
 /// The schema in db/migrations is authoritative. These tests hold the code to
-/// it: the migration creates exactly what the developer pack promises, and
+/// it: the migrations create exactly what the developer pack promises and what
+/// was added to it since, and
 /// every entity maps column for column onto its table - no invented column,
 /// no forgotten one.
 /// </summary>
@@ -13,16 +16,31 @@ namespace BrewForge.Api.Tests;
 public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
 {
     [Fact]
-    public async Task Migration_creates_the_34_tables_62_foreign_keys_and_3_triggers()
+    public async Task Migrations_create_the_35_tables_65_foreign_keys_and_3_triggers()
     {
         var (tables, foreignKeys, triggers) = await factory.WithDbAsync(async db => (
             await ScalarAsync(db, """SELECT count(*)::int AS "Value" FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"""),
             await ScalarAsync(db, """SELECT count(*)::int AS "Value" FROM information_schema.table_constraints WHERE table_schema = 'public' AND constraint_type = 'FOREIGN KEY'"""),
             await ScalarAsync(db, """SELECT count(DISTINCT trigger_name)::int AS "Value" FROM information_schema.triggers WHERE trigger_schema = 'public'""")));
 
-        Assert.Equal(34, tables);
-        Assert.Equal(62, foreignKeys);
+        // The 34 tables and 62 foreign keys of the developer pack, and the practical video with its three.
+        Assert.Equal(35, tables);
+        Assert.Equal(65, foreignKeys);
         Assert.Equal(3, triggers);
+    }
+
+    [Fact]
+    public async Task Scripts_after_the_first_can_be_applied_again_to_a_database_that_has_them()
+    {
+        var before = await factory.RowCountsAsync();
+
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<DatabaseInitializer>().ApplySchemaAsync();
+        }
+
+        // Nothing is created twice and nothing is lost: this is what every start of the API does.
+        Assert.Equal(before, await factory.RowCountsAsync());
     }
 
     [Fact]

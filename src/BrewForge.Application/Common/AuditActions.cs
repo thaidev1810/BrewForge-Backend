@@ -51,6 +51,7 @@ public static class AuditActions
     public const string CorrectAttendance = "CORRECT_ATTENDANCE";
     public const string QuizAttempt = "QUIZ_ATTEMPT";
     public const string PracticalEvaluation = "PRACTICAL_EVALUATION";
+    public const string UploadPracticalVideo = "UPLOAD_PRACTICAL_VIDEO";
     public const string IssueCertificate = "ISSUE_CERTIFICATE";
 
     public const string CorrectSales = "CORRECT_SALES";

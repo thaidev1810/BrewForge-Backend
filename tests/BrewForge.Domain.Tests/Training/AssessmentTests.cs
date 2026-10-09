@@ -78,6 +78,11 @@ public sealed class AssessmentTests
     private static ChecklistMark[] Marks(Course course, bool passed = true) =>
         [.. Checklist(course).Select(stepId => new ChecklistMark(stepId, passed, null))];
 
+    /// <summary>A recording of the practical, uploaded by the trainer who ran it.</summary>
+    private static PracticalVideo Video(Enrollment enrollment, Course course, long uploader = Trainer, bool runsThePractical = true) =>
+        enrollment.AddPracticalVideo(course, uploader, runsThePractical, "practical.mp4", "video/mp4", 4096,
+            new string('a', 64), $"test/{Guid.NewGuid():N}.mp4", Now);
+
     private static DomainException Refused(Action action) => Assert.Throws<DomainException>(action);
 
     // ---------------------------------------------------------------- BR-32: the gate
@@ -274,7 +279,7 @@ public sealed class AssessmentTests
         var course = PublishedCourse();
         var enrollment = Eligible(course);
 
-        var refusal = Refused(() => enrollment.EvaluatePractical(course, evaluatorId: Trainee, Marks(course), Checklist(course), Now));
+        var refusal = Refused(() => enrollment.EvaluatePractical(course, evaluatorId: Trainee, Marks(course), Checklist(course), Video(enrollment, course), Now));
 
         Assert.Equal(ErrorKind.Forbidden, refusal.Kind);
         Assert.Equal("BR-14", refusal.Rule);
@@ -289,8 +294,8 @@ public sealed class AssessmentTests
         var oneFailed = Marks(course);
         oneFailed[1] = oneFailed[1] with { Passed = false, Note = "Poured too fast" };
 
-        Assert.False(enrollment.EvaluatePractical(course, Trainer, oneFailed, Checklist(course), Now).Passed);
-        Assert.True(enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Now.AddHours(1)).Passed);
+        Assert.False(enrollment.EvaluatePractical(course, Trainer, oneFailed, Checklist(course), Video(enrollment, course), Now).Passed);
+        Assert.True(enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Video(enrollment, course), Now.AddHours(1)).Passed);
         Assert.Equal(2, enrollment.PracticalEvaluations.Count);
         Assert.True(enrollment.LatestPractical()!.Passed);
     }
@@ -302,8 +307,8 @@ public sealed class AssessmentTests
         var enrollment = Eligible(course);
         var checklist = Checklist(course);
 
-        var missing = Refused(() => enrollment.EvaluatePractical(course, Trainer, [Marks(course)[0]], checklist, Now));
-        var foreign = Refused(() => enrollment.EvaluatePractical(course, Trainer, [.. Marks(course), new ChecklistMark(424242, true, null)], checklist, Now));
+        var missing = Refused(() => enrollment.EvaluatePractical(course, Trainer, [Marks(course)[0]], checklist, Video(enrollment, course), Now));
+        var foreign = Refused(() => enrollment.EvaluatePractical(course, Trainer, [.. Marks(course), new ChecklistMark(424242, true, null)], checklist, Video(enrollment, course), Now));
 
         Assert.All(new[] { missing, foreign }, refusal => Assert.Contains(refusal.Details, d => d.Field == "items"));
         Assert.Empty(enrollment.PracticalEvaluations);
@@ -315,17 +320,113 @@ public sealed class AssessmentTests
         var course = PublishedCourse();
         var assigned = Enrollment.Assign(course, Trainee, null, Rules, Now);
 
-        Assert.Equal("BR-32", Refused(() => assigned.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Now)).Rule);
+        Assert.Equal("BR-32", Refused(() => assigned.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Video(assigned, course), Now)).Rule);
+    }
+
+    // ---------------------------------------------------------------- the recording of the practical
+
+    [Fact]
+    public void Practical_evaluation_is_refused_without_the_recording_of_the_practical()
+    {
+        var course = PublishedCourse();
+        var enrollment = Eligible(course);
+
+        var refusal = Refused(() => enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), video: null, Now));
+
+        Assert.Equal((ErrorKind.RuleViolation, PracticalVideo.Rule), (refusal.Kind, refusal.Rule));
+        Assert.Contains(refusal.Details, d => d.Field == "practicalVideoId");
+        Assert.Empty(enrollment.PracticalEvaluations);
+    }
+
+    [Fact]
+    public void BR_14_a_trainee_can_never_upload_the_recording_of_their_own_practical()
+    {
+        var course = PublishedCourse();
+        var enrollment = Eligible(course);
+
+        var refusal = Refused(() => Video(enrollment, course, uploader: Trainee));
+
+        Assert.Equal((ErrorKind.Forbidden, "BR-14"), (refusal.Kind, refusal.Rule));
+        Assert.Empty(enrollment.PracticalVideos);
+    }
+
+    [Fact]
+    public void Recording_is_uploaded_only_by_the_trainer_who_runs_the_practical()
+    {
+        var course = PublishedCourse();
+        var enrollment = Eligible(course);
+
+        var refusal = Refused(() => Video(enrollment, course, uploader: 77, runsThePractical: false));
+
+        Assert.Equal((ErrorKind.Forbidden, PracticalVideo.Rule), (refusal.Kind, refusal.Rule));
+        Assert.Empty(enrollment.PracticalVideos);
+    }
+
+    [Fact]
+    public void Practical_is_evaluated_by_the_trainer_who_uploaded_its_recording()
+    {
+        var course = PublishedCourse();
+        var enrollment = Eligible(course);
+        var video = Video(enrollment, course, uploader: 77);
+
+        var refusal = Refused(() => enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), video, Now));
+
+        Assert.Equal((ErrorKind.Forbidden, PracticalVideo.Rule), (refusal.Kind, refusal.Rule));
+        Assert.Same(video, enrollment.EvaluatePractical(course, 77, Marks(course), Checklist(course), video, Now).Video);
+    }
+
+    [Fact]
+    public void Recording_is_the_evidence_of_one_evaluation_and_of_this_enrolment_only()
+    {
+        var course = PublishedCourse();
+        var enrollment = Eligible(course);
+        var other = Eligible(course, userId: 62);
+        var video = Video(enrollment, course);
+        enrollment.EvaluatePractical(course, Trainer, Marks(course, passed: false), Checklist(course), video, Now);
+
+        var again = Refused(() => enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), video, Now.AddHours(1)));
+        var foreign = Refused(() => other.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), video, Now));
+
+        Assert.All(new[] { again, foreign }, refusal => Assert.Equal((ErrorKind.RuleViolation, PracticalVideo.Rule), (refusal.Kind, refusal.Rule)));
+        Assert.Single(enrollment.PracticalEvaluations);
+        Assert.Empty(other.PracticalEvaluations);
+    }
+
+    [Theory]
+    [InlineData("practical.mp4", "video/mp4")]
+    [InlineData("Practical.MOV", "video/quicktime")]
+    [InlineData("b01 trainee.webm", "video/webm")]
+    public void Recording_is_a_video_file_named_as_one(string fileName, string contentType) =>
+        Assert.Equal(contentType, PracticalVideo.Format(fileName).ContentType);
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("practical")]
+    [InlineData("practical.exe")]
+    [InlineData("practical.mp4.txt")]
+    public void File_that_is_not_named_as_a_video_is_refused(string? fileName) =>
+        Assert.Contains(Refused(() => PracticalVideo.Format(fileName)).Details, d => d.Field == "file");
+
+    [Fact]
+    public void Recording_is_neither_empty_nor_larger_than_the_limit()
+    {
+        PracticalVideo.EnsureSize(1);
+        PracticalVideo.EnsureSize(PracticalVideo.MaxBytes);
+
+        Assert.Equal(ErrorKind.Validation, Refused(() => PracticalVideo.EnsureSize(0)).Kind);
+        Assert.Equal(ErrorKind.Validation, Refused(() => PracticalVideo.EnsureSize(PracticalVideo.MaxBytes + 1)).Kind);
     }
 
     [Fact]
     public void BR_17_a_practical_evaluation_holds_an_observation_and_nothing_a_machine_scored()
     {
-        // No image, no video, no score: a pass flag per checklist item, set by a person.
+        // No score and nothing a machine judged: a pass flag per checklist item, set by a person,
+        // and the recording that person watched.
         var evaluation = typeof(PracticalEvaluation).GetProperties().Select(p => p.Name).Order();
         var mark = typeof(ChecklistMark).GetProperties().Select(p => p.Name).Order();
 
-        Assert.Equal(["ChecklistJson", "EnrollmentId", "EvaluatedAt", "EvaluatedBy", "Id", "Passed"], evaluation);
+        Assert.Equal(["ChecklistJson", "EnrollmentId", "EvaluatedAt", "EvaluatedBy", "Id", "Passed", "PracticalVideoId", "Video"], evaluation);
         Assert.Equal(["Note", "Passed", "RecipeStepId"], mark);
     }
 
@@ -342,16 +443,16 @@ public sealed class AssessmentTests
         Assert.Equal(EnrollmentState.Eligible, quizOnly.State);
 
         var practicalOnly = Eligible(course);
-        practicalOnly.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Now);
+        practicalOnly.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Video(practicalOnly, course), Now);
         Assert.Null(practicalOnly.TryCertify(course, [], Now));
 
         var practicalFailed = Eligible(course);
         practicalFailed.AttemptQuiz(course, Answers(5), Attended, Rules, Now);
-        practicalFailed.EvaluatePractical(course, Trainer, Marks(course, passed: false), Checklist(course), Now);
+        practicalFailed.EvaluatePractical(course, Trainer, Marks(course, passed: false), Checklist(course), Video(practicalFailed, course), Now);
         Assert.Null(practicalFailed.TryCertify(course, [], Now));
 
         // The practical is observed again and passes: now all three conditions hold.
-        practicalFailed.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Now.AddHours(1));
+        practicalFailed.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Video(practicalFailed, course), Now.AddHours(1));
         Assert.NotNull(practicalFailed.TryCertify(course, [], Now.AddHours(1)));
     }
 
@@ -362,7 +463,7 @@ public sealed class AssessmentTests
         var course = PublishedCourse(version);
         var enrollment = Eligible(course);
         enrollment.AttemptQuiz(course, Answers(5), Attended, Rules, Now);
-        enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Now);
+        enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Video(enrollment, course), Now);
         var issuedAt = Now.AddMinutes(5);
 
         var certificate = enrollment.TryCertify(course, [], issuedAt)!;
@@ -384,8 +485,8 @@ public sealed class AssessmentTests
         var course = PublishedCourse();
         var enrollment = Eligible(course);
         enrollment.AttemptQuiz(course, Answers(5), Attended, Rules, Now);
-        enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Now);
-        enrollment.EvaluatePractical(course, Trainer, Marks(course, passed: false), Checklist(course), Now.AddHours(1));
+        enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Video(enrollment, course), Now);
+        enrollment.EvaluatePractical(course, Trainer, Marks(course, passed: false), Checklist(course), Video(enrollment, course), Now.AddHours(1));
 
         Assert.Null(enrollment.TryCertify(course, [], Now.AddHours(2)));
     }
@@ -420,7 +521,7 @@ public sealed class AssessmentTests
         var oldCourse = PublishedCourse(oldVersion, courseId: 20);
         var first = Eligible(oldCourse);
         first.AttemptQuiz(oldCourse, Answers(5), Attended, Rules, Now);
-        first.EvaluatePractical(oldCourse, Trainer, Marks(oldCourse), Checklist(oldCourse), Now);
+        first.EvaluatePractical(oldCourse, Trainer, Marks(oldCourse), Checklist(oldCourse), Video(first, oldCourse), Now);
         var old = first.TryCertify(oldCourse, [], Now)!;
         old.FlagForRecertification(); // the version was superseded (BR-15)
 
@@ -428,7 +529,7 @@ public sealed class AssessmentTests
         var rebuilt = PublishedCourse(newVersion, courseId: 20);
         var second = Eligible(rebuilt);
         second.AttemptQuiz(rebuilt, Answers(5), Attended, Rules, Now.AddDays(1));
-        second.EvaluatePractical(rebuilt, Trainer, Marks(rebuilt), Checklist(rebuilt), Now.AddDays(1));
+        second.EvaluatePractical(rebuilt, Trainer, Marks(rebuilt), Checklist(rebuilt), Video(second, rebuilt), Now.AddDays(1));
 
         var current = second.TryCertify(rebuilt, [old], Now.AddDays(1))!;
 
@@ -448,7 +549,7 @@ public sealed class AssessmentTests
         course.MarkOutOfDate();
 
         var quiz = Refused(() => enrollment.AttemptQuiz(course, Answers(5), Attended, Rules, Now));
-        var practical = Refused(() => enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Now));
+        var practical = Refused(() => enrollment.EvaluatePractical(course, Trainer, Marks(course), Checklist(course), Video(enrollment, course), Now));
 
         Assert.Equal(("BR-15", "MSG-W05"), (quiz.Rule, quiz.Code));
         Assert.Equal(("BR-15", "MSG-W02"), (practical.Rule, practical.Code));

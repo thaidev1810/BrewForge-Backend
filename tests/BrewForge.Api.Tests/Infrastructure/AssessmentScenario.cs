@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using static BrewForge.Api.Tests.Infrastructure.TrainingScenario;
@@ -74,14 +75,38 @@ public static class AssessmentScenario
             .Select(item => item.GetProperty("recipeStepId").GetInt64()),
     ];
 
-    /// <summary>The trainer observes the practical: every item passed, or the first one failed.</summary>
+    /// <summary>What stands in for a recording in the tests. Its content is never looked at, only kept.</summary>
+    public static byte[] SampleVideo { get; } = [.. Enumerable.Range(0, 5000).Select(i => (byte)(i % 251))];
+
+    /// <summary>The trainer uploads the recording of the practical of the learner.</summary>
+    public static async Task<HttpResponseMessage> UploadPracticalVideoAsync(this BrewForgeApiFactory factory,
+        EligibleLearner learner, string uploader = TestUsers.Trainer, string fileName = "practical.mp4",
+        byte[]? content = null)
+    {
+        using var client = await factory.ClientForAsync(uploader);
+        using var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(content ?? SampleVideo);
+        file.Headers.ContentType = new MediaTypeHeaderValue("video/mp4");
+        form.Add(file, "file", fileName);
+        return await client.PostAsync($"{learner.Url}/practical-videos", form);
+    }
+
+    /// <summary>
+    /// The trainer observes the practical: every item passed, or the first
+    /// one failed. The recording is uploaded first, as an evaluation needs
+    /// one; where the upload is refused the evaluation is sent without it,
+    /// to be refused for its own reason.
+    /// </summary>
     public static async Task<HttpResponseMessage> EvaluatePracticalAsync(this BrewForgeApiFactory factory,
         EligibleLearner learner, bool allPassed = true, string evaluator = TestUsers.Trainer)
     {
         using var client = await factory.ClientForAsync(evaluator);
         var checklist = await factory.ChecklistAsync(learner.Setup.CourseId);
+        using var upload = await factory.UploadPracticalVideoAsync(learner, evaluator);
+        long? practicalVideoId = upload.IsSuccessStatusCode ? (await upload.JsonAsync()).Id() : null;
         return await client.PostAsJsonAsync($"{learner.Url}/practical-evaluation", new
         {
+            practicalVideoId,
             items = checklist.Select((stepId, index) => new
             {
                 recipeStepId = stepId,

@@ -41,8 +41,8 @@ dotnet run --project src/BrewForge.Api
 ```
 
 The API listens on `http://localhost:5113`. On its first start in the
-Development environment it applies `db/migrations/001_initial_schema.sql` and
-seeds the reference data. The OpenAPI document is at `/openapi/v1.json`.
+Development environment it applies the scripts of `db/migrations` and seeds
+the reference data. The OpenAPI document is at `/openapi/v1.json`.
 
 Without Docker, on Windows, `scripts/start-db.ps1` starts a portable
 PostgreSQL 16 from `%LOCALAPPDATA%\BrewForge` with the same credentials, and
@@ -101,7 +101,7 @@ dotnet test
 ## Layout
 
 ```
-db/migrations/        The schema. Authoritative; EF Core never creates or alters tables.
+db/migrations/        The schema. Authoritative; EF Core never creates or alters tables. 001 is the developer pack's, the later scripts are ours.
 docs/reference/       The fixed JSON schema of the LLM call. The rest of the developer pack is not published here.
 samples/              Demonstration files that are also test fixtures.
 src/BrewForge.Domain          Entities, state machines, validators. No dependencies.
@@ -138,7 +138,8 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-34 a trainer must be certified on the bound version | `TrainingClass.AddSession` | `TrainingTests.BR_34_*`, `TrainingApiTests.BR_34_*` |
 | BR-33 the retake limit locks the enrolment | `Enrollment.AttemptQuiz`, `RetakesLeft` | `AssessmentTests.BR_33_*`, `AssessmentApiTests.BR_33_*` |
 | BR-14 a trainee never evaluates themselves | `Enrollment.EvaluatePractical` (403) | `AssessmentTests.BR_14_*`, `AssessmentApiTests.BR_14_*` |
-| BR-17 no automated assessment of movement | `PracticalEvaluation` holds a pass flag per checklist item and nothing else | `AssessmentTests.BR_17_*` |
+| BR-17 no automated assessment of movement | `PracticalEvaluation` holds a pass flag per checklist item, set by a person, and the recording that person watched | `AssessmentTests.BR_17_*` |
+| A practical evaluation needs its recording, uploaded by the trainer who ran the practical | `Enrollment.EnsureAcceptsPracticalVideo`, `AddPracticalVideo`, `EvaluatePractical`; `ux_praceval_video`, check `practical_evaluation_video_required` | `AssessmentTests.Practical_evaluation_is_refused_without_*`, `Recording_*`, `BR_14_a_trainee_can_never_upload_*`, `PracticalVideoApiTests` |
 | BR-21 certificate only when modules, quiz and practical all pass | `Enrollment.TryCertify`, the only producer of a `Certificate`; no POST, PUT or DELETE route | `AssessmentTests.BR_21_*`, `A_certificate_cannot_be_created_any_other_way`, `AssessmentApiTests.BR_21_*`, `A_certificate_cannot_be_created_changed_or_deleted_through_the_api` |
 | BR-13 a certificate is bound to a recipe version | `Enrollment.TryCertify`, `Certificate.Certifies` | `AssessmentTests.BR_13_*`, `AssessmentApiTests.BR_13_*` |
 | Certified staff are recounted when a certificate is issued | `LaunchReadinessService`, `BranchLaunchStatus.RecomputeCoverage` | `AssessmentApiTests.Issuing_a_certificate_recounts_*` |
@@ -153,7 +154,7 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | A pilot ends by the calendar, whether or not anybody looks at it | `PilotEndScheduler`, `PilotService.EndDueAsync` | `PilotApiTests.Pilot_is_ended_by_the_scheduler_*`, `Pilot_ends_by_the_calendar_*` |
 | A branch with missing trading days is incomplete, not scored | `PilotEvaluator` | `PilotTests.Branch_with_missing_trading_days_*`, `PilotApiTests.Branch_with_missing_trading_days_*` |
 | BR-15 propagation flags and never deletes | `ImpactRun.Commit`, `Course.MarkOutOfDate`, `Certificate.FlagForRecertification`; `INeverDeleted` guard | `ImpactTests.BR_15_*`, `ImpactApiTests.BR_15_*`, `Releasing_a_new_version_*` |
-| A what-if writes nothing but uncommitted `change_impact` rows | `ImpactAnalysisService.AnalyzeAsync` (no audit entry, nothing tracked) | `ImpactTests.What_if_*`, `ImpactApiTests.What_if_leaves_the_database_unchanged_*` (row count of all 34 tables) |
+| A what-if writes nothing but uncommitted `change_impact` rows | `ImpactAnalysisService.AnalyzeAsync` (no audit entry, nothing tracked) | `ImpactTests.What_if_*`, `ImpactApiTests.What_if_leaves_the_database_unchanged_*` (row count of every table) |
 | The affected set is complete at commit | `ImpactRun.Resume`, `DependencyGraph` | `ImpactTests.Commit_takes_in_*`, `ImpactApiTests.Commit_takes_in_*` |
 | A module markedly below the others is highlighted | `CourseEffectiveness.PerModule` | `ImpactTests.First_attempt_pass_rate_*`, `AuditApiTests.Course_effectiveness_*` |
 | Enrolment state model | `Enrollment` transition table | `TrainingTests.Enrolment_state_model_*`, `Transition_that_is_not_in_the_table_*` |
@@ -168,7 +169,9 @@ may reach it.
 ## Decisions the developer pack left open
 
 These are the places where the pack was silent, or where the schema has no
-column for what a slice asks. The schema was not changed for any of them.
+column for what a slice asks. The pack's schema (`001`) was not changed for any
+of them; what the team decided to add afterwards is in later scripts, listed
+under "Beyond the developer pack" below.
 
 **Refresh tokens.** The schema has no table for them. A refresh token is a
 signed JWT with its own audience and a random id; revoking one writes an
@@ -433,6 +436,46 @@ enrolment. A module is highlighted when its rate lies at least 20 points below
 the average of the other modules. On-time completion is judged for enrolments
 that were passed or whose due date has gone by. Sales are the cups of the
 bound version at the branches where at least one enrolment was passed.
+
+## Beyond the developer pack
+
+Decided by the team after the pack was written. The pack's own files are
+unchanged; these are additions.
+
+**Migrations after 001.** Every script after `001_initial_schema.sql` is
+written so that it can be applied again. The API applies them on each start,
+so a database created earlier catches up, and Docker applies them once to an
+empty volume. The data dictionary of the pack describes 001 only.
+
+**The recording of a practical** (`002_practical_video.sql`: table
+`practical_video`, column `practical_evaluation.practical_video_id`). Every
+practical evaluation is judged from a video of the practical, and cannot be
+recorded without one (`409 PRACTICAL_VIDEO`). The flow is two requests:
+`POST /enrollments/{id}/practical-videos` (multipart, field `file`; .mp4, .mov
+or .webm, at most 200 MB) answers `201` with the id of the recording, and
+`POST /enrollments/{id}/practical-evaluation` names it as `practicalVideoId`.
+
+- It is uploaded by the trainer who runs the practical: the one who opened the
+  class of the enrolment or teaches one of its sessions (`403 PRACTICAL_VIDEO`
+  for any other trainer). An enrolment that belongs to no class has no such
+  person, so any trainer may. Never the trainee, whatever their role
+  (`403 BR-14`).
+- The evaluation is recorded by the trainer who uploaded the recording, and
+  one recording is the evidence of one evaluation: a second try of the
+  practical needs its own.
+- It can be uploaded while the practical is open, that is, while the enrolment
+  is ELIGIBLE and the course PUBLISHED. A recording made before the enrolment
+  was reset does not count afterwards.
+- `GET /enrollments/{id}/practical-videos` lists the recordings of an
+  enrolment with the evaluation each was used for, and
+  `GET /practical-videos/{id}` serves one, with range requests. The trainee
+  sees their own; trainers, the training manager and the quality auditor see
+  any. Nothing looks at the content: it is evidence for a person (BR-17).
+- Files are kept on the disk of the server under `Storage:PracticalVideoRoot`
+  (`storage/practical-videos` by default), behind `IPracticalVideoStorage`, so
+  that an object store can replace the disk once the team has chosen a host.
+  The type is taken from the file name; the SHA-256 of the content is stored
+  with the row.
 
 ## Known gaps
 

@@ -114,7 +114,8 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
     internal async Task<Enrollment> FindAsync(long id, bool ownerOnly, CancellationToken cancellationToken)
     {
         var enrollment = await db.Enrollments
-                             .Include(e => e.Modules).Include(e => e.QuizAttempts).Include(e => e.PracticalEvaluations)
+                             .Include(e => e.Modules).Include(e => e.QuizAttempts)
+                             .Include(e => e.PracticalEvaluations).Include(e => e.PracticalVideos)
                              .SingleOrDefaultAsync(e => e.Id == id, cancellationToken)
                          ?? throw DomainException.NotFound("Enrolment", id);
 

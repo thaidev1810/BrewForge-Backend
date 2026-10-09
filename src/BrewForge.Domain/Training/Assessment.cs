@@ -53,8 +53,9 @@ public sealed record ChecklistMark(long RecipeStepId, bool Passed, string? Note)
 
 /// <summary>
 /// A trainer's structured observation of a trainee performing the procedure
-/// (UC-16). It records what a person saw: there is no image, no video and no
-/// automated scoring of movement here, and there is not meant to be (BR-17).
+/// (UC-16). It records what a person saw, in the recording it names: there
+/// is no score and no automated judgement of movement here, and there is not
+/// meant to be (BR-17).
 /// </summary>
 public sealed class PracticalEvaluation
 {
@@ -62,12 +63,14 @@ public sealed class PracticalEvaluation
 
     private PracticalEvaluation() { }
 
-    internal PracticalEvaluation(long evaluatedBy, IReadOnlyList<ChecklistMark> marks, DateTimeOffset evaluatedAt)
+    internal PracticalEvaluation(long evaluatedBy, IReadOnlyList<ChecklistMark> marks, PracticalVideo video,
+        DateTimeOffset evaluatedAt)
     {
         EvaluatedBy = evaluatedBy;
         ChecklistJson = JsonSerializer.Serialize(marks, ChecklistFormat);
         // Passed only when every item passed. An empty checklist proves nothing.
         Passed = marks.Count > 0 && marks.All(mark => mark.Passed);
+        Video = video;
         EvaluatedAt = evaluatedAt;
     }
 
@@ -76,6 +79,10 @@ public sealed class PracticalEvaluation
     public long EvaluatedBy { get; private set; }
     public string ChecklistJson { get; private set; } = null!;
     public bool Passed { get; private set; }
+
+    /// <summary>The recording the evaluation was judged from. Missing only on evaluations older than that rule.</summary>
+    public long? PracticalVideoId { get; private set; }
+    public PracticalVideo? Video { get; private set; }
     public DateTimeOffset EvaluatedAt { get; private set; }
 
     public IReadOnlyList<ChecklistMark> Marks() =>

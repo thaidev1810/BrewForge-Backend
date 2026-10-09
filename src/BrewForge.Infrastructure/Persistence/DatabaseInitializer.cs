@@ -8,8 +8,9 @@ namespace BrewForge.Infrastructure.Persistence;
 /// <summary>
 /// Brings an empty database to the schema of <c>db/migrations</c> and then
 /// seeds it. Safe to run on every start and from several instances at once:
-/// the scripts are applied only when the schema is missing, under an advisory
-/// lock, and the seed only inserts what is not there yet.
+/// the first script is applied only when the schema is missing, the later
+/// ones can be applied any number of times, all under an advisory lock, and
+/// the seed only inserts what is not there yet.
 /// </summary>
 public sealed class DatabaseInitializer(BrewForgeDbContext db, DataSeeder seeder,
     ILogger<DatabaseInitializer> logger)
@@ -33,9 +34,12 @@ public sealed class DatabaseInitializer(BrewForgeDbContext db, DataSeeder seeder
             await ExecuteAsync($"SELECT pg_advisory_lock({AdvisoryLockKey})");
             try
             {
-                if (await SchemaExistsAsync()) return;
-
-                foreach (var (name, sql) in ReadScripts())
+                // The first script creates the schema and runs once. Every later
+                // script is written to be safe to run again, so it is applied on
+                // each start and a database created earlier catches up.
+                var scripts = ReadScripts();
+                var pending = await SchemaExistsAsync() ? scripts.Skip(1) : scripts;
+                foreach (var (name, sql) in pending)
                 {
                     logger.LogInformation("Applying database script {Script}", name);
                     await ExecuteAsync(sql);

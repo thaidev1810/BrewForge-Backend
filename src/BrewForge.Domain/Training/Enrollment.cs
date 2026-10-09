@@ -156,6 +156,7 @@ public sealed class Enrollment
     private readonly List<ModuleProgress> _modules = [];
     private readonly List<QuizAttempt> _quizAttempts = [];
     private readonly List<PracticalEvaluation> _practicalEvaluations = [];
+    private readonly List<PracticalVideo> _practicalVideos = [];
 
     private Enrollment() { }
 
@@ -175,6 +176,9 @@ public sealed class Enrollment
     /// <summary>Every quiz attempt ever made on this enrolment, including those before a reset.</summary>
     public IReadOnlyList<QuizAttempt> QuizAttempts => _quizAttempts;
     public IReadOnlyList<PracticalEvaluation> PracticalEvaluations => _practicalEvaluations;
+
+    /// <summary>Every recording of a practical of this enrolment. Each is the evidence of one evaluation.</summary>
+    public IReadOnlyList<PracticalVideo> PracticalVideos => _practicalVideos;
 
     /// <summary>Whether the state model has a transition from one state to the other.</summary>
     public static bool IsAllowed(EnrollmentState from, EnrollmentState to) => Transitions.Contains((from, to));
@@ -371,25 +375,76 @@ public sealed class Enrollment
     }
 
     /// <summary>
+    /// Whether a recording of the practical may be uploaded now, asked before
+    /// the file is stored. It is uploaded by the trainer who runs the
+    /// practical and by nobody else: never by the trainee (BR-14), and while
+    /// the practical is open, as an evaluation is.
+    /// </summary>
+    public void EnsureAcceptsPracticalVideo(Course course, long uploaderId, bool uploaderRunsThePractical)
+    {
+        if (uploaderId == UserId)
+        {
+            throw DomainException.Forbidden("BR-14", "A trainee can never upload the recording of their own practical.");
+        }
+        if (!uploaderRunsThePractical)
+        {
+            throw DomainException.Forbidden(PracticalVideo.Rule,
+                "The recording of a practical is uploaded by the trainer who runs the practical of this class.");
+        }
+        EnsurePracticalIsOpen(course);
+    }
+
+    /// <summary>Records a recording that has been stored. The same refusals as <see cref="EnsureAcceptsPracticalVideo"/>.</summary>
+    public PracticalVideo AddPracticalVideo(Course course, long uploaderId, bool uploaderRunsThePractical,
+        string fileName, string contentType, long sizeBytes, string sha256, string storageKey, DateTimeOffset now)
+    {
+        EnsureAcceptsPracticalVideo(course, uploaderId, uploaderRunsThePractical);
+        PracticalVideo.EnsureSize(sizeBytes);
+
+        var video = new PracticalVideo(uploaderId, fileName, contentType, sizeBytes, sha256, storageKey, now);
+        _practicalVideos.Add(video);
+        return video;
+    }
+
+    /// <summary>
     /// UC-16. Records the trainer's observation of every item of the
     /// practical checklist. The evaluator may never be the trainee (BR-14),
     /// and the marks must cover the checklist exactly: an item left out
-    /// cannot be an item passed.
+    /// cannot be an item passed. The evaluation is judged from a recording
+    /// of the practical, uploaded by the evaluator; without one there is no
+    /// evaluation, and one recording is the evidence of one evaluation.
     /// </summary>
     public PracticalEvaluation EvaluatePractical(Course course, long evaluatorId, IReadOnlyList<ChecklistMark> marks,
-        IReadOnlyCollection<long> checklistStepIds, DateTimeOffset now)
+        IReadOnlyCollection<long> checklistStepIds, PracticalVideo? video, DateTimeOffset now)
     {
         if (evaluatorId == UserId)
         {
             throw DomainException.Forbidden("BR-14", "A trainee can never evaluate or certify themselves.");
         }
-        EnsureCourseIsCurrent(course, ErrorCodes.SourceVersionSuperseded,
-            "The recipe version behind this course was superseded. Reload the current course before submitting.");
-        if (State != EnrollmentState.Eligible)
+        EnsurePracticalIsOpen(course);
+
+        if (video is null)
         {
-            throw DomainException.RuleViolation("BR-32",
-                $"The practical evaluation opens once the enrolment is ELIGIBLE; this one is {State.Code()}.",
-                details: new ErrorDetail("state", $"is {State.Code()}, not ELIGIBLE"));
+            throw DomainException.RuleViolation(PracticalVideo.Rule,
+                "A practical evaluation needs the recording of the practical. Upload it, then name it in the evaluation.",
+                details: new ErrorDetail("practicalVideoId", "is required"));
+        }
+        if (!_practicalVideos.Contains(video) || video.UploadedAt < EnrolledAt)
+        {
+            throw DomainException.RuleViolation(PracticalVideo.Rule,
+                "That recording is not one of the present practical of this enrolment.",
+                details: new ErrorDetail("practicalVideoId", "is not a recording of this practical"));
+        }
+        if (video.UploadedBy != evaluatorId)
+        {
+            throw DomainException.Forbidden(PracticalVideo.Rule,
+                "A practical is evaluated by the trainer who ran it and uploaded its recording.");
+        }
+        if (_practicalEvaluations.Any(evaluation => ReferenceEquals(evaluation.Video, video)))
+        {
+            throw DomainException.RuleViolation(PracticalVideo.Rule,
+                "That recording already belongs to an evaluation. Every practical has its own recording.",
+                details: new ErrorDetail("practicalVideoId", "is already used by another evaluation"));
         }
 
         var marked = marks.Select(mark => mark.RecipeStepId).ToList();
@@ -401,9 +456,21 @@ public sealed class Enrollment
             .Check(marks.All(mark => mark.Note is null || mark.Note.Length <= 500), "items", "a note may have at most 500 characters")
             .ThrowIfAny();
 
-        var evaluation = new PracticalEvaluation(evaluatorId, marks, now);
+        var evaluation = new PracticalEvaluation(evaluatorId, marks, video, now);
         _practicalEvaluations.Add(evaluation);
         return evaluation;
+    }
+
+    private void EnsurePracticalIsOpen(Course course)
+    {
+        EnsureCourseIsCurrent(course, ErrorCodes.SourceVersionSuperseded,
+            "The recipe version behind this course was superseded. Reload the current course before submitting.");
+        if (State != EnrollmentState.Eligible)
+        {
+            throw DomainException.RuleViolation("BR-32",
+                $"The practical evaluation opens once the enrolment is ELIGIBLE; this one is {State.Code()}.",
+                details: new ErrorDetail("state", $"is {State.Code()}, not ELIGIBLE"));
+        }
     }
 
     /// <summary>

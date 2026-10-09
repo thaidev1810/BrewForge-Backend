@@ -43,6 +43,7 @@ public interface IBrewForgeDbContext
     /// <summary>The aggregate root. Module progress is reached through it.</summary>
     DbSet<Enrollment> Enrollments { get; }
     DbSet<Attendance> Attendances { get; }
+    DbSet<PracticalVideo> PracticalVideos { get; }
     DbSet<Certificate> Certificates { get; }
     DbSet<BranchLaunchStatus> BranchLaunchStatuses { get; }
     DbSet<SalesRecord> SalesRecords { get; }

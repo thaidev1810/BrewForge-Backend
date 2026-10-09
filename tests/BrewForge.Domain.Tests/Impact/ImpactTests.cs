@@ -81,9 +81,13 @@ public sealed class ImpactTests
             .. course.Modules.Single(m => m.ModuleType == ModuleType.Technique).Lessons
                 .Where(l => l.RecipeStepId is not null).Select(l => l.RecipeStepId!.Value),
         ];
-        enrollment.EvaluatePractical(course, Trainer, [.. checklist.Select(step => new ChecklistMark(step, true, null))], checklist, Now);
+        enrollment.EvaluatePractical(course, Trainer, [.. checklist.Select(step => new ChecklistMark(step, true, null))], checklist, Video(enrollment, course), Now);
         return WithId(enrollment.TryCertify(course, [], Now)!, certificateId);
     }
+
+    private static PracticalVideo Video(Enrollment enrollment, Course course) =>
+        enrollment.AddPracticalVideo(course, Trainer, uploaderRunsThePractical: true, "practical.mp4", "video/mp4", 4096,
+            new string('a', 64), $"test/{Guid.NewGuid():N}.mp4", Now);
 
     private static BranchLaunchStatus Live(long branchId, RecipeVersion version, long launchId) =>
         WithId(BranchLaunchStatus.LiveForExistingRecipe(branchId, version.RecipeId, version.Id, 2, Now), launchId);

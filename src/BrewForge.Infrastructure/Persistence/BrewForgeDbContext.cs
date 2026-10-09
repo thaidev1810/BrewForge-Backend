@@ -18,8 +18,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace BrewForge.Infrastructure.Persistence;
 
 /// <summary>
-/// Maps the domain onto the schema of <c>db/migrations/001_initial_schema.sql</c>.
-/// The SQL file is authoritative: this context never creates or alters tables,
+/// Maps the domain onto the schema of <c>db/migrations</c>.
+/// The SQL files are authoritative: this context never creates or alters tables,
 /// it only names them the way the file does.
 /// </summary>
 public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> options, ICurrentUser currentUser,
@@ -44,6 +44,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<TrainingClass> TrainingClasses => Set<TrainingClass>();
     public DbSet<Enrollment> Enrollments => Set<Enrollment>();
     public DbSet<Attendance> Attendances => Set<Attendance>();
+    public DbSet<PracticalVideo> PracticalVideos => Set<PracticalVideo>();
     public DbSet<Certificate> Certificates => Set<Certificate>();
     public DbSet<BranchLaunchStatus> BranchLaunchStatuses => Set<BranchLaunchStatus>();
     public DbSet<SalesRecord> SalesRecords => Set<SalesRecord>();
@@ -239,6 +240,9 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             enrollment.HasMany(e => e.PracticalEvaluations).WithOne().HasForeignKey(p => p.EnrollmentId)
                 .OnDelete(DeleteBehavior.Cascade);
             enrollment.Navigation(e => e.PracticalEvaluations).UsePropertyAccessMode(PropertyAccessMode.Field);
+            enrollment.HasMany(e => e.PracticalVideos).WithOne().HasForeignKey(v => v.EnrollmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+            enrollment.Navigation(e => e.PracticalVideos).UsePropertyAccessMode(PropertyAccessMode.Field);
             enrollment.HasQueryFilter(e => BranchScope == null || e.User.BranchId == BranchScope);
         });
 
@@ -251,6 +255,15 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         modelBuilder.Entity<PracticalEvaluation>(evaluation =>
         {
             evaluation.Property(p => p.ChecklistJson).HasColumnType("jsonb");
+            // One recording is the evidence of one evaluation.
+            evaluation.HasOne(p => p.Video).WithOne().HasForeignKey<PracticalEvaluation>(p => p.PracticalVideoId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<PracticalVideo>(video =>
+        {
+            video.Property(v => v.Sha256).HasMaxLength(64).IsFixedLength();
+            video.HasIndex(v => v.StorageKey).IsUnique();
         });
 
         modelBuilder.Entity<BranchLaunchStatus>(launch =>

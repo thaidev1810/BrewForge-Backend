@@ -37,6 +37,9 @@ public sealed class BrewForgeApiFactory : WebApplicationFactory<Program>, IAsync
     private readonly string _database = $"brewforge_test_{Guid.NewGuid():N}";
     private readonly ConcurrentDictionary<string, string> _accessTokens = new();
 
+    /// <summary>Where the recordings uploaded in this run are kept. Removed with the database.</summary>
+    public string VideoRoot { get; } = Path.Combine(Path.GetTempPath(), $"brewforge-test-videos-{Guid.NewGuid():N}");
+
     public static JsonSerializerOptions Json { get; } = new(JsonSerializerDefaults.Web);
 
     private string ConnectionString =>
@@ -55,6 +58,7 @@ public sealed class BrewForgeApiFactory : WebApplicationFactory<Program>, IAsync
         builder.UseSetting("Argon2:Iterations", "1");
         // The scheduler does not run on its own in tests; a test runs it when it wants it to.
         builder.UseSetting("Scheduler:PilotEndIntervalMinutes", "0");
+        builder.UseSetting("Storage:PracticalVideoRoot", VideoRoot);
 
         // No test ever reaches a real language model.
         builder.ConfigureTestServices(services =>
@@ -88,6 +92,7 @@ public sealed class BrewForgeApiFactory : WebApplicationFactory<Program>, IAsync
         await base.DisposeAsync();
         NpgsqlConnection.ClearAllPools();
         await ExecuteOnServerAsync($"DROP DATABASE IF EXISTS \"{_database}\" WITH (FORCE)");
+        if (Directory.Exists(VideoRoot)) Directory.Delete(VideoRoot, recursive: true);
     }
 
     /// <summary>A client carrying a valid access token of the seeded user.</summary>

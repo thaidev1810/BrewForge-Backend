@@ -276,11 +276,13 @@ public sealed class AssessmentApiTests(BrewForgeApiFactory factory)
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
         var checklist = await factory.ChecklistAsync(learner.Setup.CourseId);
         Task<HttpResponseMessage> Evaluate(object body) => trainer.PostAsJsonAsync($"{learner.Url}/practical-evaluation", body);
+        var practicalVideoId = (await (await factory.UploadPracticalVideoAsync(learner)).ShouldBeAsync(HttpStatusCode.Created)).Id();
 
-        var missingItem = await (await Evaluate(new { items = new[] { new { recipeStepId = checklist[0], passed = true } } }))
+        var missingItem = await (await Evaluate(new { practicalVideoId, items = new[] { new { recipeStepId = checklist[0], passed = true } } }))
             .ShouldBeErrorAsync(HttpStatusCode.BadRequest);
         var foreignStep = await (await Evaluate(new
             {
+                practicalVideoId,
                 items = checklist.Append(999999999).Select(stepId => new { recipeStepId = stepId, passed = true }),
             }))
             .ShouldBeErrorAsync(HttpStatusCode.BadRequest);
