@@ -1,0 +1,29 @@
+# Local development database. The credentials below are for local use only.
+#
+#   docker compose up -d
+#
+# On the first start of an empty volume PostgreSQL runs every script in
+# db/migrations in name order, so 001_initial_schema.sql is applied for you.
+# The API also applies it on startup when the schema is missing, so either
+# path leaves the database in the same state.
+services:
+  db:
+    image: postgres:16
+    container_name: brewforge-db
+    environment:
+      POSTGRES_USER: brewforge
+      POSTGRES_PASSWORD: brewforge
+      POSTGRES_DB: brewforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - brewforge-pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brewforge -d brewforge"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  brewforge-pgdata:
