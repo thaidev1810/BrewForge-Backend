@@ -1,5 +1,6 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Application.Notifications;
 using BrewForge.Application.Launch;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
@@ -124,23 +125,17 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
             db.Audit(AuditEntities.Course, () => course.Id, AuditActions.MarkOutOfDate,
                 new { runId, trigger = trigger.EntityType, triggerId = trigger.EntityId, course.RecipeVersionId });
             // The trainer who built the course is the one who rebuilds it.
-            db.Audit(AuditEntities.User, () => course.CreatedBy, AuditActions.Notify, new
-            {
-                subject = "Course out of date",
-                message = $"'{course.Title}' is out of date: the recipe version it was built on changed. Rebuild it on the current version.",
-                courseId = course.Id,
-            });
+            db.Notify(course.CreatedBy, "Course out of date",
+                $"'{course.Title}' is out of date: the recipe version it was built on changed. Rebuild it on the current version.",
+                clock.GetUtcNow(), new { courseId = course.Id });
         }
         foreach (var certificate in affected.Certificates)
         {
             db.Audit(AuditEntities.Certificate, () => certificate.Id, AuditActions.FlagRecertification,
                 new { runId, trigger = trigger.EntityType, triggerId = trigger.EntityId, certificate.UserId, certificate.RecipeVersionId });
-            db.Audit(AuditEntities.User, () => certificate.UserId, AuditActions.Notify, new
-            {
-                subject = "Re-training required",
-                message = "The recipe you are certified on has changed. Your certificate is kept, and you need to be trained again.",
-                certificateId = certificate.Id, courseId = certificate.CourseId,
-            });
+            db.Notify(certificate.UserId, "Re-training required",
+                "The recipe you are certified on has changed. Your certificate is kept, and you need to be trained again.",
+                clock.GetUtcNow(), new { certificateId = certificate.Id, courseId = certificate.CourseId });
         }
         db.Audit(trigger.EntityType, () => trigger.EntityId, AuditActions.CommitImpact, new
         {

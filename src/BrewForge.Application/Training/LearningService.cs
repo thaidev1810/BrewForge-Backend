@@ -1,5 +1,6 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Application.Notifications;
 using BrewForge.Application.Courses;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
@@ -98,8 +99,8 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
         enrollment.ResetForRetake(rules, now);
         db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Reset,
             new { enrollment.DueDate, regulationId = rules.RegulationId });
-        db.Audit(AuditEntities.User, () => enrollment.UserId, AuditActions.Notify,
-            new { subject = "Course reset", message = "Your enrolment was reset. Start the course again from the first module." });
+        db.Notify(enrollment.UserId, "Course reset",
+            "Your enrolment was reset. Start the course again from the first module.", clock.GetUtcNow());
         await db.SaveChangesAsync(cancellationToken);
         return (await ToDtosAsync([enrollment], cancellationToken))[0];
     }

@@ -5,6 +5,7 @@ using BrewForge.Application.Dashboards;
 using BrewForge.Application.Impact;
 using BrewForge.Application.Launch;
 using BrewForge.Application.MasterData;
+using BrewForge.Application.Notifications;
 using BrewForge.Application.Recipes;
 using BrewForge.Application.Recipes.Drafting;
 using BrewForge.Application.Sales;
@@ -43,6 +44,7 @@ public static class DependencyInjection
         services.AddScoped<PilotService>();
 
         services.AddScoped<ImpactAnalysisService>();
+        services.AddScoped<NotificationService>();
         services.AddScoped<AuditService>();
         services.AddScoped<ComplianceReportService>();
 

@@ -9,6 +9,9 @@ public sealed class SchedulerOptions
 
     /// <summary>How often pilots whose last day has passed are ended. Zero or less turns the scheduler off.</summary>
     public int PilotEndIntervalMinutes { get; set; } = 15;
+
+    /// <summary>How often queued notifications are delivered. Zero or less turns the dispatcher off.</summary>
+    public int NotificationIntervalSeconds { get; set; } = 30;
 }
 
 /// <summary>

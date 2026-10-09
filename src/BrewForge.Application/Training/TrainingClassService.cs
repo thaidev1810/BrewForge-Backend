@@ -1,5 +1,6 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Application.Notifications;
 using BrewForge.Application.Courses;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
@@ -159,11 +160,9 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
             created.Add(enrollment);
             db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Assign,
                 new { enrollment.CourseId, enrollment.UserId, enrollment.DueDate, classId, regulationId = rules.RegulationId });
-            db.Audit(AuditEntities.User, () => user.Id, AuditActions.Notify, new
-            {
-                subject = "Course assigned",
-                message = $"You have been enrolled on '{course.Title}' in class '{trainingClass.Name}'. Due {enrollment.DueDate:yyyy-MM-dd}.",
-            });
+            db.Notify(user.Id, "Course assigned",
+                $"You have been enrolled on '{course.Title}' in class '{trainingClass.Name}'. Due {enrollment.DueDate:yyyy-MM-dd}.",
+                now);
         }
         db.Audit(AuditEntities.TrainingClass, () => trainingClass.Id, AuditActions.Open,
             new { enrolled = created.Count, skipped = alreadyEnrolled });

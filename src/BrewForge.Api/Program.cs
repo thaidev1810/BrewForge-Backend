@@ -23,6 +23,8 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.Configure<SchedulerOptions>(builder.Configuration.GetSection(SchedulerOptions.Section));
 builder.Services.AddSingleton<PilotEndScheduler>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<PilotEndScheduler>());
+builder.Services.AddSingleton<NotificationDispatcher>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<NotificationDispatcher>());
 
 builder.Services.AddControllers()
     .AddJsonOptions(json =>

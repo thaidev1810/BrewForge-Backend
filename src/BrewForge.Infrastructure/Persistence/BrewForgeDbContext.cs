@@ -8,6 +8,7 @@ using BrewForge.Domain.Identity;
 using BrewForge.Domain.Impact;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
+using BrewForge.Domain.Notifications;
 using BrewForge.Domain.Recipes;
 using BrewForge.Domain.Sales;
 using BrewForge.Domain.Training;
@@ -50,6 +51,8 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<SalesRecord> SalesRecords => Set<SalesRecord>();
     public DbSet<PilotProgram> PilotPrograms => Set<PilotProgram>();
     public DbSet<ChangeImpact> ChangeImpacts => Set<ChangeImpact>();
+    public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
 
     /// <summary>
     /// Read by the query filters below. A member of the context, not a
@@ -290,6 +293,12 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         });
 
         modelBuilder.Entity<ChangeImpact>();
+
+        modelBuilder.Entity<Notification>();
+        modelBuilder.Entity<PushSubscription>(subscription =>
+        {
+            subscription.HasIndex(s => s.Endpoint).IsUnique();
+        });
 
         modelBuilder.Entity<LaunchDecision>(decision =>
         {

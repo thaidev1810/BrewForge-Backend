@@ -58,6 +58,7 @@ public sealed class BrewForgeApiFactory : WebApplicationFactory<Program>, IAsync
         builder.UseSetting("Argon2:Iterations", "1");
         // The scheduler does not run on its own in tests; a test runs it when it wants it to.
         builder.UseSetting("Scheduler:PilotEndIntervalMinutes", "0");
+        builder.UseSetting("Scheduler:NotificationIntervalSeconds", "0");
         builder.UseSetting("Storage:PracticalVideoRoot", VideoRoot);
 
         // No test ever reaches a real language model.
@@ -65,11 +66,22 @@ public sealed class BrewForgeApiFactory : WebApplicationFactory<Program>, IAsync
         {
             services.RemoveAll<IRecipeDraftModel>();
             services.AddSingleton<IRecipeDraftModel>(DraftModel);
+            // Nor a real mail server or push service.
+            services.RemoveAll<IEmailSender>();
+            services.AddSingleton<IEmailSender>(Email);
+            services.RemoveAll<IPushSender>();
+            services.AddSingleton<IPushSender>(Push);
         });
     }
 
     /// <summary>The scripted language model the API talks to in tests.</summary>
     public FakeDraftModel DraftModel { get; } = new();
+
+    /// <summary>The mail server the API sends through in tests.</summary>
+    public FakeEmailSender Email { get; } = new();
+
+    /// <summary>The push services the API sends to in tests.</summary>
+    public FakePushSender Push { get; } = new();
 
     public async Task InitializeAsync()
     {

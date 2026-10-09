@@ -2,6 +2,7 @@ using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Application.Courses;
 using BrewForge.Application.Launch;
+using BrewForge.Application.Notifications;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
@@ -295,11 +296,8 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
             certificate.UserId, certificate.CourseId, certificate.RecipeVersionId, enrollmentId = enrollment.Id,
             superseded = owned.Where(c => c.Status == CertificateStatus.Superseded && !ReferenceEquals(c, certificate)).Select(c => c.Id),
         });
-        db.Audit(AuditEntities.User, () => enrollment.UserId, AuditActions.Notify, new
-        {
-            subject = "Certificate issued",
-            message = $"You are now certified on '{course.Title}'.",
-        });
+        db.Notify(enrollment.UserId, "Certificate issued", $"You are now certified on '{course.Title}'.",
+            clock.GetUtcNow());
         await db.SaveChangesAsync(cancellationToken);
 
         await readiness.RecomputeForCertificateAsync(certificate.UserId, certificate.RecipeVersionId, cancellationToken);
@@ -315,12 +313,9 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
             .Select(u => u.Id).ToListAsync(cancellationToken);
         foreach (var managerId in managers)
         {
-            db.Audit(AuditEntities.User, () => managerId, AuditActions.Notify, new
-            {
-                subject = "Enrolment locked",
-                message = $"Enrolment {enrollment.Id} on '{course.Title}' used every retake and is locked.",
-                enrollmentId = enrollment.Id,
-            });
+            db.Notify(managerId, "Enrolment locked",
+                $"Enrolment {enrollment.Id} on '{course.Title}' used every retake and is locked.",
+                clock.GetUtcNow(), new { enrollmentId = enrollment.Id });
         }
     }
 

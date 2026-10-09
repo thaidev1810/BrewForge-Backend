@@ -4,6 +4,7 @@ using BrewForge.Domain.Identity;
 using BrewForge.Domain.Impact;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
+using BrewForge.Domain.Notifications;
 using BrewForge.Domain.Recipes;
 using BrewForge.Domain.Sales;
 using BrewForge.Domain.Training;
@@ -51,6 +52,8 @@ public interface IBrewForgeDbContext
     /// <summary>The aggregate root. Pilot branches and the launch decision are reached through it.</summary>
     DbSet<PilotProgram> PilotPrograms { get; }
     DbSet<ChangeImpact> ChangeImpacts { get; }
+    DbSet<Notification> Notifications { get; }
+    DbSet<PushSubscription> PushSubscriptions { get; }
 
     /// <summary>
     /// Queues an audit entry that is written in the same transaction as the

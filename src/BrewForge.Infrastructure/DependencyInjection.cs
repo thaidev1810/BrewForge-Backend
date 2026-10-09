@@ -4,6 +4,7 @@ using BrewForge.Application.Recipes.Drafting;
 using BrewForge.Application.Sales;
 using BrewForge.Infrastructure.Files;
 using BrewForge.Infrastructure.Llm;
+using BrewForge.Infrastructure.Notifications;
 using BrewForge.Infrastructure.Persistence;
 using BrewForge.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
@@ -49,6 +50,11 @@ public static class DependencyInjection
 
         services.Configure<StorageOptions>(configuration.GetSection(StorageOptions.Section));
         services.AddSingleton<IPracticalVideoStorage, LocalPracticalVideoStorage>();
+
+        services.Configure<EmailOptions>(configuration.GetSection(EmailOptions.Section));
+        services.AddSingleton<IEmailSender, SmtpEmailSender>();
+        services.Configure<WebPushOptions>(configuration.GetSection(WebPushOptions.Section));
+        services.AddHttpClient<IPushSender, WebPushSender>(http => http.Timeout = TimeSpan.FromSeconds(20));
 
         services.Configure<LlmOptions>(configuration.GetSection(LlmOptions.Section));
         services.AddHttpClient<IRecipeDraftModel, OpenAiRecipeDraftModel>(http =>

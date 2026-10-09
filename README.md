@@ -160,6 +160,7 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | Enrolment state model | `Enrollment` transition table | `TrainingTests.Enrolment_state_model_*`, `Transition_that_is_not_in_the_table_*` |
 | A regulation change spares enrolments in flight | `TrainingRegulation.Resolve`, `EnsureNotRetroactive` | `TrainingTests.Enrolment_keeps_the_rule_*`, `TrainingApiTests.Regulation_change_*` |
 | A course built from no recipe is certified through a checklist of its TECHNIQUE lessons | `Course.PracticalChecklist`, `Enrollment.EvaluatePractical` | `CourseWithoutRecipeApiTests` |
+| A notification is queued with the change and delivered by e-mail and Web Push, each channel once | `NotificationExtensions.Notify`, `Notification.RecordAttempt`, `NotificationService.DispatchPendingAsync`, `WebPushEncryption` | `NotificationApiTests`, `WebPushTests` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -258,8 +259,9 @@ not in the contract table. The state model gives both to the Training Manager
 and names no endpoint, so these two were added.
 
 **Notifications** are recorded as `NOTIFY` entries of the audit log against
-the user they are for; the schema has no notification table and no channel is
-integrated yet.
+the user they are for. The pack's schema has no notification table; since
+migration 003 they are also queued and delivered by e-mail and Web Push, as
+described under "Beyond the developer pack".
 
 **Prerequisites** of a regulation are reported by `GET /training-needs` but
 not enforced when a course is assigned.
@@ -484,10 +486,44 @@ or .webm, at most 200 MB) answers `201` with the id of the recording, and
   The type is taken from the file name; the SHA-256 of the content is stored
   with the row.
 
+**Notifications that are delivered** (`003_notifications.sql`: tables
+`notification` and `push_subscription`). Every notification is delivered on
+two channels, e-mail and Web Push. `db.Notify(...)` writes the `NOTIFY` audit
+entry and queues a `notification` row in the transaction of the change it
+reports. A background service of the API sends what is queued every
+`Scheduler:NotificationIntervalSeconds` (30 by default; 0 turns it off), so a
+mail server that is slow or down never holds up the request that caused the
+notification.
+
+- Each channel has its own status on the row: `PENDING`, `SENT`, `FAILED` or
+  `SKIPPED`. A channel that is not configured, a user who is no longer active,
+  or a user with no browser subscribed is `SKIPPED`, not failed. A failure is
+  tried again on the next run and given up after five attempts; a channel that
+  was already sent is not sent again because the other one failed.
+- **E-mail** is plain text through SMTP: `Email:From`, `Email:Host`,
+  `Email:Port`, `Email:Username`, `Email:Password`, `Email:EnableSsl`. With
+  `Email:PickupDirectory` set, each message is written to that folder as an
+  .eml file instead, which is enough for a demonstration without a mail server.
+- **Web Push** needs a VAPID key pair: `WebPush:Subject` (a `mailto:` address),
+  `WebPush:PublicKey` and `WebPush:PrivateKey` in base64url, as printed by
+  `npx web-push generate-vapid-keys`. The message is encrypted for the browser
+  (RFC 8291, checked against the example of the RFC) and signed with the key
+  (RFC 8292) by the code here; no push library and no account with a push
+  provider is involved. The payload is `{ "title", "body" }`, for the service
+  worker of the frontend to show.
+- A browser subscribes with `GET /push/config` (`{ enabled, publicKey }`; the
+  key is the `applicationServerKey`) and `POST /me/push-subscriptions`, whose
+  body is the JSON of the browser's `PushSubscription`
+  (`{ endpoint, keys: { p256dh, auth } }`). `GET /me/push-subscriptions` lists
+  the caller's browsers and `DELETE /me/push-subscriptions?endpoint=` forgets
+  one. A browser belongs to whoever subscribed it last. One that its push
+  service no longer knows (404 or 410) is forgotten on the spot.
+- Without the settings above, both channels are skipped and everything else
+  works, as with the language model.
+- Two instances of the API would both send: run the dispatcher in one.
+
 ## Known gaps
 
-- Notifications are recorded, not delivered: no e-mail or push channel is
-  integrated.
 - Prerequisites of a training regulation are reported and not enforced.
 - The React frontend described by the developer pack is not part of this
   repository.
