@@ -1,6 +1,7 @@
 using BrewForge.Api.Auth;
 using BrewForge.Api.Errors;
 using BrewForge.Api.Json;
+using BrewForge.Api.Scheduling;
 using BrewForge.Application;
 using BrewForge.Application.Abstractions;
 using BrewForge.Domain.Common;
@@ -18,6 +19,10 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, HttpContextCurrentUser>();
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+
+builder.Services.Configure<SchedulerOptions>(builder.Configuration.GetSection(SchedulerOptions.Section));
+builder.Services.AddSingleton<PilotEndScheduler>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<PilotEndScheduler>());
 
 builder.Services.AddControllers()
     .AddJsonOptions(json =>

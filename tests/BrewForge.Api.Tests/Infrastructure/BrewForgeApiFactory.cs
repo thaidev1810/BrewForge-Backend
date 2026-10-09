@@ -53,6 +53,8 @@ public sealed class BrewForgeApiFactory : WebApplicationFactory<Program>, IAsync
         // Cheap parameters keep the suite fast; the algorithm is still Argon2id.
         builder.UseSetting("Argon2:MemoryKib", "8192");
         builder.UseSetting("Argon2:Iterations", "1");
+        // The scheduler does not run on its own in tests; a test runs it when it wants it to.
+        builder.UseSetting("Scheduler:PilotEndIntervalMinutes", "0");
 
         // No test ever reaches a real language model.
         builder.ConfigureTestServices(services =>

@@ -1,10 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using BrewForge.Api.Scheduling;
 using BrewForge.Api.Tests.Infrastructure;
 using BrewForge.Domain.Launch;
 using BrewForge.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using static BrewForge.Api.Tests.Infrastructure.PilotScenario;
 using static BrewForge.Api.Tests.Infrastructure.SalesScenario;
 
@@ -368,7 +370,84 @@ public sealed class PilotApiTests(BrewForgeApiFactory factory)
         Assert.Equal(firstVersion, (await factory.RecordSaleAsync(drink, Today.AddDays(-3), 55)).GetProperty("recipeVersionId").GetInt64());
     }
 
+    [Fact]
+    public async Task BR_36_a_branch_opened_later_sells_the_existing_drinks_from_its_first_day()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var (existing, existingVersion) = await factory.NewReleasedRecipeAsync(origin: "EXISTING");
+        var (launched, _) = await factory.NewReleasedRecipeAsync(origin: "NEW");
+
+        var code = $"L{Guid.NewGuid():N}"[..10];
+        await (await admin.PostAsJsonAsync("/api/v1/branches", new { branchCode = code, name = "Opened later" }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+
+        // The drink was released before the branch existed; it is on sale there all the same.
+        var row = await factory.LaunchStatusAsync(existing, code);
+        Assert.Equal(("LIVE", existingVersion, false, 0), (row.GetProperty("status").GetString(),
+            row.GetProperty("recipeVersionId").GetInt64(), row.GetProperty("coverageMet").GetBoolean(),
+            row.GetProperty("certifiedCount").GetInt32()));
+        Assert.NotEqual(JsonValueKind.Null, row.GetProperty("liveSince").ValueKind);
+        var rowId = row.Id();
+        Assert.True(await factory.WithDbAsync(db => db.AuditLogs.AnyAsync(a =>
+            a.EntityType == "BranchLaunchStatus" && a.EntityId == rowId && a.Action == "GO_LIVE")));
+
+        // A drink being launched still comes through a pilot and the gate.
+        Assert.DoesNotContain(await factory.LaunchStatusesAsync(launched), other => other.GetProperty("branchCode").GetString() == code);
+    }
+
+    [Fact]
+    public async Task BR_36_a_branch_that_reopens_catches_up_with_what_was_released_while_it_was_closed()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var code = $"R{Guid.NewGuid():N}"[..10];
+        var branch = await (await admin.PostAsJsonAsync("/api/v1/branches", new { branchCode = code, name = "Closed for a while" }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        var branchId = branch.Id();
+        var url = $"/api/v1/branches/{branchId}";
+        var (sold, firstVersion) = await factory.NewReleasedRecipeAsync(origin: "EXISTING");
+        Assert.Equal(firstVersion, (await factory.LaunchStatusAsync(sold, code)).GetProperty("recipeVersionId").GetInt64());
+
+        await (await admin.PostAsync($"{url}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+        var secondVersion = await factory.ReleaseNewVersionAsync(sold, RecipeScenario.LighterContent());
+        var (added, addedVersion) = await factory.NewReleasedRecipeAsync(origin: "EXISTING");
+
+        // A closed branch is passed over by a release.
+        Assert.Equal(firstVersion, await factory.WithDbAsync(db => db.BranchLaunchStatuses
+            .Where(l => l.BranchId == branchId && l.RecipeId == sold).Select(l => l.RecipeVersionId).SingleAsync()));
+        Assert.False(await factory.WithDbAsync(db => db.BranchLaunchStatuses.AnyAsync(l => l.BranchId == branchId && l.RecipeId == added)));
+
+        await (await admin.PutAsJsonAsync(url, new { name = "Closed for a while", status = "ACTIVE" })).ShouldBeAsync(HttpStatusCode.OK);
+
+        // It moves to the version sold now, and the move is on record for the sales of earlier days (BR-24).
+        var moved = await factory.LaunchStatusAsync(sold, code);
+        Assert.Equal(("LIVE", secondVersion), (moved.GetProperty("status").GetString(), moved.GetProperty("recipeVersionId").GetInt64()));
+        var movedId = moved.Id();
+        Assert.True(await factory.WithDbAsync(db => db.AuditLogs.AnyAsync(a =>
+            a.EntityType == "BranchLaunchStatus" && a.EntityId == movedId && a.Action == "MOVE_VERSION")));
+        var opened = await factory.LaunchStatusAsync(added, code);
+        Assert.Equal(("LIVE", addedVersion), (opened.GetProperty("status").GetString(), opened.GetProperty("recipeVersionId").GetInt64()));
+    }
+
     // ---------------------------------------------------------------- UC-24
+
+    [Fact]
+    public async Task Pilot_is_ended_by_the_scheduler_without_anybody_looking_at_it()
+    {
+        var pilot = await factory.NewRunningPilotAsync();
+        await factory.TimePassesAsync(pilot);
+        var scheduler = factory.Services.GetRequiredService<PilotEndScheduler>();
+
+        await scheduler.RunOnceAsync(CancellationToken.None);
+        await scheduler.RunOnceAsync(CancellationToken.None);
+
+        // No request touched the pilot: its state is read straight from the database.
+        Assert.Equal(PilotState.Ended, await factory.WithDbAsync(db => db.PilotPrograms
+            .Where(p => p.Id == pilot.PilotId).Select(p => p.State).SingleAsync()));
+        // Ended once, by the system and not by a user.
+        var end = await factory.WithDbAsync(db => db.AuditLogs.SingleAsync(a =>
+            a.EntityType == "PilotProgram" && a.EntityId == pilot.PilotId && a.Action == "END"));
+        Assert.Null(end.UserId);
+    }
 
     [Fact]
     public async Task Pilot_ends_by_the_calendar_and_is_evaluated_per_criterion_per_branch_and_per_week()

@@ -117,24 +117,53 @@ public sealed class LaunchReadinessService(IBrewForgeDbContext db, LaunchHistory
 
         foreach (var branchId in branchIds)
         {
-            var certified = await CertifiedCountAsync(branchId, version.Id, cancellationToken);
-            if (!rows.TryGetValue(branchId, out var launch))
-            {
-                launch = BranchLaunchStatus.LiveForExistingRecipe(branchId, recipe.Id, version.Id,
-                    DefaultMinCertifiedStaff, now);
-                launch.RecomputeCoverage(certified);
-                db.BranchLaunchStatuses.Add(launch);
-                var created = launch;
-                db.Audit(AuditEntities.BranchLaunchStatus, () => created.Id, AuditActions.GoLive,
-                    new { branchId, recipeId = recipe.Id, recipeVersionId = version.Id, rule = "BR-36", created.CoverageMet });
-            }
-            else if (launch.IsLive && launch.RecipeVersionId != version.Id)
-            {
-                var from = launch.RecipeVersionId;
-                launch.MoveToVersion(version.Id, certified);
-                history.RecordVersionMove(launch, from);
-            }
-            // A drink that was withdrawn at a branch stays withdrawn there.
+            await SellExistingDrinkAsync(branchId, recipe.Id, version.Id, rows.GetValueOrDefault(branchId), now,
+                cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// BR-36 for a branch that opens, or reopens, after the drinks were
+    /// released: every active drink of origin EXISTING is on sale there from
+    /// that moment on its released version, exactly as it would be had the
+    /// branch been open on the day of the release.
+    /// </summary>
+    public async Task OpenExistingDrinksAtAsync(long branchId, CancellationToken cancellationToken)
+    {
+        var now = clock.GetUtcNow();
+        var drinks = await db.RecipeVersions.Where(v => v.State == VersionState.Released)
+            .Join(db.Recipes.Where(r => r.Origin == RecipeOrigin.Existing && r.Status == RecipeStatus.Active),
+                v => v.RecipeId, r => r.Id, (v, r) => new { RecipeId = r.Id, VersionId = v.Id })
+            .ToListAsync(cancellationToken);
+        var rows = await db.BranchLaunchStatuses.IgnoreQueryFilters().Where(l => l.BranchId == branchId)
+            .ToDictionaryAsync(l => l.RecipeId, cancellationToken);
+
+        foreach (var drink in drinks)
+        {
+            await SellExistingDrinkAsync(branchId, drink.RecipeId, drink.VersionId, rows.GetValueOrDefault(drink.RecipeId),
+                now, cancellationToken);
+        }
+    }
+
+    private async Task SellExistingDrinkAsync(long branchId, long recipeId, long recipeVersionId,
+        BranchLaunchStatus? launch, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var certified = await CertifiedCountAsync(branchId, recipeVersionId, cancellationToken);
+        if (launch is null)
+        {
+            var created = BranchLaunchStatus.LiveForExistingRecipe(branchId, recipeId, recipeVersionId,
+                DefaultMinCertifiedStaff, now);
+            created.RecomputeCoverage(certified);
+            db.BranchLaunchStatuses.Add(created);
+            db.Audit(AuditEntities.BranchLaunchStatus, () => created.Id, AuditActions.GoLive,
+                new { branchId, recipeId, recipeVersionId, rule = "BR-36", created.CoverageMet });
+        }
+        else if (launch.IsLive && launch.RecipeVersionId != recipeVersionId)
+        {
+            var from = launch.RecipeVersionId;
+            launch.MoveToVersion(recipeVersionId, certified);
+            history.RecordVersionMove(launch, from);
+        }
+        // A drink that was withdrawn at a branch stays withdrawn there.
     }
 }

@@ -1,5 +1,6 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Application.Launch;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.MasterData;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,7 @@ public sealed record BranchDto(long Id, string BranchCode, string Name, string? 
 public sealed record BranchRequest(string? BranchCode, string? Name, string? Address, BranchStatus? Status);
 
 /// <summary>UC-04: the branch registry (SCR-06).</summary>
-public sealed class BranchService(IBrewForgeDbContext db)
+public sealed class BranchService(IBrewForgeDbContext db, LaunchReadinessService readiness)
 {
     private static readonly SortMap<Branch> Sorting = new SortMap<Branch>("branchCode", b => b.Id)
         .Add("id", b => b.Id)
@@ -57,10 +58,17 @@ public sealed class BranchService(IBrewForgeDbContext db)
                 details: new ErrorDetail("branchCode", "already exists"));
         }
 
-        db.Branches.Add(branch);
-        db.Audit(AuditEntities.Branch, () => branch.Id, AuditActions.Create, BranchDto.From(branch));
-        await db.SaveChangesAsync(cancellationToken);
-        return BranchDto.From(branch);
+        return await db.InTransactionAsync(async () =>
+        {
+            db.Branches.Add(branch);
+            db.Audit(AuditEntities.Branch, () => branch.Id, AuditActions.Create, BranchDto.From(branch));
+            await db.SaveChangesAsync(cancellationToken);
+
+            // BR-36: the drinks the chain already sells are on sale at a new branch from its first day.
+            await readiness.OpenExistingDrinksAtAsync(branch.Id, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+            return BranchDto.From(branch);
+        }, cancellationToken);
     }
 
     public async Task<BranchDto> UpdateAsync(long id, BranchRequest request, CancellationToken cancellationToken)
@@ -68,11 +76,14 @@ public sealed class BranchService(IBrewForgeDbContext db)
         var branch = await FindAsync(id, cancellationToken);
         MasterDataGuards.EnsureCodeUnchanged("branchCode", request.BranchCode, branch.BranchCode);
 
+        var reopened = branch.Status == BranchStatus.Closed && request.Status == BranchStatus.Active;
         branch.Update(request.Name!, request.Address);
         if (request.Status == BranchStatus.Closed) branch.Deactivate();
         if (request.Status == BranchStatus.Active) branch.Reactivate();
 
         db.Audit(AuditEntities.Branch, () => branch.Id, AuditActions.Update, BranchDto.From(branch));
+        // BR-36: a branch that reopens catches up with what was released while it was closed.
+        if (reopened) await readiness.OpenExistingDrinksAtAsync(branch.Id, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return BranchDto.From(branch);
     }

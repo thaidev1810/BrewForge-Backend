@@ -277,9 +277,10 @@ public sealed class PilotService(IBrewForgeDbContext db, LaunchReadinessService 
 
     /// <summary>
     /// RUNNING to ENDED belongs to the calendar, not to a user: a pilot ends
-    /// the day after its <c>end_date</c>. There is no scheduler; the
-    /// transition is made the first time anything looks at pilots after that
-    /// day, which is before anything can depend on it.
+    /// the day after its <c>end_date</c>. The scheduler of the API makes the
+    /// transition on its own; it is also made here the first time anything
+    /// looks at pilots after that day, which is before anything can depend on
+    /// it, so nothing waits for the scheduler's next run.
     /// </summary>
     public async Task EndDueAsync(CancellationToken cancellationToken)
     {

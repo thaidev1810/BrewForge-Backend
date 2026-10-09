@@ -149,7 +149,8 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-26 criteria are read-only once the pilot runs | `PilotProgram.EnsureEditable`, `Update` | `PilotTests.BR_26_*`, `PilotApiTests.BR_26_*` |
 | BR-27 a decision only on an ENDED pilot, with the figures of that moment | `PilotProgram.Decide`; `LaunchDecision` has no mutators; `UNIQUE (pilot_program_id)` | `PilotTests.BR_27_*`, `PilotApiTests.BR_27_*` |
 | BR-28 one DRAFT or RUNNING pilot per version, which cannot be superseded meanwhile | `PilotProgram.Create`, `RecipeRelease.Prepare`; index `ux_pilot_active_version` | `PilotTests.BR_28_*`, `PilotApiTests.BR_28_*` |
-| BR-36 an existing drink is LIVE without a pilot, coverage not met and not blocked | `BranchLaunchStatus.LiveForExistingRecipe`, `LaunchReadinessService.GoLiveWithoutPilotAsync`, `PilotProgram.Create` | `PilotTests.BR_36_*`, `PilotApiTests.BR_36_*` |
+| BR-36 an existing drink is LIVE without a pilot, coverage not met and not blocked | `BranchLaunchStatus.LiveForExistingRecipe`, `LaunchReadinessService.GoLiveWithoutPilotAsync`, `OpenExistingDrinksAtAsync` (a branch that opens or reopens later), `PilotProgram.Create` | `PilotTests.BR_36_*`, `PilotApiTests.BR_36_*` |
+| A pilot ends by the calendar, whether or not anybody looks at it | `PilotEndScheduler`, `PilotService.EndDueAsync` | `PilotApiTests.Pilot_is_ended_by_the_scheduler_*`, `Pilot_ends_by_the_calendar_*` |
 | A branch with missing trading days is incomplete, not scored | `PilotEvaluator` | `PilotTests.Branch_with_missing_trading_days_*`, `PilotApiTests.Branch_with_missing_trading_days_*` |
 | BR-15 propagation flags and never deletes | `ImpactRun.Commit`, `Course.MarkOutOfDate`, `Certificate.FlagForRecertification`; `INeverDeleted` guard | `ImpactTests.BR_15_*`, `ImpactApiTests.BR_15_*`, `Releasing_a_new_version_*` |
 | A what-if writes nothing but uncommitted `change_impact` rows | `ImpactAnalysisService.AnalyzeAsync` (no audit entry, nothing tracked) | `ImpactTests.What_if_*`, `ImpactApiTests.What_if_leaves_the_database_unchanged_*` (row count of all 34 tables) |
@@ -326,9 +327,12 @@ that has a launch status, with the sales of the period (the last four weeks
 unless `from` and `to` say otherwise) beside the coverage figures.
 
 **When a pilot ends.** RUNNING to ENDED belongs to the calendar: a pilot ends
-the day after its `end_date`. There is no scheduler; the transition is made
-the first time anything looks at pilots after that day (a pilot endpoint, or a
-release, which needs to know for BR-28), and is audited as `END`.
+the day after its `end_date`. A background service of the API makes the
+transition every `Scheduler:PilotEndIntervalMinutes` (15 by default; 0 turns
+it off) and audits it as `END` with no user, a system action. The same
+transition is also made the first time anything looks at pilots after that day
+(a pilot endpoint, or a release, which needs to know for BR-28), so nothing
+waits for the next run.
 
 **The gate and two records of it.** `branch_launch_status` says what a branch
 sells; `pilot_branch` says how far a branch is through the gate of one pilot.
@@ -348,8 +352,11 @@ same row again from PREPARING.
 EXISTING is refused with `409 BR-36`. Such a drink is LIVE at every active
 branch the moment a version of it is released, with `coverage_met` counted and
 normally false, and a later version replaces the earlier one at the branches
-that sell it. A branch opened afterwards does not get the existing drinks
-automatically.
+that sell it. A branch created afterwards sells every active existing drink
+from its first day, on the version released at that moment. A closed branch is
+passed over by a release; when it reopens it moves to the versions sold now
+(recorded as `MOVE_VERSION` for BR-24) and takes on the existing drinks
+released meanwhile. A drink withdrawn at a branch stays withdrawn there.
 
 **Evaluation.** A branch is expected to have a sales record for every day from
 the day it went live (or the pilot's first day) to the pilot's last; a day
@@ -434,13 +441,9 @@ bound version at the branches where at least one enrolment was passed.
   a course can be authored, published, assigned and studied, and its quiz can
   be taken, but nobody can be certified on it until the practical evaluation
   is given a checklist that does not come from a recipe.
-- There is no scheduler. Pilots end, and nothing else is time-driven, the
-  first time something looks at them after their last day.
 - Notifications are recorded, not delivered: no e-mail or push channel is
   integrated.
 - Prerequisites of a training regulation are reported and not enforced.
-- A branch opened after an existing drink was released does not get that
-  drink automatically.
 - The React frontend described by the developer pack is not part of this
   repository.
 
