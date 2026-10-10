@@ -490,7 +490,7 @@ public sealed class Enrollment
     /// This is the only place in the system that creates a certificate.
     /// </summary>
     public Certificate? TryCertify(Course course, IReadOnlyCollection<Certificate> certificatesOfUser,
-        DateTimeOffset now)
+        DateTimeOffset now, IReadOnlyCollection<Certificate>? onEarlierVersions = null)
     {
         if (course.Id != CourseId) throw new ArgumentException("Not the course of this enrolment.", nameof(course));
         if (State != EnrollmentState.Eligible) return null;
@@ -510,6 +510,13 @@ public sealed class Enrollment
         foreach (var older in ofThisCourse.Where(c => !ReferenceEquals(c, certificate) && c.Status != CertificateStatus.Superseded))
         {
             older.SupersedeBy(certificate);
+        }
+        // So is what the holder earned on earlier versions of the same drink through another course:
+        // a recertification replaces the certificate it was taken for.
+        foreach (var earlier in (onEarlierVersions ?? []).Where(c =>
+                     c.UserId == UserId && !ReferenceEquals(c, certificate) && c.Status != CertificateStatus.Superseded))
+        {
+            earlier.SupersedeBy(certificate);
         }
 
         MarkPassed(now);

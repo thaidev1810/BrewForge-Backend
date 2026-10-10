@@ -480,6 +480,37 @@ public sealed class AssessmentTests
     }
 
     [Fact]
+    public void Certificate_on_a_newer_version_replaces_the_one_earned_on_an_earlier_version_through_another_course()
+    {
+        // Certified on version 1 through its course...
+        var oldCourse = PublishedCourse(ReleasedVersion(versionId: 310, versionNo: 1), courseId: 20);
+        var first = Eligible(oldCourse);
+        first.AttemptQuiz(oldCourse, Answers(5), Attended, Rules, Now);
+        first.EvaluatePractical(oldCourse, Trainer, Marks(oldCourse), Checklist(oldCourse), Video(first, oldCourse), Now);
+        var earlier = first.TryCertify(oldCourse, [], Now)!;
+        earlier.FlagForRecertification();
+
+        // ...and on version 2 through a different course, as a recertification is.
+        var newCourse = PublishedCourse(ReleasedVersion(versionId: 320, versionNo: 2, oolongGrams: 16m), courseId: 30);
+        var second = Eligible(newCourse);
+        second.AttemptQuiz(newCourse, Answers(5), Attended, Rules, Now.AddDays(1));
+        second.EvaluatePractical(newCourse, Trainer, Marks(newCourse), Checklist(newCourse), Video(second, newCourse), Now.AddDays(1));
+        var someoneElses = Eligible(oldCourse, userId: 62);
+        someoneElses.AttemptQuiz(oldCourse, Answers(5), Attended, Rules, Now);
+        someoneElses.EvaluatePractical(oldCourse, Trainer, Marks(oldCourse), Checklist(oldCourse), Video(someoneElses, oldCourse), Now);
+        var notTheirs = someoneElses.TryCertify(oldCourse, [], Now)!;
+
+        var certificate = second.TryCertify(newCourse, [], Now.AddDays(1), onEarlierVersions: [earlier, notTheirs])!;
+
+        Assert.Equal((CertificateStatus.Valid, (long?)320), (certificate.Status, certificate.RecipeVersionId));
+        // Kept, as every certificate is (BR-15), and pointing at what replaced it.
+        Assert.Equal(CertificateStatus.Superseded, earlier.Status);
+        Assert.Same(certificate, earlier.Successor);
+        // A colleague's certificate is nobody else's to replace.
+        Assert.Equal(CertificateStatus.Valid, notTheirs.Status);
+    }
+
+    [Fact]
     public void Latest_practical_verdict_is_the_one_that_counts()
     {
         var course = PublishedCourse();
