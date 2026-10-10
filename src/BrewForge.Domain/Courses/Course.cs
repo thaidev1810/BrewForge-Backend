@@ -11,6 +11,7 @@ namespace BrewForge.Domain.Courses;
 public sealed class Course : INeverDeleted
 {
     public const string StateRule = "STATE_TRANSITION";
+    public const string RecertificationRule = "RECERTIFICATION";
 
     /// <summary>The only transitions that exist (data dictionary, section 7).</summary>
     private static readonly HashSet<(CourseState From, CourseState To)> Transitions =
@@ -51,17 +52,23 @@ public sealed class Course : INeverDeleted
     /// Creates a course in DRAFT with its seven modules. When it is built
     /// from a recipe version, that version must be RELEASED (BR-20) and
     /// modules 1 to 4 and the gate list of module 5 are generated from it.
+    ///
+    /// A RECERTIFICATION course is for staff certified on the version before
+    /// this one: it is built from what differs between the two, so it needs
+    /// <paramref name="previousVersion"/> and something that changed.
     /// </summary>
-    public static Course Create(CourseType courseType, string? title, RecipeVersion? version, long createdBy)
+    public static Course Create(CourseType courseType, string? title, RecipeVersion? version, long createdBy,
+        RecipeVersion? previousVersion = null)
     {
         title = title?.Trim();
         new FieldErrors()
             .RequiredMax("title", title, 160)
             .Check(Enum.IsDefined(courseType), "courseType", "is not a valid course type")
-            .Check(courseType != CourseType.Product || version is not null, "recipeVersionId",
-                "is required for a PRODUCT course")
+            .Check(courseType is not (CourseType.Product or CourseType.Recertification) || version is not null,
+                "recipeVersionId", $"is required for a {courseType.Code()} course")
             .ThrowIfAny();
         EnsureUsableAsSource(version);
+        var relearn = courseType == CourseType.Recertification ? WhatToRelearn(version!, previousVersion) : null;
 
         var course = new Course
         {
@@ -71,9 +78,37 @@ public sealed class Course : INeverDeleted
             CreatedBy = createdBy,
             Quiz = new Quiz(Shorten($"{title} - quiz")),
         };
-        course._modules.AddRange(CourseModuleGenerator.CreateModules(version));
+        course._modules.AddRange(CourseModuleGenerator.CreateModules(version, relearn));
         course.RefreshTotalDuration();
         return course;
+    }
+
+    /// <summary>
+    /// What a recertification course on a version teaches: the difference
+    /// from the version before it. Refused when there is no earlier version
+    /// to have been certified on, or when nothing changed between the two.
+    /// </summary>
+    public static RecipeVersionDiff WhatToRelearn(RecipeVersion version, RecipeVersion? previousVersion)
+    {
+        if (previousVersion is null)
+        {
+            throw DomainException.RuleViolation(RecertificationRule,
+                $"Version {version.VersionNo} is the first version of its recipe: nobody is certified on an earlier one. " +
+                "Build a PRODUCT course on it instead.");
+        }
+        if (previousVersion.RecipeId != version.RecipeId || previousVersion.VersionNo >= version.VersionNo)
+        {
+            throw new ArgumentException("Not an earlier version of the same recipe.", nameof(previousVersion));
+        }
+
+        var relearn = RecipeVersionDiff.Between(previousVersion, version);
+        if (!relearn.HasChanges)
+        {
+            throw DomainException.RuleViolation(RecertificationRule,
+                $"Version {version.VersionNo} does not differ from version {previousVersion.VersionNo} in any step: " +
+                "there is nothing to re-certify on.");
+        }
+        return relearn;
     }
 
     /// <summary>BR-20: only a version in RELEASED state may be the source of a course.</summary>
@@ -131,11 +166,12 @@ public sealed class Course : INeverDeleted
     /// Rebuilds one module from the bound version. Refused for an AUTHORED
     /// module, which regeneration must never overwrite (BR-30).
     /// </summary>
-    public void RegenerateModule(CourseModule module, RecipeVersion boundVersion)
+    public void RegenerateModule(CourseModule module, RecipeVersion boundVersion, RecipeVersion? previousVersion = null)
     {
         EnsureEditable();
         EnsureIsBoundVersion(boundVersion);
-        CourseModuleGenerator.Generate(module, boundVersion, previousVersion: null);
+        var relearn = CourseType == CourseType.Recertification ? WhatToRelearn(boundVersion, previousVersion) : null;
+        CourseModuleGenerator.Generate(module, boundVersion, previousVersion: null, relearn);
         RefreshTotalDuration();
     }
 
@@ -261,6 +297,12 @@ public sealed class Course : INeverDeleted
     /// </summary>
     public void RebuildOn(RecipeVersion newVersion, RecipeVersion previousVersion)
     {
+        if (CourseType == CourseType.Recertification)
+        {
+            throw DomainException.RuleViolation(RecertificationRule,
+                "A recertification course teaches the difference between two versions and is not rebuilt on a third. " +
+                "Build a new recertification course on the version that replaced this one.");
+        }
         if (State != CourseState.OutOfDate)
         {
             throw DomainException.RuleViolation("BR-18",
