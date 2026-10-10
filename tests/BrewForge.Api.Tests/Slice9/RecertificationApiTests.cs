@@ -130,6 +130,45 @@ public sealed class RecertificationApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Staff_certified_on_the_old_version_recertify_and_the_new_certificate_replaces_the_flagged_one()
+    {
+        var drink = await NewChangedDrinkAsync();
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        // The release flagged the certificate (BR-15); nothing was deleted.
+        Assert.Equal(CertificateStatus.NeedsRecert, await StatusAsync(drink.FirstCertificateId));
+
+        var course = await PublishAsync(await NewRecertificationCourseAsync(drink));
+        var needs = await NeedsAsync(course.Id());
+        var need = Assert.Single(needs);
+        Assert.Equal((TestUsers.Trainee, "RECERTIFICATION", "RECERTIFICATION"),
+            (need.GetProperty("username").GetString(), need.GetProperty("reason").GetString(), need.GetProperty("courseType").GetString()));
+
+        // A class for the whole branch takes in those who were certified on the drink and leaves the others.
+        var classId = await NewClassAsync(course.Id());
+        var opened = await factory.OpenClassAsync(classId);
+        var enrollmentId = Assert.Single(opened.GetProperty("enrollmentIds").EnumerateArray()).GetInt64();
+        Assert.Equal(drink.TraineeId, await factory.WithDbAsync(db => db.Enrollments.Where(e => e.Id == enrollmentId).Select(e => e.UserId).SingleAsync()));
+
+        var moduleIds = course.GetProperty("modules").EnumerateArray().Select(m => m.Id()).ToList();
+        var learner = await factory.StudyAsync(new ClassSetup(course.Id(), drink.SecondVersionId, classId, [], moduleIds), TestUsers.Trainee);
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        var evaluation = await (await factory.EvaluatePracticalAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+
+        // Certified on version 2 through the short course...
+        var certificateId = evaluation.GetProperty("certificateId").GetInt64();
+        var certificate = await (await trainer.GetAsync($"{AssessmentScenario.Certificates}/{certificateId}")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal((drink.TraineeId, course.Id(), drink.SecondVersionId, "VALID"), (certificate.GetProperty("userId").GetInt64(),
+            certificate.GetProperty("courseId").GetInt64(), certificate.GetProperty("recipeVersionId").GetInt64(),
+            certificate.GetProperty("status").GetString()));
+
+        // ...and the certificate on version 1 is superseded by it, and kept.
+        var replaced = await (await trainer.GetAsync($"{AssessmentScenario.Certificates}/{drink.FirstCertificateId}")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(("SUPERSEDED", certificateId), (replaced.GetProperty("status").GetString(), replaced.GetProperty("supersededBy").GetInt64()));
+        Assert.Empty(await NeedsAsync(course.Id()));
+    }
+
+    [Fact]
     public async Task Somebody_never_certified_on_the_drink_is_not_put_on_its_recertification_course()
     {
         var drink = await NewChangedDrinkAsync();
