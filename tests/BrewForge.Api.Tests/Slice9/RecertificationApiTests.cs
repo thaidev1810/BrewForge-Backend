@@ -80,6 +80,55 @@ public sealed class RecertificationApiTests(BrewForgeApiFactory factory)
         Assert.Contains("against", mixed.DetailFields());
     }
 
+    [Fact]
+    public async Task Recertification_course_is_built_from_what_changed_between_the_two_versions()
+    {
+        var drink = await NewChangedDrinkAsync();
+
+        var course = await NewRecertificationCourseAsync(drink);
+
+        Assert.Equal(("RECERTIFICATION", drink.SecondVersionId, "DRAFT"), (course.GetProperty("courseType").GetString(),
+            course.GetProperty("recipeVersionId").GetInt64(), course.StateOf()));
+        var recertification = course.GetProperty("recertification");
+        Assert.Equal((drink.FirstVersionId, 1, 0, 1, 2), (recertification.GetProperty("fromVersionId").GetInt64(),
+            recertification.GetProperty("fromVersionNo").GetInt32(), recertification.GetProperty("added").GetInt32(),
+            recertification.GetProperty("removed").GetInt32(), recertification.GetProperty("changed").GetInt32()));
+
+        // Seven modules as always (BR-29); the procedure is the two steps that changed and the one that is gone.
+        Assert.Equal(7, course.GetProperty("modules").GetArrayLength());
+        Assert.Equal(["Step 1 - brew a lighter oolong", "Step 2 - add the milk base", "No longer done - garnish with peach"],
+            course.Module("SOP").GetProperty("lessons").EnumerateArray().Select(l => l.GetProperty("title").GetString()));
+        Assert.Equal("What changed since version 1",
+            course.Module("PRODUCT_OVERVIEW").GetProperty("lessons").EnumerateArray().Single().GetProperty("title").GetString());
+        // One of the changed steps has a technique gate: that is what the trainer observes.
+        var gate = Assert.Single(course.GetProperty("practicalChecklist").EnumerateArray());
+        Assert.Equal(("Brew a lighter oolong", "Water at 85 C"), (gate.GetProperty("actionText").GetString(), gate.GetProperty("techniqueGate").GetString()));
+
+        // The whole course of the same version stands beside it, and has every step.
+        var whole = await factory.NewCourseAsync(drink.SecondVersionId);
+        Assert.Equal(2, whole.Module("SOP").GetProperty("lessons").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, whole.GetProperty("recertification").ValueKind);
+    }
+
+    [Fact]
+    public async Task Recertification_course_needs_an_earlier_version_and_is_one_per_version()
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var (_, firstEver) = await factory.NewReleasedRecipeAsync();
+        var drink = await NewChangedDrinkAsync();
+        await NewRecertificationCourseAsync(drink);
+
+        var nothingBefore = await trainer.PostAsJsonAsync(Courses,
+            new { recipeVersionId = firstEver, courseType = "RECERTIFICATION", title = "What changed" });
+        var noVersion = await trainer.PostAsJsonAsync(Courses, new { courseType = "RECERTIFICATION", title = "What changed" });
+        var second = await trainer.PostAsJsonAsync(Courses,
+            new { recipeVersionId = drink.SecondVersionId, courseType = "RECERTIFICATION", title = "What changed, again" });
+
+        await nothingBefore.ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RECERTIFICATION");
+        Assert.Contains("recipeVersionId", (await noVersion.ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
+        Assert.Contains("existingCourseId", (await second.ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "BR-18")).DetailFields());
+    }
+
     // ---------------------------------------------------------------- helpers
 
     /// <summary>

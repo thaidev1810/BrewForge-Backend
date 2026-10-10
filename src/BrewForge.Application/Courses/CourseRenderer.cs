@@ -38,7 +38,21 @@ public sealed class CourseRenderer(IBrewForgeDbContext db)
         return new CourseDetailDto(course.Id, course.RecipeVersionId, course.CourseType, course.Title,
             course.TotalDurationMin, course.CreatedBy, course.ApprovedBy, course.State, course.PublishedAt,
             source?.Recipe.Id, source?.Recipe.RecipeCode, source?.Recipe.Name, source?.Version.VersionNo,
-            RenderModules(course, source), ToDto(course.Quiz), RenderChecklist(course, source));
+            RenderModules(course, source), ToDto(course.Quiz), RenderChecklist(course, source),
+            await RecertificationAsync(course, source, cancellationToken));
+    }
+
+    private async Task<RecertificationDto?> RecertificationAsync(Course course, Source? source,
+        CancellationToken cancellationToken)
+    {
+        if (course.CourseType != CourseType.Recertification || source is null) return null;
+        var previous = await db.FindPreviousVersionAsync(source.Version, cancellationToken);
+        if (previous is null) return null;
+
+        var diff = RecipeVersionDiff.Between(previous, source.Version);
+        return new RecertificationDto(previous.Id, previous.VersionNo, diff.Count(StepChangeKind.Added),
+            diff.Count(StepChangeKind.Removed), diff.Count(StepChangeKind.Changed));
+
     }
 
     public static IReadOnlyList<CourseModuleDto> RenderModules(Course course, Source? source) =>

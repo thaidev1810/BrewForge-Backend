@@ -11,7 +11,16 @@ public sealed record CourseDto(long Id, long? RecipeVersionId, CourseType Course
 public sealed record CourseDetailDto(long Id, long? RecipeVersionId, CourseType CourseType, string Title,
     int? TotalDurationMin, long CreatedBy, long? ApprovedBy, CourseState State, DateTimeOffset? PublishedAt,
     long? RecipeId, string? RecipeCode, string? RecipeName, int? VersionNo,
-    IReadOnlyList<CourseModuleDto> Modules, QuizDto Quiz, IReadOnlyList<ChecklistItemDto> PracticalChecklist);
+    IReadOnlyList<CourseModuleDto> Modules, QuizDto Quiz, IReadOnlyList<ChecklistItemDto> PracticalChecklist,
+    RecertificationDto? Recertification = null);
+
+/// <summary>
+/// On a RECERTIFICATION course: the version its learners are certified on,
+/// and how many steps differ in the bound one. The differences themselves
+/// are served by <c>GET /recipe-versions/{id}/diff</c>.
+/// </summary>
+public sealed record RecertificationDto(long FromVersionId, int FromVersionNo, int Added, int Removed, int Changed);
+
 
 public sealed record CourseModuleDto(long Id, long CourseId, ModuleType ModuleType, int ModuleOrder,
     ModuleSource Source, int? DurationMinutes, ModuleState State, IReadOnlyList<LessonDto> Lessons);

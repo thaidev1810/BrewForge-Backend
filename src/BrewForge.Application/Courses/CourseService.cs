@@ -79,21 +79,26 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
 
         // BR-20 before the duplicate check: a draft version is refused for what it is.
         Course.EnsureUsableAsSource(version);
-        if (request.CourseType == CourseType.Product && version is not null)
+        // One course of a kind per version: the PRODUCT course, and the RECERTIFICATION course beside it.
+        if (request.CourseType is CourseType.Product or CourseType.Recertification && version is not null)
         {
             var existing = await db.Courses.AsNoTracking()
-                .Where(c => c.RecipeVersionId == version.Id && c.CourseType == CourseType.Product
+                .Where(c => c.RecipeVersionId == version.Id && c.CourseType == request.CourseType
                             && c.State != CourseState.Archived)
                 .Select(c => (long?)c.Id).FirstOrDefaultAsync(cancellationToken);
             if (existing is not null)
             {
                 throw DomainException.RuleViolation("BR-18",
-                    $"A course already exists for version {version.VersionNo}. Open the existing course instead of creating a duplicate.",
+                    $"A {request.CourseType.Value.Code()} course already exists for version {version.VersionNo}. Open the existing course instead of creating a duplicate.",
                     "MSG-W04", new ErrorDetail("existingCourseId", existing.Value.ToString()));
             }
         }
 
-        var course = Course.Create(request.CourseType!.Value, request.Title, version, currentUser.RequireUserId());
+        var previous = request.CourseType == CourseType.Recertification && version is not null
+            ? await db.FindPreviousVersionAsync(version, cancellationToken)
+            : null;
+        var course = Course.Create(request.CourseType!.Value, request.Title, version, currentUser.RequireUserId(), previous);
+
         db.Courses.Add(course);
         db.Audit(AuditEntities.Course, () => course.Id, AuditActions.Create, new
         {
@@ -125,8 +130,12 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
     {
         var (course, module) = await FindModuleAsync(moduleId, cancellationToken);
         var version = await BoundVersionAsync(course, cancellationToken);
+        var previous = course.CourseType == CourseType.Recertification
+            ? await db.FindPreviousVersionAsync(version, cancellationToken)
+            : null;
 
-        course.RegenerateModule(module, version);
+        course.RegenerateModule(module, version, previous);
+
 
         db.Audit(AuditEntities.CourseModule, () => module.Id, AuditActions.Regenerate,
             new { type = module.ModuleType.Code(), course.RecipeVersionId });
