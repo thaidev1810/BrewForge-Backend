@@ -24,6 +24,19 @@ internal static class RecipeContentResolver
         await db.RecipeVersions.WithContent().SingleOrDefaultAsync(version => version.Id == id, cancellationToken)
         ?? throw DomainException.NotFound("Recipe version", id);
 
+    /// <summary>
+    /// The version of the same recipe that was in production before this one:
+    /// the highest version number below it that was ever released. Null for
+    /// the first version of a recipe.
+    /// </summary>
+    public static async Task<RecipeVersion?> FindPreviousVersionAsync(this IBrewForgeDbContext db,
+        RecipeVersion version, CancellationToken cancellationToken) =>
+        await db.RecipeVersions.WithContent()
+            .Where(v => v.RecipeId == version.RecipeId && v.VersionNo < version.VersionNo
+                        && (v.State == VersionState.Released || v.State == VersionState.Superseded))
+            .OrderByDescending(v => v.VersionNo)
+            .FirstOrDefaultAsync(cancellationToken);
+
     /// <summary>The whole catalogue, inactive entries included, as the validator wants it.</summary>
     public static async Task<(List<StandardEquipment> Equipment, List<Ingredient> Ingredients)> LoadCatalogAsync(
         this IBrewForgeDbContext db, CancellationToken cancellationToken) =>

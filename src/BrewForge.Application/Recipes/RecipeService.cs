@@ -133,6 +133,52 @@ public sealed class RecipeService(IBrewForgeDbContext db, ICurrentUser currentUs
     public async Task<RecipeVersionDto> GetVersionAsync(long id, CancellationToken cancellationToken) =>
         await db.ToDtoAsync(await db.FindVersionAsync(id, cancellationToken), cancellationToken);
 
+    /// <summary>
+    /// What differs between a version and an earlier one of the same recipe,
+    /// step by step. Without <paramref name="againstId"/> the earlier one is
+    /// the version that was in production before it.
+    /// </summary>
+    public async Task<RecipeVersionDiffDto> DiffAsync(long id, long? againstId, CancellationToken cancellationToken)
+    {
+        var after = await db.FindVersionAsync(id, cancellationToken);
+        var before = againstId is { } other
+            ? await db.FindVersionAsync(other, cancellationToken)
+            : await db.FindPreviousVersionAsync(after, cancellationToken)
+              ?? throw DomainException.RuleViolation("NO_EARLIER_VERSION",
+                  $"Version {after.VersionNo} is the first version of its recipe that was released; there is nothing to compare it with.");
+        if (before.RecipeId != after.RecipeId)
+        {
+            throw DomainException.Validation("Two versions are compared only when they are versions of one recipe.",
+                new ErrorDetail("against", "is a version of another recipe"));
+        }
+
+        var diff = RecipeVersionDiff.Between(before, after);
+        var ids = before.Steps.Concat(after.Steps).SelectMany(step => step.Ingredients).Select(i => i.IngredientId)
+            .Distinct().ToList();
+        var ingredients = await db.Ingredients.AsNoTracking().Where(i => ids.Contains(i.Id))
+            .ToDictionaryAsync(i => i.Id, cancellationToken);
+        var steps = RecipeContentResolver.ToDto(before, ingredients).Steps
+            .Concat(RecipeContentResolver.ToDto(after, ingredients).Steps).ToDictionary(step => step.Id);
+
+        return new RecipeVersionDiffDto(after.RecipeId, new VersionRefDto(before.Id, before.VersionNo, before.State),
+            new VersionRefDto(after.Id, after.VersionNo, after.State), diff.HasChanges,
+            diff.Count(StepChangeKind.Added), diff.Count(StepChangeKind.Removed), diff.Count(StepChangeKind.Changed),
+            diff.Count(StepChangeKind.Unchanged),
+        [
+            .. diff.Steps.Select(change => new StepChangeDto(change.Kind,
+                change.Before is null ? null : steps[change.Before.Id], change.After is null ? null : steps[change.After.Id],
+                change.ChangedFields,
+                [
+                    .. change.Ingredients.Select(i =>
+                    {
+                        var ingredient = ingredients.GetValueOrDefault(i.IngredientId);
+                        return new IngredientChangeDto(i.IngredientId, ingredient?.IngredientCode, ingredient?.Name,
+                            i.QuantityBefore, i.UnitBefore, i.QuantityAfter, i.UnitAfter);
+                    }),
+                ])),
+        ]);
+    }
+
     /// <summary>Replaces the content of a draft. A released version refuses with BR-01.</summary>
     public async Task<RecipeVersionDto> UpdateVersionAsync(long id, RecipeContentRequest request,
         CancellationToken cancellationToken)

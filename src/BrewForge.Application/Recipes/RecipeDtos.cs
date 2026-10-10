@@ -35,6 +35,26 @@ public sealed record StepIngredientDto(long IngredientId, string? IngredientCode
 
 public sealed record StepDependencyDto(long StepId, int StepOrder, DependencyType Type);
 
+// ---------------------------------------------------------------- comparing two versions
+
+public sealed record VersionRefDto(long Id, int VersionNo, VersionState State);
+
+/// <summary>A side that is null is a side that does not use the ingredient.</summary>
+public sealed record IngredientChangeDto(long IngredientId, string? IngredientCode, string? IngredientName,
+    decimal? QuantityBefore, string? UnitBefore, decimal? QuantityAfter, string? UnitAfter);
+
+/// <summary>
+/// One step of the comparison. <c>Before</c> is null for a step that was
+/// added, <c>After</c> for one that was removed. <c>ChangedFields</c> names
+/// what differs when the step is in both: actionText, equipmentClass,
+/// techniqueGate, durationSeconds, ingredients, dependsOn.
+/// </summary>
+public sealed record StepChangeDto(StepChangeKind Kind, StepDto? Before, StepDto? After,
+    IReadOnlyList<string> ChangedFields, IReadOnlyList<IngredientChangeDto> IngredientChanges);
+
+public sealed record RecipeVersionDiffDto(long RecipeId, VersionRefDto Before, VersionRefDto After, bool HasChanges,
+    int Added, int Removed, int Changed, int Unchanged, IReadOnlyList<StepChangeDto> Steps);
+
 // ---------------------------------------------------------------- authoring
 
 /// <summary>The whole content of a draft. A PUT replaces the content; it does not patch it.</summary>
