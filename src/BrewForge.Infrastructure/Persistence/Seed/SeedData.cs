@@ -1,3 +1,4 @@
+using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
 
@@ -50,6 +51,45 @@ public static class SeedData
         new("trainee3", "Lý Quốc Đạt", RoleName.Trainee, "B02"),
         new("trainee4", "Mai Ngọc Hân", RoleName.Trainee, "B02"),
     ];
+
+    /// <summary>
+    /// The induction course every new member of staff takes first: one or two
+    /// lessons for each of the seven modules. It is built from no recipe, so
+    /// the lessons of its TECHNIQUE module are its practical checklist.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<ModuleType, (string Title, string Content)[]> InductionLessons =
+        new Dictionary<ModuleType, (string, string)[]>
+        {
+            [ModuleType.ProductOverview] =
+            [
+                ("What the chain serves", "Specialty tea and coffee, made to one recipe at every branch. A guest should not be able to tell which branch made their drink."),
+            ],
+            [ModuleType.Ingredients] =
+            [
+                ("How ingredients are stored and dated", "Every opened, brewed or cooked ingredient is labelled with the time it was prepared. Past its shelf life it is discarded, not topped up."),
+            ],
+            [ModuleType.Equipment] =
+            [
+                ("The standard equipment of a branch", "Every branch has the same machines, set to the same doses. Report a machine that doses outside its range; do not adjust the recipe to it."),
+            ],
+            [ModuleType.Sop] =
+            [
+                ("Opening and closing the counter", "Clean, stock and check dates before the first order; clean, cover and log before leaving. The checklist at the counter is the order to do it in."),
+            ],
+            [ModuleType.Technique] =
+            [
+                ("Wash hands and prepare the station", "Twenty seconds with soap, up to the wrist, before every shift and after every break. Tools in their place before the first order."),
+                ("Greet the guest and repeat the order", "Greet within five seconds, take the order, and say it back before making anything."),
+            ],
+            [ModuleType.CommonMistakes] =
+            [
+                ("What new staff get wrong", "Pouring by eye, skipping the date label, and changing a recipe because a guest asked. Measure, label, and offer what the menu offers."),
+            ],
+            [ModuleType.ExceptionHandling] =
+            [
+                ("When something goes wrong", "A spill, a machine fault or a complaint: stop, make it safe, tell the shift lead, and remake the drink. Never serve a drink you are unsure of."),
+            ],
+        };
 
     /// <summary>
     /// Shelf life is in hours from preparation (BR-11): how long the

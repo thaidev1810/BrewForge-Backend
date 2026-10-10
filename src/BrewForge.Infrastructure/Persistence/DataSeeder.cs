@@ -1,5 +1,6 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.Launch;
@@ -50,6 +51,61 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
         await SeedRecipesAsync(cancellationToken);
         await SeedLaunchStatusesAsync(branches, cancellationToken);
         await SeedRegulationsAsync(cancellationToken);
+        await SeedInductionAsync(cancellationToken);
+    }
+
+    public const string InductionTitle = "Welcome to the chain";
+
+    /// <summary>
+    /// The induction course, published, and the seeded store staff and
+    /// trainer certified on it: they joined the chain before this system
+    /// existed and were inducted then. Without it nobody could be enrolled on
+    /// a PRODUCT course, which the seeded regulation puts after induction.
+    /// The certificates are written as rows, the way history is; the
+    /// application itself issues one only through a passed enrolment.
+    /// </summary>
+    private async Task SeedInductionAsync(CancellationToken cancellationToken)
+    {
+        if (!await db.Courses.AnyAsync(c => c.CourseType == CourseType.Induction, cancellationToken))
+        {
+            var trainer = await FirstUserOfAsync(RoleName.Trainer, cancellationToken);
+            var manager = await FirstUserOfAsync(RoleName.TrainingManager, cancellationToken);
+
+            var course = Course.Create(CourseType.Induction, InductionTitle, version: null, trainer);
+            db.Courses.Add(course);
+            await db.SaveChangesAsync(cancellationToken);
+
+            QuizOption[] options = [new("A", "Yes, every time"), new("B", "Only when it is busy"), new("C", "Never")];
+            foreach (var module in course.OrderedModules())
+            {
+                foreach (var (title, content) in SeedData.InductionLessons[module.ModuleType])
+                {
+                    course.AddLesson(module, title, content, null);
+                }
+                course.SetModuleDuration(module, 10);
+                course.AddQuizQuestion(module.Id, $"Does what the module '{module.ModuleType.Code()}' teaches apply on every shift?",
+                    options, "A");
+            }
+            course.Submit();
+            course.Approve(manager, clock.GetUtcNow());
+            db.Audit(AuditEntities.Course, () => course.Id, AuditActions.Create,
+                new { course.Title, courseType = course.CourseType.Code(), seeded = true }, actorUserId: trainer);
+            await db.SaveChangesAsync(cancellationToken);
+            logger.LogInformation("Seeded the induction course");
+        }
+
+        var usernames = SeedData.Users.Where(u => u.Role is RoleName.Trainee or RoleName.Trainer)
+            .Select(u => u.Username).ToArray();
+        await db.Database.ExecuteSqlAsync($"""
+            INSERT INTO certificate (user_id, course_id)
+            SELECT u.id, c.id
+            FROM app_user u
+            CROSS JOIN (SELECT id FROM course WHERE course_type = 'INDUCTION' AND title = {InductionTitle} ORDER BY id LIMIT 1) c
+            WHERE u.username = ANY({usernames})
+              AND NOT EXISTS (
+                  SELECT 1 FROM certificate held JOIN course passed ON passed.id = held.course_id
+                  WHERE held.user_id = u.id AND passed.course_type = 'INDUCTION')
+            """, cancellationToken);
     }
 
     /// <summary>The day the seeded drinks of origin EXISTING have been on sale since.</summary>
