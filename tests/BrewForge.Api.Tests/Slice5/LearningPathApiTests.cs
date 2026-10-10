@@ -91,6 +91,33 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Passing_induction_opens_the_product_courses_of_the_branch()
+    {
+        var drink = await TaughtDrinkAtB03Async();
+        var staff = await NewTraineeAsync("B03");
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        await PassInductionAsync(staff);
+
+        var stages = (await (await trainer.GetAsync($"{Paths}/{staff.Id}")).ShouldBeAsync(HttpStatusCode.OK))
+            .GetProperty("stages").EnumerateArray().ToList();
+        Assert.Equal("CERTIFIED", CourseOf(stages[0], await InductionCourseIdAsync()).GetProperty("status").GetString());
+
+        // The next stage opened by itself: the course of the drink their branch sells is theirs to take, self-paced.
+        Assert.False(stages[1].GetProperty("blocked").GetBoolean());
+        var product = CourseOf(stages[1], drink.CourseId);
+        Assert.Equal(("ENROLLED", Today.AddDays(stages[1].GetProperty("dueDays").GetInt32()).ToString("yyyy-MM-dd")),
+            (product.GetProperty("status").GetString(), product.GetProperty("dueDate").GetString()));
+        Assert.Null(await factory.WithDbAsync(db => db.Enrollments.Where(e => e.Id == product.GetProperty("enrollmentId").GetInt64())
+            .Select(e => e.TrainingClassId).SingleAsync()));
+
+        // And a class of another PRODUCT course takes them now.
+        var other = await factory.NewClassAsync(branchCode: "B03");
+        await (await trainer.PostAsJsonAsync($"{Classes}/{other.ClassId}/open", new { traineeIds = new[] { staff.Id } }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task Path_of_a_role_with_nothing_mandatory_is_empty_and_an_unknown_user_has_none()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);

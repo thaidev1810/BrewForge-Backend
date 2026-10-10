@@ -60,8 +60,8 @@ public sealed record CertificateDto(long Id, long UserId, string FullName, long?
 /// the enrolment itself the moment the last of its three conditions is met.
 /// </summary>
 public sealed class AssessmentService(IBrewForgeDbContext db, CourseService courses, LearningService learning,
-    EnrollmentEvaluator evaluator, LaunchReadinessService readiness, IPracticalVideoStorage videos,
-    ICurrentUser currentUser, TimeProvider clock)
+    EnrollmentEvaluator evaluator, LaunchReadinessService readiness, LearningPathService learningPath,
+    IPracticalVideoStorage videos, ICurrentUser currentUser, TimeProvider clock)
 {
     /// <summary>
     /// The quiz as the learner takes it. Behind the same gate as the attempt
@@ -304,8 +304,14 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
         await db.SaveChangesAsync(cancellationToken);
 
         await readiness.RecomputeForCertificateAsync(certificate.UserId, certificate.RecipeVersionId, cancellationToken);
+        // Passing a course that others require opens the next stage of the holder's path.
+        if (await db.TrainingRegulations.AnyAsync(r => r.PrerequisiteType == course.CourseType, cancellationToken))
+        {
+            await learningPath.AssignOpenStagesAsync(certificate.UserId, cancellationToken);
+        }
         await db.SaveChangesAsync(cancellationToken);
         return certificate;
+
     }
 
     /// <summary>
