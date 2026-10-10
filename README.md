@@ -66,7 +66,8 @@ duty can be demonstrated. They all share the password in
 | `branchmgr` / `branchmgr2` | BRANCH_MANAGER | B01 / B02 |
 | `trainee`, `trainee2` / `trainee3`, `trainee4` | TRAINEE | B01 / B02 |
 
-Also seeded: three branches, sixteen ingredients, seven equipment classes and
+Also seeded: the induction course, with the seeded trainees and trainer
+certified on it; three branches, sixteen ingredients, seven equipment classes and
 eleven recipes — nine released (`R01`–`R08`, `R10`), one validated and waiting
 for review (`R09`), and one draft that deliberately fails all three validator
 checks (`R99`) so the validation and repair screens have something to show.
@@ -163,6 +164,8 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | A notification is queued with the change and delivered by e-mail and Web Push, each channel once | `NotificationExtensions.Notify`, `Notification.RecordAttempt`, `NotificationService.DispatchPendingAsync`, `WebPushEncryption` | `NotificationApiTests`, `WebPushTests` |
 | Two versions of a recipe are compared step by step | `RecipeVersionDiff.Between` | `RecipeVersionDiffTests`, `RecertificationApiTests.Two_versions_*` |
 | A recertification course teaches what changed, to staff certified before, and its certificate replaces the flagged one | `Course.WhatToRelearn`, `CourseModuleGenerator.Generate`, `TrainingClassService.OnlyCertifiedBeforeAsync`, `Enrollment.TryCertify` | `RecertificationCourseTests`, `AssessmentTests.Certificate_on_a_newer_version_*`, `RecertificationApiTests` |
+| A course is not assigned to somebody who has not passed its prerequisite | `LearningPathService.OnlyWithPrerequisiteAsync`, `MissingPrerequisiteAsync` | `LearningPathApiTests.Course_is_not_opened_*` |
+| New staff are put on their path, moved on when they pass a stage, and reminded of due dates | `LearningPathService.AssignOpenStagesAsync`, `RemindAsync`; `TrainingReminderScheduler` | `LearningPathApiTests` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -265,8 +268,9 @@ the user they are for. The pack's schema has no notification table; since
 migration 003 they are also queued and delivered by e-mail and Web Push, as
 described under "Beyond the developer pack".
 
-**Prerequisites** of a regulation are reported by `GET /training-needs` but
-not enforced when a course is assigned.
+**Prerequisites** of a regulation are reported by `GET /training-needs`, and
+enforced when a course is assigned: see "The learning path" under "Beyond the
+developer pack".
 
 **The quiz as the learner sees it.** `GET /enrollments/{id}/quiz` is not in the
 contract table; the quiz screen needs the questions, and the trainer's
@@ -559,9 +563,47 @@ close that loop, without a schema change.
   came from; they are kept and point at it (BR-15). The regulation counts a
   valid certificate on a version however it was earned.
 
+**The learning path.** The regulation says which course types are mandatory
+for a role and which type has to be passed first. The pack reports that; here
+it is also what happens to a new member of staff, without a schema change.
+
+- A path is not stored. `GET /me/learning-path` and
+  `GET /learning-paths/{userId}` read it from the regulation in force, the
+  published courses and what the user has passed: one stage per course type
+  that is mandatory for the user's role, prerequisite-free types first. A
+  stage holds the published courses of its type that concern the user: a
+  course built from no recipe concerns everybody, one built from a recipe
+  version concerns those whose branch has that version on its menu. Each
+  course is `CERTIFIED`, `ENROLLED`, `BLOCKED` or `AVAILABLE`.
+- **Prerequisites are enforced.** A course whose type has a prerequisite is
+  not assigned to somebody who never passed a course of that type. Opening a
+  class naming such a person is refused (`409 PREREQUISITE`, each of them
+  named in `details`); a class for a whole branch enrols those who qualify. A
+  course once passed stays passed for this purpose.
+- **A new user starts by themselves.** Creating a user assigns, self-paced
+  (an enrolment that belongs to no class), every course of their path that is
+  open to them, with the deadline of the regulation and a notification. With
+  the seeded regulation a new trainee gets the induction course.
+- **Passing a prerequisite opens the next stage.** When a certificate is
+  issued on a course whose type other types require, the courses that this
+  opens are assigned the same way: for a trainee, the PRODUCT courses of the
+  drinks their branch sells. `POST /learning-paths/{userId}/assign` does it on
+  request, for staff who were there before a course was published; publishing
+  a course assigns it to nobody.
+- **Due dates are followed up.** A background service of the API
+  (`Scheduler:ReminderIntervalMinutes`, 60 by default; 0 turns it off) reminds
+  a learner three days before a course is due, and reports a course that is
+  past its due date to the learner and to the training managers. Each is said
+  once per enrolment: the reminder is an audit entry of the enrolment
+  (`REMIND_DUE`, `ESCALATE_OVERDUE`), and one made since the enrolment was
+  last assigned is not repeated.
+- The seed now includes a published induction course, "Welcome to the chain",
+  and certifies the seeded trainees and trainer on it: they joined before the
+  system existed. Without it nobody seeded could be enrolled on a PRODUCT
+  course.
+
 ## Known gaps
 
-- Prerequisites of a training regulation are reported and not enforced.
 - The React frontend described by the developer pack is not part of this
   repository.
 
