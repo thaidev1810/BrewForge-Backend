@@ -12,7 +12,7 @@ namespace BrewForge.Application.Training;
 
 /// <summary>UC-29 and UC-30: classes, sessions and attendance (SCR-31, SCR-32).</summary>
 public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService courses, EnrollmentEvaluator evaluator,
-    ICurrentUser currentUser, TimeProvider clock)
+    LearningPathService learningPath, ICurrentUser currentUser, TimeProvider clock)
 {
     private static readonly SortMap<TrainingClass> Sorting = new SortMap<TrainingClass>("startDate", c => c.Id)
         .Add("id", c => c.Id)
@@ -141,12 +141,15 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
     {
         var trainingClass = await FindAsync(classId, cancellationToken);
         var course = await courses.FindAsync(trainingClass.CourseId, cancellationToken);
-        var roster = await RosterAsync(trainingClass, request?.TraineeIds, cancellationToken);
+        var named = request?.TraineeIds is { Count: > 0 };
+        var roster = await learningPath.OnlyWithPrerequisiteAsync(
+            await RosterAsync(trainingClass, request?.TraineeIds, cancellationToken), course.CourseType, named,
+            cancellationToken);
         if (course is { CourseType: CourseType.Recertification, RecipeVersionId: { } versionId })
         {
-            roster = await OnlyCertifiedBeforeAsync(roster, versionId, named: request?.TraineeIds is { Count: > 0 },
-                cancellationToken);
+            roster = await OnlyCertifiedBeforeAsync(roster, versionId, named, cancellationToken);
         }
+
 
         var now = clock.GetUtcNow();
         var rules = await evaluator.RulesAsync(course.CourseType, DateOnly.FromDateTime(now.UtcDateTime),

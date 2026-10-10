@@ -25,6 +25,31 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     private sealed record NewStaff(string Username, long Id);
 
     [Fact]
+    public async Task Course_is_not_opened_to_somebody_who_has_not_passed_its_prerequisite()
+    {
+        var staff = await NewTraineeAsync("B01");
+        var seeded = await factory.UserIdAsync(TestUsers.Trainee);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        // Named for a PRODUCT class before induction: refused by name, and nobody is enrolled.
+        var named = await factory.NewClassAsync();
+        var refusal = await (await trainer.PostAsJsonAsync($"{Classes}/{named.ClassId}/open", new { traineeIds = new[] { seeded, staff.Id } }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "PREREQUISITE");
+        Assert.Contains("traineeIds", refusal.DetailFields());
+        Assert.Contains($"user {staff.Id} has not passed a INDUCTION course",
+            refusal.GetProperty("details").EnumerateArray().Select(d => d.GetProperty("issue").GetString()));
+        Assert.False(await factory.WithDbAsync(db => db.Enrollments.AnyAsync(e => e.TrainingClassId == named.ClassId)));
+
+        // A class for the whole branch takes those who have, and leaves the newcomer out.
+        var branch = await factory.NewClassAsync();
+        await factory.OpenClassAsync(branch.ClassId);
+        var enrolled = await factory.WithDbAsync(db => db.Enrollments.Where(e => e.TrainingClassId == branch.ClassId)
+            .Select(e => e.UserId).ToListAsync());
+        Assert.Contains(seeded, enrolled);
+        Assert.DoesNotContain(staff.Id, enrolled);
+    }
+
+    [Fact]
     public async Task Path_of_a_role_with_nothing_mandatory_is_empty_and_an_unknown_user_has_none()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);

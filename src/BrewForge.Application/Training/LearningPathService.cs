@@ -47,6 +47,54 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
 
     private DateOnly Today => DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
 
+    // ---------------------------------------------------------------- prerequisites
+
+    /// <summary>
+    /// The course type that has to be passed before a course of the given
+    /// type, by the regulation in force today, and which of the users have
+    /// not passed one. A course once passed stays passed: the status of the
+    /// certificate does not matter here.
+    /// </summary>
+    public async Task<(CourseType? Prerequisite, HashSet<long> Missing)> MissingPrerequisiteAsync(CourseType courseType,
+        IReadOnlyCollection<long> userIds, CancellationToken cancellationToken)
+    {
+        var regulations = await db.TrainingRegulations.AsNoTracking().Where(r => r.CourseType == courseType)
+            .ToListAsync(cancellationToken);
+        var prerequisite = TrainingRegulation.InForce(regulations, courseType, Today)?.PrerequisiteType;
+        if (prerequisite is null) return (null, []);
+
+        var passed = await db.Certificates.AsNoTracking().Where(c => userIds.Contains(c.UserId))
+            .Join(db.Courses.Where(course => course.CourseType == prerequisite), c => c.CourseId, course => course.Id,
+                (c, course) => c.UserId)
+            .Distinct().ToListAsync(cancellationToken);
+        return (prerequisite, [.. userIds.Where(id => !passed.Contains(id))]);
+    }
+
+    /// <summary>
+    /// The roster of a class with those left out who have not passed the
+    /// prerequisite of its course. Somebody named for the class is refused
+    /// by name; of a whole branch, those who qualify are enrolled.
+    /// </summary>
+    public async Task<List<AppUser>> OnlyWithPrerequisiteAsync(List<AppUser> roster, CourseType courseType, bool named,
+        CancellationToken cancellationToken)
+    {
+        var (prerequisite, missing) = await MissingPrerequisiteAsync(courseType, [.. roster.Select(u => u.Id)],
+            cancellationToken);
+        if (prerequisite is null || missing.Count == 0) return roster;
+
+        if (named || missing.Count == roster.Count)
+        {
+            throw DomainException.RuleViolation(PrerequisiteRule,
+                $"A {courseType.Code()} course is taken after a {prerequisite.Value.Code()} course has been passed.",
+                details:
+                [
+                    .. roster.Where(u => missing.Contains(u.Id)).Select(u =>
+                        new ErrorDetail("traineeIds", $"user {u.Id} has not passed a {prerequisite.Value.Code()} course")),
+                ]);
+        }
+        return [.. roster.Where(u => !missing.Contains(u.Id))];
+    }
+
     // ---------------------------------------------------------------- the path
 
     public Task<LearningPathDto> MyPathAsync(CancellationToken cancellationToken) =>
