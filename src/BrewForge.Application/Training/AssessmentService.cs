@@ -283,7 +283,9 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
         var owned = await db.Certificates.Where(c => c.UserId == enrollment.UserId && c.CourseId == course.Id)
             .ToListAsync(cancellationToken);
 
-        var certificate = enrollment.TryCertify(course, owned, clock.GetUtcNow());
+        var onEarlierVersions = await CertificatesOnEarlierVersionsAsync(enrollment.UserId, course, cancellationToken);
+
+        var certificate = enrollment.TryCertify(course, owned, clock.GetUtcNow(), onEarlierVersions);
         if (certificate is null)
         {
             await db.SaveChangesAsync(cancellationToken);
@@ -294,7 +296,8 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
         db.Audit(AuditEntities.Certificate, () => certificate.Id, AuditActions.IssueCertificate, new
         {
             certificate.UserId, certificate.CourseId, certificate.RecipeVersionId, enrollmentId = enrollment.Id,
-            superseded = owned.Where(c => c.Status == CertificateStatus.Superseded && !ReferenceEquals(c, certificate)).Select(c => c.Id),
+            superseded = owned.Concat(onEarlierVersions)
+                .Where(c => c.Status == CertificateStatus.Superseded && !ReferenceEquals(c, certificate)).Select(c => c.Id).Distinct(),
         });
         db.Notify(enrollment.UserId, "Certificate issued", $"You are now certified on '{course.Title}'.",
             clock.GetUtcNow());
@@ -303,6 +306,27 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
         await readiness.RecomputeForCertificateAsync(certificate.UserId, certificate.RecipeVersionId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return certificate;
+    }
+
+    /// <summary>
+    /// The certificates the user holds, through any other course, on earlier
+    /// versions of the drink this course is bound to. One earned on this
+    /// version replaces them.
+    /// </summary>
+    private async Task<List<Certificate>> CertificatesOnEarlierVersionsAsync(long userId, Course course,
+        CancellationToken cancellationToken)
+    {
+        if (course.RecipeVersionId is not { } versionId) return [];
+        var version = await db.RecipeVersions.AsNoTracking().Where(v => v.Id == versionId)
+            .Select(v => new { v.RecipeId, v.VersionNo }).SingleAsync(cancellationToken);
+        var earlier = await db.RecipeVersions.AsNoTracking()
+            .Where(v => v.RecipeId == version.RecipeId && v.VersionNo < version.VersionNo)
+            .Select(v => v.Id).ToListAsync(cancellationToken);
+
+        return await db.Certificates
+            .Where(c => c.UserId == userId && c.CourseId != course.Id && c.RecipeVersionId != null
+                        && earlier.Contains(c.RecipeVersionId.Value) && c.Status != CertificateStatus.Superseded)
+            .ToListAsync(cancellationToken);
     }
 
     private async Task NotifyTrainingManagersAsync(Enrollment enrollment, Course course,
