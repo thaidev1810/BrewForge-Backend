@@ -27,6 +27,9 @@ public sealed record LearningPathDto(long UserId, string Username, string FullNa
 
 public sealed record PathAssignmentDto(LearningPathDto Path, IReadOnlyList<long> EnrollmentIds);
 
+/// <summary>How many reminders one run sent.</summary>
+public sealed record ReminderResult(int DueSoon, int Overdue);
+
 /// <summary>
 /// The learning path of a member of staff: what the training regulation
 /// makes mandatory for their role, in the order its prerequisites impose.
@@ -46,6 +49,9 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
     public const string Enrolled = "ENROLLED";
     public const string BlockedStatus = "BLOCKED";
     public const string Available = "AVAILABLE";
+
+    /// <summary>How many days before the due date a learner is reminded.</summary>
+    public const int DueSoonDays = 3;
 
     private DateOnly Today => DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
 
@@ -143,6 +149,72 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
         var created = await AssignOpenStagesAsync(userId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return new PathAssignmentDto(await GetPathAsync(userId, cancellationToken), [.. created.Select(e => e.Id)]);
+    }
+
+    // ---------------------------------------------------------------- reminders
+
+    /// <summary>
+    /// Reminds learners whose course is due within <see cref="DueSoonDays"/>
+    /// days, and reports those whose due date has passed to them and to the
+    /// training managers. Each is said once per enrolment: the reminder is an
+    /// audit entry of the enrolment, and an enrolment that has one since it
+    /// was last assigned is not reminded again.
+    /// </summary>
+    public async Task<ReminderResult> RemindAsync(CancellationToken cancellationToken)
+    {
+        var now = clock.GetUtcNow();
+        var today = Today;
+        var soon = today.AddDays(DueSoonDays);
+        var open = await db.Enrollments.IgnoreQueryFilters().AsNoTracking()
+            .Where(e => (e.State == EnrollmentState.Assigned || e.State == EnrollmentState.InProgress
+                         || e.State == EnrollmentState.Eligible) && e.DueDate != null && e.DueDate <= soon)
+            .Select(e => new { e.Id, e.UserId, e.CourseId, DueDate = e.DueDate!.Value, e.EnrolledAt })
+            .ToListAsync(cancellationToken);
+        if (open.Count == 0) return new ReminderResult(0, 0);
+
+        var ids = open.Select(e => e.Id).ToList();
+        var said = (await db.AuditLogs.AsNoTracking()
+                .Where(a => a.EntityType == AuditEntities.Enrollment && ids.Contains(a.EntityId)
+                            && (a.Action == AuditActions.RemindDue || a.Action == AuditActions.EscalateOverdue))
+                .Select(a => new { a.EntityId, a.Action, a.CreatedAt }).ToListAsync(cancellationToken))
+            .ToLookup(a => (a.EntityId, a.Action), a => a.CreatedAt);
+        var courseIds = open.Select(e => e.CourseId).Distinct().ToList();
+        var titles = await db.Courses.AsNoTracking().Where(c => courseIds.Contains(c.Id))
+            .ToDictionaryAsync(c => c.Id, c => c.Title, cancellationToken);
+        var managers = await db.Users.IgnoreQueryFilters().AsNoTracking()
+            .Where(u => u.Role.RoleName == RoleName.TrainingManager && u.Status == UserStatus.Active)
+            .Select(u => u.Id).ToListAsync(cancellationToken);
+
+        var (dueSoon, overdue) = (0, 0);
+        foreach (var enrollment in open)
+        {
+            var late = enrollment.DueDate < today;
+            var action = late ? AuditActions.EscalateOverdue : AuditActions.RemindDue;
+            if (said[(enrollment.Id, action)].Any(at => at >= enrollment.EnrolledAt)) continue;
+
+            var title = titles[enrollment.CourseId];
+            db.Audit(AuditEntities.Enrollment, () => enrollment.Id, action, new { enrollment.UserId, enrollment.DueDate });
+            if (late)
+            {
+                overdue++;
+                db.Notify(enrollment.UserId, "Course overdue",
+                    $"'{title}' was due on {enrollment.DueDate:yyyy-MM-dd}. Finish it as soon as you can.", now);
+                foreach (var managerId in managers)
+                {
+                    db.Notify(managerId, "Course overdue",
+                        $"Enrolment {enrollment.Id} on '{title}' was due on {enrollment.DueDate:yyyy-MM-dd} and is not finished.",
+                        now, new { enrollmentId = enrollment.Id });
+                }
+            }
+            else
+            {
+                dueSoon++;
+                db.Notify(enrollment.UserId, "Course due soon",
+                    $"'{title}' is due on {enrollment.DueDate:yyyy-MM-dd}.", now);
+            }
+        }
+        await db.SaveChangesAsync(cancellationToken);
+        return new ReminderResult(dueSoon, overdue);
     }
 
     // ---------------------------------------------------------------- loading

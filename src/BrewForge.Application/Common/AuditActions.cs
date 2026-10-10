@@ -45,6 +45,13 @@ public static class AuditActions
     public const string Open = "OPEN";
     public const string Close = "CLOSE";
     public const string Assign = "ASSIGN";
+
+    /// <summary>A learner was told their course is due soon. Said once per enrolment; the entry is the record of it.</summary>
+    public const string RemindDue = "REMIND_DUE";
+
+    /// <summary>A course past its due date was reported to the learner and the training managers. Once per enrolment.</summary>
+    public const string EscalateOverdue = "ESCALATE_OVERDUE";
+
     public const string Reset = "RESET";
     public const string CompleteModule = "COMPLETE_MODULE";
     public const string RecordAttendance = "RECORD_ATTENDANCE";

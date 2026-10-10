@@ -142,6 +142,40 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Learner_is_reminded_once_before_the_due_date_and_an_overdue_course_is_reported_once()
+    {
+        var staff = await NewTraineeAsync("B03");
+        var induction = await InductionCourseIdAsync();
+        var enrollmentId = await factory.WithDbAsync(db => db.Enrollments
+            .Where(e => e.UserId == staff.Id && e.CourseId == induction).Select(e => e.Id).SingleAsync());
+        var scheduler = factory.Services.GetRequiredService<TrainingReminderScheduler>();
+        Task<int> SaidAsync(string subject) => factory.WithDbAsync(db => db.Notifications.CountAsync(n => n.UserId == staff.Id && n.Subject == subject));
+        Task<int> ReportedAsync() => factory.WithDbAsync(db => db.Notifications.CountAsync(n =>
+            n.Subject == "Course overdue" && n.UserId != staff.Id && n.Message.Contains($"Enrolment {enrollmentId} ")));
+
+        // A week to go: nothing to say yet.
+        await scheduler.RunOnceAsync(CancellationToken.None);
+        Assert.Equal(0, await SaidAsync("Course due soon"));
+
+        // Two days to go: said once, however often the scheduler runs.
+        await DueInAsync(enrollmentId, days: 2);
+        await scheduler.RunOnceAsync(CancellationToken.None);
+        await scheduler.RunOnceAsync(CancellationToken.None);
+        Assert.Equal((1, 0), (await SaidAsync("Course due soon"), await SaidAsync("Course overdue")));
+
+        // A day late: the learner and every training manager are told, once.
+        await DueInAsync(enrollmentId, days: -1);
+        await scheduler.RunOnceAsync(CancellationToken.None);
+        await scheduler.RunOnceAsync(CancellationToken.None);
+        var managers = await factory.WithDbAsync(db => db.Users.CountAsync(u => u.Role.RoleName == Domain.Identity.RoleName.TrainingManager
+                                                                               && u.Status == Domain.Identity.UserStatus.Active));
+        Assert.Equal((1, 1, managers), (await SaidAsync("Course due soon"), await SaidAsync("Course overdue"), await ReportedAsync()));
+        Assert.Equal(["ESCALATE_OVERDUE", "REMIND_DUE"], await factory.WithDbAsync(db => db.AuditLogs
+            .Where(a => a.EntityType == "Enrollment" && a.EntityId == enrollmentId && a.Action != "ASSIGN")
+            .OrderBy(a => a.Action).Select(a => a.Action).ToListAsync()));
+    }
+
+    [Fact]
     public async Task Path_of_a_role_with_nothing_mandatory_is_empty_and_an_unknown_user_has_none()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);

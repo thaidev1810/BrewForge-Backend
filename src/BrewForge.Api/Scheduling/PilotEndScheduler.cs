@@ -12,6 +12,10 @@ public sealed class SchedulerOptions
 
     /// <summary>How often queued notifications are delivered. Zero or less turns the dispatcher off.</summary>
     public int NotificationIntervalSeconds { get; set; } = 30;
+
+    /// <summary>How often learners are reminded of courses due soon and overdue ones are reported. Zero or less turns it off.</summary>
+    public int ReminderIntervalMinutes { get; set; } = 60;
+
 }
 
 /// <summary>

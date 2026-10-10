@@ -25,6 +25,8 @@ builder.Services.AddSingleton<PilotEndScheduler>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<PilotEndScheduler>());
 builder.Services.AddSingleton<NotificationDispatcher>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<NotificationDispatcher>());
+builder.Services.AddSingleton<TrainingReminderScheduler>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<TrainingReminderScheduler>());
 
 builder.Services.AddControllers()
     .AddJsonOptions(json =>
