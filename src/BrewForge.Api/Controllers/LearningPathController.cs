@@ -21,4 +21,14 @@ public sealed class LearningPathController(LearningPathService paths) : Controll
     [HttpGet("learning-paths/{userId:long}"), AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager)]
     public Task<LearningPathDto> Get(long userId, CancellationToken cancellationToken) =>
         paths.GetPathAsync(userId, cancellationToken);
+
+    /// <summary>
+    /// Assigns, self-paced, every course of the path that is open to the user
+    /// and that they are neither certified nor enrolled on. A new user gets
+    /// this by itself; this is for staff who were there before a course was
+    /// published.
+    /// </summary>
+    [HttpPost("learning-paths/{userId:long}/assign"), AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager)]
+    public Task<PathAssignmentDto> Assign(long userId, CancellationToken cancellationToken) =>
+        paths.AssignAsync(userId, cancellationToken);
 }

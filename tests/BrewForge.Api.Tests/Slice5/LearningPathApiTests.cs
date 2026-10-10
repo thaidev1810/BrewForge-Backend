@@ -118,6 +118,30 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Course_published_after_somebody_joined_is_assigned_on_request()
+    {
+        var staff = await NewTraineeAsync("B03");
+        var later = await NewPublishedInductionCourseAsync();
+        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+
+        // Publishing a course assigns it to nobody: it is on the path, open and not taken.
+        var before = (await (await manager.GetAsync($"{Paths}/{staff.Id}")).ShouldBeAsync(HttpStatusCode.OK))
+            .GetProperty("stages").EnumerateArray().First();
+        Assert.Equal("AVAILABLE", CourseOf(before, later).GetProperty("status").GetString());
+
+        var assigned = await (await manager.PostAsync($"{Paths}/{staff.Id}/assign", null)).ShouldBeAsync(HttpStatusCode.OK);
+
+        var enrollmentId = Assert.Single(assigned.GetProperty("enrollmentIds").EnumerateArray()).GetInt64();
+        var after = assigned.GetProperty("path").GetProperty("stages").EnumerateArray().First();
+        Assert.Equal(("ENROLLED", enrollmentId), (CourseOf(after, later).GetProperty("status").GetString(),
+            CourseOf(after, later).GetProperty("enrollmentId").GetInt64()));
+
+        // Asking again assigns nothing twice.
+        var again = await (await manager.PostAsync($"{Paths}/{staff.Id}/assign", null)).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Empty(again.GetProperty("enrollmentIds").EnumerateArray());
+    }
+
+    [Fact]
     public async Task Path_of_a_role_with_nothing_mandatory_is_empty_and_an_unknown_user_has_none()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);

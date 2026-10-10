@@ -25,6 +25,8 @@ public sealed record PathStageDto(CourseType CourseType, CourseType? Prerequisit
 public sealed record LearningPathDto(long UserId, string Username, string FullName, RoleName Role, long? BranchId,
     IReadOnlyList<PathStageDto> Stages);
 
+public sealed record PathAssignmentDto(LearningPathDto Path, IReadOnlyList<long> EnrollmentIds);
+
 /// <summary>
 /// The learning path of a member of staff: what the training regulation
 /// makes mandatory for their role, in the order its prerequisites impose.
@@ -133,6 +135,14 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
             }
         }
         return created;
+    }
+
+    /// <summary>Runs the assignment for a user on request, for staff who were there before a course was published.</summary>
+    public async Task<PathAssignmentDto> AssignAsync(long userId, CancellationToken cancellationToken)
+    {
+        var created = await AssignOpenStagesAsync(userId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return new PathAssignmentDto(await GetPathAsync(userId, cancellationToken), [.. created.Select(e => e.Id)]);
     }
 
     // ---------------------------------------------------------------- loading
