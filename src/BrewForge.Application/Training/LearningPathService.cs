@@ -103,6 +103,38 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
     public async Task<LearningPathDto> GetPathAsync(long userId, CancellationToken cancellationToken) =>
         ToDto(await LoadAsync(userId, tracking: false, cancellationToken));
 
+    /// <summary>
+    /// Assigns, self-paced, every course of the user's path that is open to
+    /// them and that they are neither certified on nor enrolled on. Nothing
+    /// is saved here: the caller saves, in the transaction of what caused the
+    /// assignment. Returns the enrolments created.
+    /// </summary>
+    public async Task<IReadOnlyList<Enrollment>> AssignOpenStagesAsync(long userId, CancellationToken cancellationToken)
+    {
+        var path = await LoadAsync(userId, tracking: true, cancellationToken);
+        if (!path.User.IsActive) return [];
+
+        var now = clock.GetUtcNow();
+        var created = new List<Enrollment>();
+        foreach (var stage in path.Stages.Where(stage => !stage.Blocked))
+        {
+            foreach (var course in stage.Courses.Where(course => path.StatusOf(stage, course) == Available))
+            {
+                var enrollment = Enrollment.Assign(course, userId, trainingClassId: null, stage.Regulation.Rules, now);
+                db.Enrollments.Add(enrollment);
+                created.Add(enrollment);
+                db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Assign, new
+                {
+                    enrollment.CourseId, enrollment.UserId, enrollment.DueDate, regulationId = stage.Regulation.Id,
+                    reason = "LEARNING_PATH",
+                });
+                db.Notify(userId, "Course assigned",
+                    $"'{course.Title}' is part of your training path. Due {enrollment.DueDate:yyyy-MM-dd}.", now);
+            }
+        }
+        return created;
+    }
+
     // ---------------------------------------------------------------- loading
 
     private sealed record Stage(TrainingRegulation Regulation, bool Blocked, List<Course> Courses);

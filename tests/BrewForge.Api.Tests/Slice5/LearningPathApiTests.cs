@@ -25,6 +25,47 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     private sealed record NewStaff(string Username, long Id);
 
     [Fact]
+    public async Task New_member_of_staff_is_put_on_the_induction_course_and_held_back_from_the_product_courses()
+    {
+        var drink = await TaughtDrinkAtB03Async();
+        var induction = await InductionCourseIdAsync();
+
+        var staff = await NewTraineeAsync("B03");
+
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var path = await (await trainer.GetAsync($"{Paths}/{staff.Id}")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal((staff.Id, staff.Username, "TRAINEE"), (path.GetProperty("userId").GetInt64(),
+            path.GetProperty("username").GetString(), path.GetProperty("role").GetString()));
+
+        // Induction first, with nothing before it: assigned by itself, due by the regulation.
+        var stages = path.GetProperty("stages").EnumerateArray().ToList();
+        Assert.Equal(["INDUCTION", "PRODUCT"], stages.Select(stage => stage.GetProperty("courseType").GetString()));
+        Assert.Equal((false, JsonValueKind.Null), (stages[0].GetProperty("blocked").GetBoolean(), stages[0].GetProperty("prerequisiteType").ValueKind));
+        var welcome = CourseOf(stages[0], induction);
+        Assert.Equal(("ENROLLED", "ASSIGNED", Today.AddDays(stages[0].GetProperty("dueDays").GetInt32()).ToString("yyyy-MM-dd")),
+            (welcome.GetProperty("status").GetString(), welcome.GetProperty("enrollmentState").GetString(), welcome.GetProperty("dueDate").GetString()));
+
+        // The drinks of their branch come after induction: shown, and not open yet.
+        Assert.Equal((true, "INDUCTION"), (stages[1].GetProperty("blocked").GetBoolean(), stages[1].GetProperty("prerequisiteType").GetString()));
+        var product = CourseOf(stages[1], drink.CourseId);
+        Assert.Equal(("BLOCKED", JsonValueKind.Null), (product.GetProperty("status").GetString(), product.GetProperty("enrollmentId").ValueKind));
+
+        // They were told, and the assignment is on record as the path's doing.
+        var enrollmentId = welcome.GetProperty("enrollmentId").GetInt64();
+        Assert.True(await factory.WithDbAsync(db => db.Notifications.AnyAsync(n => n.UserId == staff.Id && n.Subject == "Course assigned")));
+        var assigned = await factory.WithDbAsync(db => db.AuditLogs.SingleAsync(a =>
+            a.EntityType == "Enrollment" && a.EntityId == enrollmentId && a.Action == "ASSIGN"));
+        Assert.Contains("LEARNING_PATH", assigned.PayloadJson);
+
+        // The same path, as they see it themselves.
+        using var self = await factory.ClientForAsync(staff.Username);
+        var mine = await (await self.GetAsync("/api/v1/me/learning-path")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(path.GetRawText(), mine.GetRawText());
+        Assert.Contains(enrollmentId, (await (await self.GetAsync("/api/v1/me/enrollments")).ShouldBeAsync(HttpStatusCode.OK))
+            .EnumerateArray().Select(e => e.Id()));
+    }
+
+    [Fact]
     public async Task Course_is_not_opened_to_somebody_who_has_not_passed_its_prerequisite()
     {
         var staff = await NewTraineeAsync("B01");
