@@ -21,6 +21,15 @@ public sealed class RecipeVersionsController(RecipeService recipes, RecipeValida
     public Task<RecipeVersionDto> Get(long id, CancellationToken cancellationToken) =>
         recipes.GetVersionAsync(id, cancellationToken);
 
+    /// <summary>
+    /// What differs from an earlier version of the same recipe, step by step.
+    /// <c>?against=</c> names that version; without it, the one that was in
+    /// production before this one. Not in the contract table.
+    /// </summary>
+    [HttpGet("{id:long}/diff"), Authorize(Policy = Policies.HeadOffice)]
+    public Task<RecipeVersionDiffDto> Diff(long id, [FromQuery] long? against, CancellationToken cancellationToken) =>
+        recipes.DiffAsync(id, against, cancellationToken);
+
     /// <summary>Replaces the content of a draft. 409 BR-01 on a released version.</summary>
     [HttpPut("{id:long}"), Authorize(Policy = Policies.RdSpecialist)]
     public Task<RecipeVersionDto> Update(long id, RecipeContentRequest request,

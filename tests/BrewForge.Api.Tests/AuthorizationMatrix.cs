@@ -82,6 +82,7 @@ public static class AuthorizationMatrix
         new("GET", "/recipes/{id}/versions", HeadOffice),
         new("POST", "/recipes/{id}/versions", Specialist),
         new("GET", "/recipe-versions/{id}", HeadOffice),
+        new("GET", "/recipe-versions/{id}/diff", HeadOffice),
         new("PUT", "/recipe-versions/{id}", Specialist),
         new("POST", "/recipe-versions/{id}/generate-draft", Specialist),
         new("POST", "/recipe-versions/{id}/validate", [RoleName.RdSpecialist, RoleName.RdManager]),
