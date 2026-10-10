@@ -129,6 +129,27 @@ public sealed class RecertificationApiTests(BrewForgeApiFactory factory)
         Assert.Contains("existingCourseId", (await second.ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "BR-18")).DetailFields());
     }
 
+    [Fact]
+    public async Task Somebody_never_certified_on_the_drink_is_not_put_on_its_recertification_course()
+    {
+        var drink = await NewChangedDrinkAsync();
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var course = await PublishAsync(await NewRecertificationCourseAsync(drink));
+        var newcomer = await factory.UserIdAsync("trainee2");
+
+        var refusal = await (await trainer.PostAsJsonAsync($"{Classes}/{await NewClassAsync(course.Id())}/open",
+                new { traineeIds = new[] { drink.TraineeId, newcomer } }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RECERTIFICATION");
+
+        Assert.Contains("traineeIds", refusal.DetailFields());
+        Assert.Contains($"user {newcomer}", refusal.GetProperty("details")[0].GetProperty("issue").GetString());
+        Assert.False(await factory.WithDbAsync(db => db.Enrollments.AnyAsync(e => e.CourseId == course.Id())));
+
+        // A branch where nobody was certified on the drink has nobody for such a class either.
+        await (await trainer.PostAsJsonAsync($"{Classes}/{await NewClassAsync(course.Id(), "B02")}/open", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RECERTIFICATION");
+    }
+
     // ---------------------------------------------------------------- helpers
 
     /// <summary>
