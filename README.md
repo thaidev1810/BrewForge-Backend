@@ -161,6 +161,8 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | A regulation change spares enrolments in flight | `TrainingRegulation.Resolve`, `EnsureNotRetroactive` | `TrainingTests.Enrolment_keeps_the_rule_*`, `TrainingApiTests.Regulation_change_*` |
 | A course built from no recipe is certified through a checklist of its TECHNIQUE lessons | `Course.PracticalChecklist`, `Enrollment.EvaluatePractical` | `CourseWithoutRecipeApiTests` |
 | A notification is queued with the change and delivered by e-mail and Web Push, each channel once | `NotificationExtensions.Notify`, `Notification.RecordAttempt`, `NotificationService.DispatchPendingAsync`, `WebPushEncryption` | `NotificationApiTests`, `WebPushTests` |
+| Two versions of a recipe are compared step by step | `RecipeVersionDiff.Between` | `RecipeVersionDiffTests`, `RecertificationApiTests.Two_versions_*` |
+| A recertification course teaches what changed, to staff certified before, and its certificate replaces the flagged one | `Course.WhatToRelearn`, `CourseModuleGenerator.Generate`, `TrainingClassService.OnlyCertifiedBeforeAsync`, `Enrollment.TryCertify` | `RecertificationCourseTests`, `AssessmentTests.Certificate_on_a_newer_version_*`, `RecertificationApiTests` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -521,6 +523,41 @@ notification.
 - Without the settings above, both channels are skipped and everything else
   works, as with the language model.
 - Two instances of the API would both send: run the dispatcher in one.
+
+**Comparing versions and re-certification.** The pack stops at flagging: a
+superseded version leaves its course OUT_OF_DATE and its certificates
+NEEDS_RECERT, and a certified person could not be enrolled on the rebuilt
+course again, since their passed enrolment on it still stands. Three things
+close that loop, without a schema change.
+
+- `GET /recipe-versions/{id}/diff` compares a version with the one that was in
+  production before it (or with `?against=`), step by step. Two versions share
+  no rows, so steps are lined up by their action text: the longest run both
+  have in common is matched, what lies between two matches is paired off in
+  order as reworded steps, and the rest was added or removed. A step that only
+  moved down because another was inserted has not changed. For a step in both
+  versions, `changedFields` names what differs (`actionText`, `equipmentClass`,
+  `techniqueGate`, `durationSeconds`, `ingredients`, `dependsOn`), with the
+  quantity of each ingredient before and after.
+- `POST /courses` with `courseType: "RECERTIFICATION"` builds a course on a
+  released version from that comparison. It has the seven modules of any
+  course (BR-29), but its SOP module has a lesson only for each step that was
+  added or changed, and names each step that is gone; its technique gates, and
+  so its practical checklist, are those of the changed steps. It is refused
+  for the first version of a recipe and when no step differs
+  (`409 RECERTIFICATION`), and there is one per version beside the PRODUCT
+  course (`409 BR-18`). `recertification` on the course says which version it
+  starts from. Such a course is not rebuilt on a third version: a new one is
+  built on the version that replaced it.
+- It is for staff certified on an earlier version of the drink. Opening a
+  class of it for a whole branch enrols those who were and leaves the others
+  for the PRODUCT course; naming somebody who was not is refused
+  (`409 RECERTIFICATION`). `GET /training-needs` lists them with the reason
+  `RECERTIFICATION`, and no longer sends them to the whole course as well.
+- The certificate earned on the newer version supersedes the holder's
+  certificates on earlier versions of the same drink, whichever course they
+  came from; they are kept and point at it (BR-15). The regulation counts a
+  valid certificate on a version however it was earned.
 
 ## Known gaps
 
