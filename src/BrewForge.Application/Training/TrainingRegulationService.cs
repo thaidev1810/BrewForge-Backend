@@ -185,6 +185,13 @@ public sealed class TrainingRegulationService(IBrewForgeDbContext db, ICurrentUs
                 .Select(e => new { e.UserId, e.CourseId, e.State }).ToListAsync(cancellationToken))
             .GroupBy(e => (e.UserId, e.CourseId)).ToDictionary(g => g.Key, g => g.First().State);
 
+        var boundVersions = courses.Select(c => c.RecipeVersionId).OfType<long>().Distinct().ToList();
+        var certifiedOnVersion = (await db.Certificates.AsNoTracking()
+                .Where(c => c.Status == CertificateStatus.Valid && c.RecipeVersionId != null
+                            && boundVersions.Contains(c.RecipeVersionId.Value) && userIds.Contains(c.UserId))
+                .Select(c => new { c.UserId, VersionId = c.RecipeVersionId!.Value }).ToListAsync(cancellationToken))
+            .Select(c => (c.UserId, c.VersionId)).ToHashSet();
+
         var needs = new List<TrainingNeedDto>();
         foreach (var regulation in inForce)
         {
@@ -193,6 +200,7 @@ public sealed class TrainingRegulationService(IBrewForgeDbContext db, ICurrentUs
                 foreach (var user in users.Where(u => u.Role.RoleName == regulation.MandatoryForRole))
                 {
                     if (certified.Contains((user.Id, course.Id))) continue;
+                    if (course.RecipeVersionId is { } versionId && certifiedOnVersion.Contains((user.Id, versionId))) continue;
                     needs.Add(new TrainingNeedDto(user.Id, user.Username, user.FullName, user.BranchId, course.Id,
                         course.Title, course.CourseType, RegulationReason, regulation.Id, regulation.DueDays,
                         regulation.PrerequisiteType,
