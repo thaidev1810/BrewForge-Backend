@@ -152,6 +152,10 @@ public static class AuthorizationMatrix
         new("GET", "/me/certificates", Learners),
         new("GET", "/certificates/{id}", [RoleName.Trainee, RoleName.Trainer, RoleName.QualityAuditor]),
 
+        // The learning path. Not in the contract.
+        new("GET", "/me/learning-path", Learners),
+        new("GET", "/learning-paths/{userId}", [RoleName.Trainer, RoleName.TrainingManager]),
+
         // Web Push for the caller. Not in the contract.
         new("GET", "/push/config", Everyone),
         new("GET", "/me/push-subscriptions", Everyone),

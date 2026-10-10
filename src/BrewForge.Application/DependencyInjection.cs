@@ -37,6 +37,7 @@ public static class DependencyInjection
         services.AddScoped<TrainingRegulationService>();
         services.AddScoped<TrainingClassService>();
         services.AddScoped<LearningService>();
+        services.AddScoped<LearningPathService>();
         services.AddScoped<AssessmentService>();
         services.AddScoped<LaunchReadinessService>();
         services.AddScoped<LaunchHistory>();
