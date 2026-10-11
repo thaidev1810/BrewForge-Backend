@@ -29,6 +29,7 @@ public static class DependencyInjection
         services.AddScoped<RecipeValidationService>();
         services.AddScoped<RecipeDraftingService>();
         services.AddScoped<RecipeReleaseService>();
+        services.AddScoped<RecipeFeedbackService>();
 
         services.AddScoped<CourseRenderer>();
         services.AddScoped<CourseService>();

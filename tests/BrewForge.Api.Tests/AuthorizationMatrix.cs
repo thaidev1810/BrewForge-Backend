@@ -97,6 +97,11 @@ public static class AuthorizationMatrix
         new("POST", "/recipe-versions/{id}/rollback", Manager),
         new("POST", "/recipes/import-existing", Specialist),
 
+        // Feedback on a recipe from the counter. Not in the contract.
+        new("POST", "/recipes/{id}/feedback", [RoleName.Trainee, RoleName.Trainer, RoleName.BranchManager]),
+        new("GET", "/recipe-feedback/{id}", Everyone),
+
+
         // 5. Course authoring
         new("GET", "/courses", [RoleName.Trainer, RoleName.TrainingManager, RoleName.RdManager]),
         new("POST", "/courses", TrainerOnly),

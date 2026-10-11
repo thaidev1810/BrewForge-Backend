@@ -111,6 +111,7 @@ public static class AuditEntities
     public const string StandardEquipment = "StandardEquipment";
     public const string Recipe = "Recipe";
     public const string RecipeVersion = "RecipeVersion";
+    public const string RecipeFeedback = "RecipeFeedback";
     public const string Course = "Course";
     public const string CourseModule = "CourseModule";
     public const string Lesson = "Lesson";
