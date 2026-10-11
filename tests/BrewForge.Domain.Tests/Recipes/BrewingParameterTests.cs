@@ -37,6 +37,56 @@ public sealed class BrewingParameterTests
 
     private static DomainException Refused(Action action) => Assert.Throws<DomainException>(action);
 
+    // ---------------------------------------------------------------- BR-10: a machine set by temperature or pressure
+
+    // KETTLE is 80.0 - 100.0 degC.
+
+    [Theory]
+    [InlineData(80, true)]
+    [InlineData(92.5, true)]
+    [InlineData(100, true)]
+    [InlineData(79.9, false)]
+    public void BR_10_a_machine_set_by_temperature_is_held_to_its_range(double temperature, bool accepted) =>
+        Assert.Equal(accepted, Equipment(Heat((decimal)temperature)).Count == 0);
+
+    [Fact]
+    public void BR_10_a_temperature_outside_the_range_is_reported_like_any_dose()
+    {
+        var violation = Assert.Single(Equipment(Heat(75m)));
+
+        Assert.Equal(("BR-10", "MSG-E10", 1), (violation.Rule, violation.Code, violation.StepOrder));
+        Assert.Equal("75.0 degC is outside the 80.0-100.0 degC range of KETTLE", violation.Message);
+        Assert.Equal(("80.0 - 100.0", "75.0"), (violation.Expected, violation.Actual));
+    }
+
+    [Fact]
+    public void BR_10_a_machine_set_by_temperature_must_be_told_its_temperature()
+    {
+        var violation = Assert.Single(Equipment(Heat(null)));
+
+        Assert.Equal(("BR-10", "no temperature"), (violation.Rule, violation.Actual));
+        Assert.Contains("needs a temperature", violation.Message);
+    }
+
+    // PRESSURE_EXTRACTOR is 8.0 - 10.0 bar.
+
+    [Theory]
+    [InlineData(8, true)]
+    [InlineData(9.5, true)]
+    [InlineData(10, true)]
+    [InlineData(7.9, false)]
+    [InlineData(10.1, false)]
+    public void BR_10_a_machine_set_by_pressure_is_held_to_its_range(double pressure, bool accepted) =>
+        Assert.Equal(accepted, Equipment(Extract((decimal)pressure)).Count == 0);
+
+    [Fact]
+    public void BR_10_a_machine_set_by_pressure_must_be_told_its_pressure() =>
+        Assert.Equal("no pressure", Assert.Single(Equipment(Extract(null))).Actual);
+
+    [Fact]
+    public void Temperature_on_a_machine_that_is_not_set_by_it_is_no_concern_of_the_equipment_check() =>
+        Assert.Empty(Equipment(Brew(5m)));
+
     // ---------------------------------------------------------------- the window of a leaf
 
     [Fact]

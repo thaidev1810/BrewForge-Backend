@@ -18,10 +18,10 @@ namespace BrewForge.Domain.Recipes.Validation;
 /// this machine and is not range-checked here; that its unit suits the
 /// ingredient is the ingredient check's concern.</item>
 /// <item><c>sec</c>: the step's <c>duration_seconds</c>, which must be given.</item>
-/// <item><c>degC</c> / <c>bar</c>: the schema records no numeric temperature
-/// or pressure for a step (the technique gate is free text for the trainer),
-/// so there is no value to compare and only the catalogue membership is
-/// checked.</item>
+/// <item><c>degC</c> / <c>bar</c>: the temperature or the pressure the step
+/// states, which must be given: a kettle or an extraction that is not told
+/// its setting cannot be checked, and is not left unchecked.</item>
+
 /// </list>
 /// </summary>
 public sealed class EquipmentCheck : IRecipeCheck
@@ -60,6 +60,13 @@ public sealed class EquipmentCheck : IRecipeCheck
                 case DosingUnit.Second:
                     CheckDuration(step, equipment, violations);
                     break;
+                case DosingUnit.DegreeCelsius:
+                    CheckSetting(step, equipment, step.TemperatureC, "temperature", violations);
+                    break;
+                case DosingUnit.Bar:
+                    CheckSetting(step, equipment, step.PressureBar, "pressure", violations);
+                    break;
+
             }
         }
 
@@ -90,6 +97,21 @@ public sealed class EquipmentCheck : IRecipeCheck
         if (seconds >= equipment.MinThreshold && seconds <= equipment.MaxThreshold) return;
 
         violations.Add(OutOfRange(step, equipment, seconds));
+    }
+
+    private static void CheckSetting(RecipeStep step, StandardEquipment equipment, decimal? setting, string what,
+        List<Violation> violations)
+    {
+        if (setting is not { } value)
+        {
+            violations.Add(new Violation(step.Id, step.StepOrder, Rule,
+                $"{equipment.EquipmentClass} is set by {what}, so the step needs a {what}",
+                Range(equipment), $"no {what}"));
+            return;
+        }
+        if (value >= equipment.MinThreshold && value <= equipment.MaxThreshold) return;
+
+        violations.Add(OutOfRange(step, equipment, value));
     }
 
     private static Violation OutOfRange(RecipeStep step, StandardEquipment equipment, decimal dose)
