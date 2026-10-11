@@ -169,6 +169,7 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | A document of an existing drink is transcribed, each step held to the passage it quotes | `RecipeExtractSchema`, `SourceGrounding`, `RecipeExtractionParser`, `RecipeDraftingService.ExtractAsync` | `DocumentExtractionUnitTests`, `DocumentExtractionApiTests` |
 | A variant is content of its version and must pass like it | `RecipeVariant.Apply`, `RecipeVersion.ReplaceVariants`, `AsServed`, `RecipeValidator.Validate`; triggers on `recipe_variant` | `RecipeVariantTests`, `RecipeVariantApiTests` |
 | A picture of a lesson is a picture by its content, and goes only where the trainer writes | `LessonMedia.Format`, `CourseModule.EnsureAcceptsMedia`, `Course.AddLessonMedia` | `LessonMediaTests`, `LessonMediaApiTests` |
+| A quiz with a draw gives each attempt so many questions of every module, and marks it against those | `Quiz.DrawFor`, `QuestionsPerAttempt`, `Enrollment.AttemptQuiz`, `NextAttemptNo` | `QuestionDrawTests`, `QuestionDrawApiTests` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -610,6 +611,31 @@ video is not uploaded to a lesson.
   under `Storage:LessonMediaRoot` (`storage/lesson-media` by default), behind
   `ILessonMediaStorage`, on the same local file store as the recordings of
   practicals.
+
+**The quiz as a bank of questions** (`007_question_draw.sql`: column
+`quiz.draw_per_module`). In the pack a quiz is its questions, all of them, the
+same on every attempt, so a trainee who fails meets the very same questions on
+the retake. A quiz may now draw: each attempt is given so many questions of
+each module, and the next attempt is given others.
+
+- `PUT /courses/{id}/quiz` takes `drawPerModule` (1 to 50; 0 turns the draw
+  off; left out, it stays as it is), while the course is a draft like the rest
+  of the quiz. The quiz answers with `drawPerModule` and `questionsPerAttempt`,
+  what the draw comes to with the questions there are now.
+- The draw is per module, not over the whole quiz: a module with fewer
+  questions than the draw is asked all of them, and no module is ever left
+  out. BR-35 keeps its point, and a failed attempt still says which modules to
+  study again.
+- Nothing about a draw is stored. It is fixed by the quiz, the enrolment and
+  the number of the attempt (a hash of the four ids orders the questions of a
+  module), so `GET /enrollments/{id}/quiz` serves the same questions however
+  often it is asked, with the `attemptNo` they are for, and
+  `POST /enrollments/{id}/quiz-attempts` is marked against exactly those. The
+  score is over the questions drawn; an answer to a question that was not
+  drawn is refused (`400`), not ignored.
+- Attempt numbers are never reused, across a reset as well, so a retake is
+  always another draw. It may share questions with the one before: a bank
+  larger than the draw is what makes them differ.
 
 **Digitising an existing recipe.** UC-26 in the pack is a person typing the
 chain's document into the structure. Here the model does the typing, and is
