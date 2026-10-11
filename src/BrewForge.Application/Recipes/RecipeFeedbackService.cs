@@ -27,12 +27,24 @@ public sealed record FeedbackReviewRequest(string? Note);
 
 public sealed record FeedbackAddressRequest(long? RecipeVersionId);
 
+public sealed record FeedbackVersionSummaryDto(long RecipeVersionId, int? VersionNo, int FromStaff, int FromCustomers,
+    double? AverageRating);
+
+/// <summary><c>Open</c> counts what was accepted and no version has taken in yet: what the next draft should look at.</summary>
+public sealed record RecipeFeedbackSummaryDto(long RecipeId, int Total, int New, int Open, int Rejected, int Addressed,
+    int FromStaff, int FromCustomers, double? AverageRating, IReadOnlyList<FeedbackVersionSummaryDto> Versions);
+
 /// <summary>
 /// Feedback on a recipe from the people who make the drink and the people
 /// who drink it, and what R&amp;D makes of it.
 /// </summary>
 public sealed class RecipeFeedbackService(IBrewForgeDbContext db, ICurrentUser currentUser, TimeProvider clock)
 {
+    private static readonly SortMap<RecipeFeedback> Sorting = new SortMap<RecipeFeedback>("createdAt,desc", f => f.Id)
+        .Add("id", f => f.Id)
+        .Add("createdAt", f => f.CreatedAt)
+        .Add("rating", f => f.Rating);
+
     // ---------------------------------------------------------------- submitting
 
     /// <summary>
@@ -146,12 +158,74 @@ public sealed class RecipeFeedbackService(IBrewForgeDbContext db, ICurrentUser c
         };
     }
 
+    public async Task<PagedResult<RecipeFeedbackDto>> ListAsync(PageQuery paging, long? recipeId, string? state,
+        string? source, string? category, long? branchId, bool mine, CancellationToken cancellationToken)
+    {
+        var query = Visible();
+        if (recipeId is not null) query = query.Where(f => f.RecipeId == recipeId);
+        if (PagingExtensions.ParseFilter<FeedbackState>(state, "state") is { } wantedState)
+        {
+            query = query.Where(f => f.State == wantedState);
+        }
+        if (PagingExtensions.ParseFilter<FeedbackSource>(source, "source") is { } wantedSource)
+        {
+            query = query.Where(f => f.Source == wantedSource);
+        }
+        if (PagingExtensions.ParseFilter<FeedbackCategory>(category, "category") is { } wantedCategory)
+        {
+            query = query.Where(f => f.Category == wantedCategory);
+        }
+        if (branchId is not null) query = query.Where(f => f.BranchId == branchId);
+        if (mine)
+        {
+            var userId = currentUser.RequireUserId();
+            query = query.Where(f => f.SubmittedBy == userId);
+        }
+
+        var page = await query.ToPagedAsync(paging, Sorting, f => f, cancellationToken);
+        return new PagedResult<RecipeFeedbackDto>(await ToDtosAsync(page.Items, cancellationToken), page.Page, page.Size,
+            page.Total);
+    }
+
     public async Task<RecipeFeedbackDto> GetAsync(long id, CancellationToken cancellationToken)
     {
         // What the caller may not see does not exist for them.
         var feedback = await Visible().SingleOrDefaultAsync(f => f.Id == id, cancellationToken)
                        ?? throw DomainException.NotFound("Recipe feedback", id);
         return (await ToDtosAsync([feedback], cancellationToken))[0];
+    }
+
+    /// <summary>What a drink has been told, in numbers: by state, by source, and how customers rate each version.</summary>
+    public async Task<RecipeFeedbackSummaryDto> SummaryAsync(long recipeId, CancellationToken cancellationToken)
+    {
+        if (!await db.Recipes.AnyAsync(r => r.Id == recipeId, cancellationToken))
+        {
+            throw DomainException.NotFound("Recipe", recipeId);
+        }
+        var rows = await db.RecipeFeedback.AsNoTracking().Where(f => f.RecipeId == recipeId)
+            .Select(f => new { f.RecipeVersionId, f.Source, f.State, f.Rating }).ToListAsync(cancellationToken);
+        var versionNos = await db.RecipeVersions.AsNoTracking().Where(v => v.RecipeId == recipeId)
+            .ToDictionaryAsync(v => v.Id, v => v.VersionNo, cancellationToken);
+
+        static double? Average(IEnumerable<int?> ratings)
+        {
+            var given = ratings.OfType<int>().ToList();
+            return given.Count == 0 ? null : Math.Round(given.Average(), 2);
+        }
+
+        return new RecipeFeedbackSummaryDto(recipeId, rows.Count,
+            rows.Count(r => r.State == FeedbackState.New), rows.Count(r => r.State == FeedbackState.Accepted),
+            rows.Count(r => r.State == FeedbackState.Rejected), rows.Count(r => r.State == FeedbackState.Addressed),
+            rows.Count(r => r.Source == FeedbackSource.Staff), rows.Count(r => r.Source == FeedbackSource.Customer),
+            Average(rows.Select(r => r.Rating)),
+            [
+                .. rows.GroupBy(r => r.RecipeVersionId)
+                    .Select(group => new FeedbackVersionSummaryDto(group.Key,
+                        versionNos.TryGetValue(group.Key, out var versionNo) ? versionNo : null,
+                        group.Count(r => r.Source == FeedbackSource.Staff),
+                        group.Count(r => r.Source == FeedbackSource.Customer), Average(group.Select(r => r.Rating))))
+                    .OrderBy(version => version.VersionNo),
+            ]);
     }
 
     // ---------------------------------------------------------------- reviewing

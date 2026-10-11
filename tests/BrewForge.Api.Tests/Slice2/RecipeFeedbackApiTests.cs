@@ -42,6 +42,13 @@ public sealed class RecipeFeedbackApiTests(BrewForgeApiFactory factory)
         return await client.PostAsJsonAsync($"{Feedback}/{feedbackId}/{verdict}", body ?? new { });
     }
 
+    private async Task<List<long>> ListedAsync(string username, string query)
+    {
+        using var client = await factory.ClientForAsync(username);
+        var page = await (await client.GetAsync($"{Feedback}?size=100&{query}")).ShouldBeAsync(HttpStatusCode.OK);
+        return [.. page.GetProperty("items").EnumerateArray().Select(item => item.Id())];
+    }
+
     private async Task<int> SaidAsync(string username, string subject, long recipeId)
     {
         var userId = await factory.UserIdAsync(username);
@@ -89,6 +96,8 @@ public sealed class RecipeFeedbackApiTests(BrewForgeApiFactory factory)
             .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "FEEDBACK_REQUIRES_TRAINING");
         await (await SubmitAsync(TestUsers.Trainer, drink.RecipeId, StaffNote()))
             .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "FEEDBACK_REQUIRES_TRAINING");
+
+        Assert.Empty(await ListedAsync(TestUsers.RdManager, $"recipeId={drink.RecipeId}"));
     }
 
     [Fact]
@@ -205,5 +214,89 @@ public sealed class RecipeFeedbackApiTests(BrewForgeApiFactory factory)
         // Still about the version its author made.
         Assert.Equal(drink.VersionId, addressed.GetProperty("recipeVersionId").GetInt64());
         Assert.Equal(1, await SaidAsync(TestUsers.Trainee, "Feedback taken into the recipe", drink.RecipeId));
+    }
+
+    // ---------------------------------------------------------------- who sees what
+
+    [Fact]
+    public async Task What_is_listed_depends_on_who_asks()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var mine = (await SubmittedAsync(TestUsers.Trainee, drink.RecipeId, StaffNote())).Id();
+        var colleagues = (await SubmittedAsync("trainee2", drink.RecipeId, StaffNote("Warm the cup first."))).Id();
+        var customers = (await SubmittedAsync(TestUsers.BranchManager, drink.RecipeId, CustomerRemark())).Id();
+        var ofDrink = $"recipeId={drink.RecipeId}";
+
+        // Head office reads everything.
+        Assert.Equal(new[] { mine, colleagues, customers }.Order(), (await ListedAsync(TestUsers.RdManager, ofDrink)).Order());
+        Assert.Equal(3, (await ListedAsync(TestUsers.Trainer, ofDrink)).Count);
+
+        // A trainee: their own, and nothing a colleague sent until R&D has accepted it.
+        Assert.Equal([mine], await ListedAsync(TestUsers.Trainee, ofDrink));
+        await (await ReviewAsync(colleagues, "accept")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(new[] { mine, colleagues }.Order(), (await ListedAsync(TestUsers.Trainee, ofDrink)).Order());
+        Assert.Equal([mine], await ListedAsync(TestUsers.Trainee, $"{ofDrink}&mine=true"));
+        // Even a trainee of another branch reads an accepted note: it is about the drink, not the branch.
+        Assert.Equal([colleagues], await ListedAsync(TraineeB02, ofDrink));
+
+        // A branch manager: what came from their branch.
+        Assert.Equal(3, (await ListedAsync(TestUsers.BranchManager, ofDrink)).Count);
+        Assert.Empty(await ListedAsync(TestUsers.BranchManagerB02, ofDrink));
+
+        // What the caller may not see does not exist for them.
+        using var trainee = await factory.ClientForAsync(TestUsers.Trainee);
+        using var otherBranch = await factory.ClientForAsync(TestUsers.BranchManagerB02);
+        await (await trainee.GetAsync($"{Feedback}/{mine}")).ShouldBeAsync(HttpStatusCode.OK);
+        await (await trainee.GetAsync($"{Feedback}/{customers}")).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+        await (await otherBranch.GetAsync($"{Feedback}/{customers}")).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task List_is_filtered_by_state_source_and_category()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var note = (await SubmittedAsync(TestUsers.Trainee, drink.RecipeId, StaffNote())).Id();
+        var mistake = (await SubmittedAsync("trainee2", drink.RecipeId,
+            new { source = "STAFF", category = "COMMON_MISTAKE", content = "Tapping twice packs the leaf." })).Id();
+        var remark = (await SubmittedAsync(TestUsers.BranchManager, drink.RecipeId, CustomerRemark())).Id();
+        await (await ReviewAsync(note, "accept")).ShouldBeAsync(HttpStatusCode.OK);
+        var ofDrink = $"recipeId={drink.RecipeId}";
+
+        Assert.Equal([note], await ListedAsync(TestUsers.RdManager, $"{ofDrink}&state=ACCEPTED"));
+        Assert.Equal(new[] { mistake, remark }.Order(), (await ListedAsync(TestUsers.RdManager, $"{ofDrink}&state=NEW")).Order());
+        Assert.Equal([remark], await ListedAsync(TestUsers.RdManager, $"{ofDrink}&source=CUSTOMER"));
+        Assert.Equal([mistake], await ListedAsync(TestUsers.RdManager, $"{ofDrink}&category=COMMON_MISTAKE"));
+        Assert.Equal([remark], await ListedAsync(TestUsers.RdManager, $"{ofDrink}&branchId={drink.BranchId}&source=CUSTOMER"));
+
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
+        Assert.Contains("state", (await (await manager.GetAsync($"{Feedback}?state=MAYBE"))
+            .ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
+    }
+
+    [Fact]
+    public async Task Summary_counts_the_feedback_of_a_drink_and_averages_what_customers_rated()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var note = (await SubmittedAsync(TestUsers.Trainee, drink.RecipeId, StaffNote())).Id();
+        var doubtful = (await SubmittedAsync("trainee2", drink.RecipeId, StaffNote("Skip the tap."))).Id();
+        await SubmittedAsync(TestUsers.BranchManager, drink.RecipeId, CustomerRemark(rating: 2));
+        await SubmittedAsync(TestUsers.BranchManager, drink.RecipeId, CustomerRemark(rating: 5, content: "Lovely."));
+        await SubmittedAsync("trainee2", drink.RecipeId, CustomerRemark(rating: 4, content: "Good, a bit strong."));
+        await (await ReviewAsync(note, "accept")).ShouldBeAsync(HttpStatusCode.OK);
+        await (await ReviewAsync(doubtful, "reject", new { note = "The tap levels the dose." })).ShouldBeAsync(HttpStatusCode.OK);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
+
+        var summary = await (await manager.GetAsync($"{Recipes}/{drink.RecipeId}/feedback-summary")).ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.Equal((5, 3, 1, 1, 0), (summary.GetProperty("total").GetInt32(), summary.GetProperty("new").GetInt32(),
+            summary.GetProperty("open").GetInt32(), summary.GetProperty("rejected").GetInt32(), summary.GetProperty("addressed").GetInt32()));
+        Assert.Equal((2, 3), (summary.GetProperty("fromStaff").GetInt32(), summary.GetProperty("fromCustomers").GetInt32()));
+        Assert.Equal(3.67, summary.GetProperty("averageRating").GetDouble());
+        var version = Assert.Single(summary.GetProperty("versions").EnumerateArray());
+        Assert.Equal((drink.VersionId, 1, 2, 3, 3.67), (version.GetProperty("recipeVersionId").GetInt64(),
+            version.GetProperty("versionNo").GetInt32(), version.GetProperty("fromStaff").GetInt32(),
+            version.GetProperty("fromCustomers").GetInt32(), version.GetProperty("averageRating").GetDouble()));
+
+        await (await manager.GetAsync($"{Recipes}/999999999/feedback-summary")).ShouldBeErrorAsync(HttpStatusCode.NotFound);
     }
 }

@@ -31,6 +31,23 @@ public sealed class RecipeFeedbackController(RecipeFeedbackService feedback) : C
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
+    /// <summary>Counts by state and source, and the customers' rating of each version.</summary>
+    [HttpGet("recipes/{id:long}/feedback-summary"), Authorize(Policy = Policies.HeadOffice)]
+    public Task<RecipeFeedbackSummaryDto> Summary(long id, CancellationToken cancellationToken) =>
+        feedback.SummaryAsync(id, cancellationToken);
+
+    /// <summary>
+    /// <c>?recipeId=&amp;state=&amp;source=&amp;category=&amp;branchId=&amp;mine=true</c>.
+    /// Every role may ask; what comes back depends on who asks: head office
+    /// everything, a branch manager what came from their branch, a trainee
+    /// their own and the staff remarks R&amp;D accepted.
+    /// </summary>
+    [HttpGet("recipe-feedback")]
+    public Task<PagedResult<RecipeFeedbackDto>> List([FromQuery] PageQuery paging, [FromQuery] long? recipeId,
+        [FromQuery] string? state, [FromQuery] string? source, [FromQuery] string? category,
+        [FromQuery] long? branchId, [FromQuery] bool mine, CancellationToken cancellationToken) =>
+        feedback.ListAsync(paging, recipeId, state, source, category, branchId, mine, cancellationToken);
+
     [HttpGet("recipe-feedback/{id:long}")]
     public Task<RecipeFeedbackDto> Get(long id, CancellationToken cancellationToken) =>
         feedback.GetAsync(id, cancellationToken);
