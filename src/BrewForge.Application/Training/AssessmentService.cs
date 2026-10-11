@@ -17,8 +17,9 @@ namespace BrewForge.Application.Training;
 public sealed record LearnerQuestionDto(long Id, long CourseModuleId, ModuleType ModuleType, string QuestionText,
     IReadOnlyList<QuizOption> Options);
 
+/// <summary><c>AttemptNo</c> is the attempt these questions are for: the answers of that attempt are marked against them.</summary>
 public sealed record LearnerQuizDto(long QuizId, string Title, int PassScore, int RetakesLeft,
-    IReadOnlyList<LearnerQuestionDto> Questions);
+    IReadOnlyList<LearnerQuestionDto> Questions, int AttemptNo = 1);
 
 public sealed record QuizAttemptRequest(IReadOnlyList<QuizAnswerRequest>? Answers);
 
@@ -77,9 +78,10 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
         var moduleTypes = course.Modules.ToDictionary(m => m.Id, m => m.ModuleType);
         return new LearnerQuizDto(course.Quiz.Id, course.Quiz.Title, course.Quiz.PassScore, enrollment.RetakesLeft(rules),
         [
-            .. course.Quiz.Questions.OrderBy(q => q.Id).Select(q =>
+            // The questions of the attempt to come, which are the ones its answers will be marked against.
+            .. course.Quiz.DrawFor(enrollment.Id, enrollment.NextAttemptNo).Select(q =>
                 new LearnerQuestionDto(q.Id, q.CourseModuleId, moduleTypes[q.CourseModuleId], q.QuestionText, q.Options())),
-        ]);
+        ], enrollment.NextAttemptNo);
     }
 
     /// <summary>UC-15. 409 BR-32 if not eligible, 409 BR-33 if no retakes are left.</summary>
