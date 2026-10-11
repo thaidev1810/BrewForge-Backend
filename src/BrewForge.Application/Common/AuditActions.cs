@@ -12,6 +12,7 @@ public static class AuditActions
 
     public const string Validate = "VALIDATE";
     public const string Submit = "SUBMIT";
+    public const string UpdateVariants = "UPDATE_VARIANTS";
     public const string AiDraft = "AI_DRAFT";
 
     /// <summary>

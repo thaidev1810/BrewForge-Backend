@@ -121,6 +121,7 @@ public sealed class RecipeService(IBrewForgeDbContext db, ICurrentUser currentUs
                 ?? throw DomainException.Validation("The version to copy from does not belong to this recipe.",
                     new ErrorDetail("copyFromVersionId", "is not a version of this recipe"));
             version.ReplaceContent(source.ToSpecs(), authorId);
+            version.ReplaceVariants(source.VariantSpecs(), authorId);
         }
 
         db.RecipeVersions.Add(version);
@@ -195,6 +196,82 @@ public sealed class RecipeService(IBrewForgeDbContext db, ICurrentUser currentUs
             new { version.VersionNo, steps = specs.Count });
         await db.SaveChangesAsync(cancellationToken);
         return await db.ToDtoAsync(version, cancellationToken);
+    }
+
+    /// <summary>
+    /// Replaces the variants of a draft: the sizes and the hot or iced
+    /// servings of the drink, each a scale on the quantities of the version.
+    /// A released version refuses with BR-01, like its steps.
+    /// </summary>
+    public async Task<RecipeVersionDto> ReplaceVariantsAsync(long id, VariantsRequest request,
+        CancellationToken cancellationToken)
+    {
+        var version = await db.FindVersionAsync(id, cancellationToken);
+        version.EnsureMutable();
+
+        var variants = request.Variants ?? throw DomainException.Validation("The variants are missing.",
+            new ErrorDetail("variants", "is required; send an empty list to remove them all"));
+        var codes = variants.SelectMany(v => v.Ingredients ?? []).Select(i => i.IngredientCode).OfType<string>().Distinct().ToList();
+        var idsByCode = await db.Ingredients.AsNoTracking().Where(i => codes.Contains(i.IngredientCode))
+            .ToDictionaryAsync(i => i.IngredientCode, i => i.Id, cancellationToken);
+
+        var errors = new FieldErrors();
+        var specs = new List<VariantSpec>();
+        for (var i = 0; i < variants.Count; i++)
+        {
+            var scaled = new List<VariantIngredientSpec>();
+            var ingredients = variants[i].Ingredients ?? [];
+            for (var j = 0; j < ingredients.Count; j++)
+            {
+                var at = $"variants[{i}].ingredients[{j}]";
+                long? ingredientId = ingredients[j].IngredientId
+                                     ?? (ingredients[j].IngredientCode is { } code && idsByCode.TryGetValue(code, out var known) ? known : null);
+                errors.Check(ingredientId is not null, $"{at}.ingredientId", "is not an ingredient of the catalogue")
+                    .Check(ingredients[j].Scale is not null, $"{at}.scale", "is required");
+                if (ingredientId is not null && ingredients[j].Scale is { } scale)
+                {
+                    scaled.Add(new VariantIngredientSpec(ingredientId.Value, scale));
+                }
+            }
+            errors.Check(variants[i].Scale is not null, $"variants[{i}].scale", "is required");
+            specs.Add(new VariantSpec(variants[i].Code, variants[i].Name, variants[i].Scale ?? 1m, scaled));
+        }
+        errors.ThrowIfAny();
+
+        version.ReplaceVariants(specs, currentUser.RequireUserId());
+
+        db.Audit(AuditEntities.RecipeVersion, () => version.Id, AuditActions.UpdateVariants,
+            new { version.VersionNo, variants = specs.Select(spec => spec.Code) });
+        await db.SaveChangesAsync(cancellationToken);
+        return await db.ToDtoAsync(version, cancellationToken);
+    }
+
+    /// <summary>
+    /// The version as one of its variants serves it: every step with the
+    /// quantities of that variant beside those of the version as written.
+    /// </summary>
+    public async Task<ServedRecipeDto> GetServedAsync(long id, string code, CancellationToken cancellationToken)
+    {
+        var version = await db.FindVersionAsync(id, cancellationToken);
+        var variant = version.Variant(code) ?? throw DomainException.NotFound("Variant", code);
+
+        var ids = version.Steps.SelectMany(step => step.Ingredients).Select(i => i.IngredientId).Distinct().ToList();
+        var ingredients = await db.Ingredients.AsNoTracking().Where(i => ids.Contains(i.Id))
+            .ToDictionaryAsync(i => i.Id, cancellationToken);
+        return new ServedRecipeDto(version.Id, version.VersionNo, variant.VariantCode, variant.Name, variant.Scale,
+        [
+            .. variant.Apply(version).Select(served => new ServedStepDto(served.Step.Id, served.Step.StepOrder,
+                served.Step.ActionText, served.Step.EquipmentClass, served.Step.TechniqueGate, served.Step.DurationSeconds,
+                served.Step.TemperatureC, served.Step.PressureBar,
+                [
+                    .. served.Ingredients.Select(i =>
+                    {
+                        var ingredient = ingredients.GetValueOrDefault(i.IngredientId);
+                        return new ServedIngredientDto(i.IngredientId, ingredient?.IngredientCode, ingredient?.Name,
+                            i.Quantity, i.BaseQuantity, i.Unit);
+                    }),
+                ])),
+        ]);
     }
 
     internal async Task<int> NextVersionNoAsync(long recipeId, CancellationToken cancellationToken) =>

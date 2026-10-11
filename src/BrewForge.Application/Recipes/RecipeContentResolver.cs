@@ -17,7 +17,8 @@ internal static class RecipeContentResolver
     public static IQueryable<RecipeVersion> WithContent(this IQueryable<RecipeVersion> versions) =>
         versions
             .Include(version => version.Steps).ThenInclude(step => step.Ingredients)
-            .Include(version => version.Steps).ThenInclude(step => step.Dependencies);
+            .Include(version => version.Steps).ThenInclude(step => step.Dependencies)
+            .Include(version => version.Variants).ThenInclude(variant => variant.Ingredients);
 
     public static async Task<RecipeVersion> FindVersionAsync(this IBrewForgeDbContext db, long id,
         CancellationToken cancellationToken) =>
@@ -78,7 +79,19 @@ internal static class RecipeContentResolver
                     .. step.Dependencies.OrderBy(d => d.DependsOnStep.StepOrder).Select(d =>
                         new StepDependencyDto(d.DependsOnStepId, d.DependsOnStep.StepOrder, d.DependencyType)),
                 ], step.TemperatureC, step.PressureBar)),
+        ],
+        [
+            .. version.Variants.OrderBy(variant => variant.VariantCode, StringComparer.Ordinal).Select(variant =>
+                new VariantDto(variant.Id, variant.VariantCode, variant.Name, variant.Scale,
+                [
+                    .. variant.Ingredients.OrderBy(i => i.IngredientId).Select(i =>
+                    {
+                        var ingredient = ingredients.GetValueOrDefault(i.IngredientId);
+                        return new VariantIngredientDto(i.IngredientId, ingredient?.IngredientCode, ingredient?.Name, i.Scale);
+                    }),
+                ])),
         ]);
+
 
     /// <summary>
     /// Turns the request into step specifications, resolving ingredient codes

@@ -24,7 +24,7 @@ public sealed record CreateVersionRequest(long? CopyFromVersionId);
 
 public sealed record RecipeVersionDto(long Id, long RecipeId, int VersionNo, VersionState State, bool IsImmutable,
     string? ContentHash, long CreatedBy, long? ApprovedBy, DateTimeOffset? ReleasedAt, DateTimeOffset? SupersededAt,
-    IReadOnlyList<StepDto> Steps);
+    IReadOnlyList<StepDto> Steps, IReadOnlyList<VariantDto> Variants);
 
 public sealed record StepDto(long Id, int StepOrder, string ActionText, string? EquipmentClass,
     string? TechniqueGate, int? DurationSeconds, IReadOnlyList<StepIngredientDto> Ingredients,
@@ -75,6 +75,36 @@ public sealed record StepChangeDto(StepChangeKind Kind, StepDto? Before, StepDto
 public sealed record RecipeVersionDiffDto(long RecipeId, VersionRefDto Before, VersionRefDto After, bool HasChanges,
     int Added, int Removed, int Changed, int Unchanged, IReadOnlyList<StepChangeDto> Steps);
 
+// ---------------------------------------------------------------- variants
+
+/// <summary>One way the version is served: a scale on its quantities, with the ingredients that have a scale of their own.</summary>
+public sealed record VariantDto(long Id, string Code, string Name, decimal Scale,
+    IReadOnlyList<VariantIngredientDto> Ingredients);
+
+public sealed record VariantIngredientDto(long IngredientId, string? IngredientCode, string? IngredientName,
+    decimal Scale);
+
+/// <summary>All the variants of a draft. A PUT replaces them; an empty list removes them.</summary>
+public sealed record VariantsRequest(IReadOnlyList<VariantRequest>? Variants);
+
+public sealed record VariantRequest(string? Code, string? Name, decimal? Scale,
+    IReadOnlyList<VariantIngredientRequest>? Ingredients);
+
+/// <summary>The ingredient is named by <c>IngredientId</c> or, failing that, by <c>IngredientCode</c>. A scale of 0 leaves it out.</summary>
+public sealed record VariantIngredientRequest(long? IngredientId, string? IngredientCode, decimal? Scale);
+
+/// <summary>A version as one variant serves it.</summary>
+public sealed record ServedRecipeDto(long VersionId, int VersionNo, string VariantCode, string VariantName,
+    decimal Scale, IReadOnlyList<ServedStepDto> Steps);
+
+public sealed record ServedStepDto(long StepId, int StepOrder, string ActionText, string? EquipmentClass,
+    string? TechniqueGate, int? DurationSeconds, decimal? TemperatureC, decimal? PressureBar,
+    IReadOnlyList<ServedIngredientDto> Ingredients);
+
+/// <summary><c>Quantity</c> is what this variant uses; <c>BaseQuantity</c> is what the version prescribes as written.</summary>
+public sealed record ServedIngredientDto(long IngredientId, string? IngredientCode, string? IngredientName,
+    decimal Quantity, decimal BaseQuantity, string Unit);
+
 // ---------------------------------------------------------------- authoring
 
 /// <summary>The whole content of a draft. A PUT replaces the content; it does not patch it.</summary>
@@ -104,15 +134,18 @@ public sealed record ValidationResultDto(long VersionId, bool Passed, DateTimeOf
         [
             .. report.Checks.Select(check => new CheckDto(check.CheckType, check.Passed,
                 [.. check.Violations.Select(v => new ViolationDto(v.StepId is > 0 ? v.StepId : null, v.StepOrder, v.Rule,
-                    v.Code, v.Message, v.Expected, v.Actual))])),
+                    v.Code, v.Message, v.Expected, v.Actual, v.Variant))])),
         ]);
 }
 
 public sealed record CheckDto(CheckType CheckType, bool Passed, IReadOnlyList<ViolationDto> Violations);
 
-/// <summary>A violation, attached to the step that caused it.</summary>
+/// <summary>
+/// A violation, attached to the step that caused it. <c>Variant</c> is the code
+/// of the variant whose quantities caused it; null for the version as written.
+/// </summary>
 public sealed record ViolationDto(long? StepId, int? StepOrder, string Rule, string? Code, string Message,
-    string Expected, string Actual);
+    string Expected, string Actual, string? Variant = null);
 
 // ---------------------------------------------------------------- drafting and repair
 

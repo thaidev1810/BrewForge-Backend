@@ -177,6 +177,7 @@ public sealed class RecipeReleaseService(IBrewForgeDbContext db, RecipeService r
         var copy = RecipeVersion.CreateDraft(source.RecipeId,
             await recipes.NextVersionNoAsync(source.RecipeId, cancellationToken), managerId);
         copy.ReplaceContent(source.ToSpecs(), managerId);
+        copy.ReplaceVariants(source.VariantSpecs(), managerId);
 
         db.RecipeVersions.Add(copy);
         db.Audit(AuditEntities.RecipeVersion, () => copy.Id, AuditActions.Rollback,
