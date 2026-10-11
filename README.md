@@ -172,6 +172,7 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | A quiz with a draw gives each attempt so many questions of every module, and marks it against those | `Quiz.DrawFor`, `QuestionsPerAttempt`, `Enrollment.AttemptQuiz`, `NextAttemptNo` | `QuestionDrawTests`, `QuestionDrawApiTests` |
 | Feedback on how a drink is made comes from staff certified on it; a customer's comes from a branch that sells it | `RecipeFeedback.FromStaff`, `FromCustomer`, `RecipeFeedbackService.SubmitAsync` | `RecipeFeedbackTests`, `RecipeFeedbackApiTests.Staff_*`, `Customer_*`, `Branch_*` |
 | A remark is reviewed once, and addressed only by a later version of the same drink | `RecipeFeedback.Accept`, `Reject`, `MarkAddressed` | `RecipeFeedbackTests`, `RecipeFeedbackApiTests.Research_*`, `Accepted_remark_*` |
+| An accepted staff remark is read in the course of the drink until a version of the recipe says it | `RecipeFeedback.IsFieldNoteFor`, `CourseRenderer.FieldNotesAsync` (rendered, never stored) | `RecipeFeedbackTests.*field_note*`, `CourseFieldNotesApiTests` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -671,6 +672,21 @@ is now a record, about one released version, that R&D reads and answers.
   their branch, a trainee what they sent and the staff remarks R&D accepted or
   addressed, from any branch. Those are the notes worth knowing when making
   the drink.
+- An accepted staff remark is shown in the course of the drink, as
+  `fieldNotes`, to the trainer and to the learner. Like the reference values
+  of a lesson (BR-22) the notes are read when the course is, and never stored
+  with it: a published course is not edited by a remark, and nothing has to be
+  republished.
+  - A remark about a step is on the lessons that teach that step, in the SOP
+    module and, where the step has a technique gate, in the TECHNIQUE module.
+    A remark about the drink as a whole is on the COMMON_MISTAKES module.
+  - A remark applies from the version it is about onwards, until the version
+    that addressed it: the course of version 2 still shows a remark that
+    version 3 took in, and the course of version 3 does not. A remark about a
+    step of an earlier version is shown as a note on the drink, the steps of
+    two versions not being the same rows.
+  - What was rejected, what is not reviewed yet, and what a customer said are
+    never in a course.
 - `GET /recipes/{id}/feedback-summary` (head office) counts the remarks of a
   drink by state and source, with the customers' average rating overall and
   per version; `open` is what was accepted and no version has taken in yet,
