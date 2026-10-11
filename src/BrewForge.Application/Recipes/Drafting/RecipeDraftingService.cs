@@ -32,8 +32,9 @@ public sealed class RecipeDraftingService(IBrewForgeDbContext db, IRecipeDraftMo
         var (equipment, ingredients) = await db.LoadCatalogAsync(cancellationToken);
 
         var prompt = DraftPromptBuilder.ForNewDraft(recipe, request.Description!, ingredients, equipment);
-        var draft = await AskModelAsync(recipe.Id, version, prompt, ingredients, equipment, AuditActions.AiDraft,
-            new { version.VersionNo, model = model.ModelName }, cancellationToken);
+        var draft = await AskModelAsync(recipe.Id, version, prompt,
+            raw => RecipeDraftParser.Parse(raw, ingredients, equipment), AuditActions.AiDraft,
+            () => new { version.VersionNo, model = model.ModelName }, cancellationToken);
 
         return await ValidateAndReturnAsync(version, draft.Notes, draft.ServingSizeMl, cancellationToken);
     }
@@ -82,9 +83,10 @@ public sealed class RecipeDraftingService(IBrewForgeDbContext db, IRecipeDraftMo
         }
 
         var prompt = DraftPromptBuilder.ForRepair(recipe, version, report, ingredients, equipment);
-        var draft = await AskModelAsync(recipe.Id, version, prompt, ingredients, equipment, AuditActions.AiRepair,
-            new { version.VersionNo, model = model.ModelName, violationsBefore = report.Violations.Count() },
-            cancellationToken);
+        var violationsBefore = report.Violations.Count();
+        var draft = await AskModelAsync(recipe.Id, version, prompt,
+            raw => RecipeDraftParser.Parse(raw, ingredients, equipment), AuditActions.AiRepair,
+            () => new { version.VersionNo, model = model.ModelName, violationsBefore }, cancellationToken);
 
         return await ValidateAndReturnAsync(version, draft.Notes, draft.ServingSizeMl, cancellationToken);
     }
@@ -102,7 +104,7 @@ public sealed class RecipeDraftingService(IBrewForgeDbContext db, IRecipeDraftMo
     /// draft without being counted.
     /// </summary>
     private async Task<ParsedDraft> AskModelAsync(long recipeId, RecipeVersion version, DraftModelRequest prompt,
-        List<Ingredient> ingredients, List<StandardEquipment> equipment, string auditAction, object auditPayload,
+        Func<string, DraftParseResult> parse, string auditAction, Func<object> auditPayload,
         CancellationToken cancellationToken)
     {
         var editorId = currentUser.RequireUserId();
@@ -128,9 +130,9 @@ public sealed class RecipeDraftingService(IBrewForgeDbContext db, IRecipeDraftMo
                 };
             }
 
-            var parsed = RecipeDraftParser.Parse(raw, ingredients, equipment);
+            var parsed = parse(raw);
             var conforms = parsed.Conforms && TryApply(version, parsed.Draft!, editorId);
-            if (conforms) db.Audit(AuditEntities.RecipeVersion, () => version.Id, auditAction, auditPayload);
+            if (conforms) db.Audit(AuditEntities.RecipeVersion, () => version.Id, auditAction, auditPayload());
             await LogAsync(recipeId, prompt, raw, conforms, cancellationToken);
 
             if (conforms) return parsed.Draft!;
