@@ -87,6 +87,51 @@ public sealed class BrewingParameterTests
     public void Temperature_on_a_machine_that_is_not_set_by_it_is_no_concern_of_the_equipment_check() =>
         Assert.Empty(Equipment(Brew(5m)));
 
+    // ---------------------------------------------------------------- BR-11: the window a leaf is brewed in
+
+    // The oolong is brewed at 85 - 95 C.
+
+    [Theory]
+    [InlineData(85, true)]
+    [InlineData(90, true)]
+    [InlineData(95, true)]
+    [InlineData(84.9, false)]
+    [InlineData(100, false)]
+    public void BR_11_a_step_that_brews_a_leaf_stays_within_its_window(double temperature, bool accepted) =>
+        Assert.Equal(accepted, Ingredients(Brew((decimal)temperature)).Count == 0);
+
+    [Fact]
+    public void BR_11_water_too_hot_for_the_leaf_is_reported_on_the_step_with_the_window()
+    {
+        var violation = Assert.Single(Ingredients(Brew(100m)));
+
+        Assert.Equal(("BR-11", 1), (violation.Rule, violation.StepOrder));
+        Assert.Equal("ING-OOLONG is brewed at 85-95 C, and the step is done at 100 C", violation.Message);
+        Assert.Equal(("85 - 95", "100"), (violation.Expected, violation.Actual));
+    }
+
+    [Fact]
+    public void Step_that_states_no_temperature_is_not_held_to_a_window()
+    {
+        // The recipes written before a step could state one are not made invalid by the leaf gaining a window.
+        Assert.Empty(Ingredients(Brew(null)));
+    }
+
+    [Fact]
+    public void Ingredient_without_a_window_accepts_any_temperature() =>
+        Assert.Empty(Ingredients(Step(1, "Warm the milk", seconds: 40, uses: [(Milk, 120m, "ml")]) with { TemperatureC = 65m }));
+
+    [Fact]
+    public void Whole_recipe_fails_when_only_the_water_is_wrong()
+    {
+        // BR-08: equipment and ordering pass, and one wrong temperature is still a failed validation.
+        var report = Draft(Brew(100m)).Validate(TeaCatalog());
+
+        Assert.False(report.Passed);
+        Assert.True(report.Check(CheckType.Equipment).Passed);
+        Assert.False(report.Check(CheckType.Ingredient).Passed);
+    }
+
     // ---------------------------------------------------------------- the window of a leaf
 
     [Fact]
