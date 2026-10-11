@@ -170,6 +170,8 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | A variant is content of its version and must pass like it | `RecipeVariant.Apply`, `RecipeVersion.ReplaceVariants`, `AsServed`, `RecipeValidator.Validate`; triggers on `recipe_variant` | `RecipeVariantTests`, `RecipeVariantApiTests` |
 | A picture of a lesson is a picture by its content, and goes only where the trainer writes | `LessonMedia.Format`, `CourseModule.EnsureAcceptsMedia`, `Course.AddLessonMedia` | `LessonMediaTests`, `LessonMediaApiTests` |
 | A quiz with a draw gives each attempt so many questions of every module, and marks it against those | `Quiz.DrawFor`, `QuestionsPerAttempt`, `Enrollment.AttemptQuiz`, `NextAttemptNo` | `QuestionDrawTests`, `QuestionDrawApiTests` |
+| Feedback on how a drink is made comes from staff certified on it; a customer's comes from a branch that sells it | `RecipeFeedback.FromStaff`, `FromCustomer`, `RecipeFeedbackService.SubmitAsync` | `RecipeFeedbackTests`, `RecipeFeedbackApiTests.Staff_*`, `Customer_*`, `Branch_*` |
+| A remark is reviewed once, and addressed only by a later version of the same drink | `RecipeFeedback.Accept`, `Reject`, `MarkAddressed` | `RecipeFeedbackTests`, `RecipeFeedbackApiTests.Research_*`, `Accepted_remark_*` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -636,6 +638,43 @@ each module, and the next attempt is given others.
 - Attempt numbers are never reused, across a reset as well, so a retake is
   always another draw. It may share questions with the one before: a bank
   larger than the draw is what makes them differ.
+
+**Feedback from the counter** (`008_recipe_feedback.sql`: table
+`recipe_feedback`). In the pack a recipe travels one way: R&D writes it, staff
+are trained on it, the counter makes it. What somebody learns making the drink
+a hundred times, and what a customer says about it, has no way back. A remark
+is now a record, about one released version, that R&D reads and answers.
+
+- `POST /recipes/{id}/feedback` takes `{ source, category, content, rating?,
+  recipeVersionId?, recipeStepId? }`; `category` is `PREPARATION_NOTE`,
+  `COMMON_MISTAKE`, `TASTE` or `OTHER`.
+  - `STAFF`: from a trainee or a trainer who was certified on a version of the
+    drink, whatever became of the certificate since (`409
+    FEEDBACK_REQUIRES_TRAINING` otherwise). It is about the latest version
+    they were certified on unless they name one, and may name the step it
+    concerns. Staff do not rate.
+  - `CUSTOMER`: what a customer said, written down by a trainee or the branch
+    manager of a branch where the drink is LIVE (`409 FEEDBACK_NOT_ON_SALE`
+    otherwise), with the customer's `rating`, 1 to 5. The version is the one
+    that branch sells; like the version of a sale (BR-24), nobody supplies it.
+- A remark never changes a recipe. `POST /recipe-feedback/{id}/accept` and
+  `/reject` (R&D Specialist or R&D Manager; a rejection needs a `note`) review
+  it, once (`409 FEEDBACK_STATE`). An accepted remark stays open until
+  `POST /recipe-feedback/{id}/address` names the later version of the same
+  drink that took it in (`409 FEEDBACK_ADDRESSED_VERSION` for the same
+  version, an earlier one or another drink). The author of the recipe is told
+  of a new remark, and the author of the remark of each of the three
+  outcomes.
+- `GET /recipe-feedback` (`?recipeId=&state=&source=&category=&branchId=&mine=true`)
+  and `GET /recipe-feedback/{id}` are open to every role, and what they return
+  depends on who asks: head office everything, a branch manager what came from
+  their branch, a trainee what they sent and the staff remarks R&D accepted or
+  addressed, from any branch. Those are the notes worth knowing when making
+  the drink.
+- `GET /recipes/{id}/feedback-summary` (head office) counts the remarks of a
+  drink by state and source, with the customers' average rating overall and
+  per version; `open` is what was accepted and no version has taken in yet,
+  which is what the next draft should look at.
 
 **Digitising an existing recipe.** UC-26 in the pack is a person typing the
 chain's document into the structure. Here the model does the typing, and is
