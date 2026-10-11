@@ -15,6 +15,12 @@ public static class AuditActions
     public const string AiDraft = "AI_DRAFT";
 
     /// <summary>
+    /// A draft was transcribed from an existing recipe document. The entry keeps the document and, step by
+    /// step, the passage the model says it took the step from and whether that passage is in the document.
+    /// </summary>
+    public const string AiExtract = "AI_EXTRACT";
+
+    /// <summary>
     /// One automatic AI repair of a draft. The schema has no counter column
     /// on <c>recipe_version</c>, so the number of repairs a draft has had is
     /// the number of these entries it has - which cannot be reset, because

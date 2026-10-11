@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Domain.Common;
@@ -37,6 +40,84 @@ public sealed class RecipeDraftingService(IBrewForgeDbContext db, IRecipeDraftMo
             () => new { version.VersionNo, model = model.ModelName }, cancellationToken);
 
         return await ValidateAndReturnAsync(version, draft.Notes, draft.ServingSizeMl, cancellationToken);
+    }
+
+    public const string ExtractionRule = "EXTRACT_EXISTING_ONLY";
+    public const int MinDocumentChars = 20;
+    public const int MaxDocumentChars = 20000;
+
+    private static readonly JsonSerializerOptions PayloadFormat = new(JsonSerializerDefaults.Web);
+
+    /// <summary>What the audit entry of an extraction holds; the report is read back from it.</summary>
+    private sealed record ExtractionRecord(int VersionNo, string Model, string? FileName, string SourceSha256,
+        string DocumentText, List<ExtractionStepDto> Steps, List<string> Unmapped);
+
+    /// <summary>
+    /// UC-26 with the model doing the typing: the chain's own document for a
+    /// drink becomes the content of a draft. The model transcribes; it is
+    /// not asked to write a recipe. Each step names the passage it was taken
+    /// from, which is checked against the document, and what the document
+    /// says that no field can hold is listed. The draft is then validated
+    /// and released by people, like any other (BR-05).
+    /// </summary>
+    public async Task<ExtractionResultDto> ExtractAsync(long versionId, ExtractDocumentRequest request,
+        CancellationToken cancellationToken)
+    {
+        var document = request.DocumentText?.Trim() ?? "";
+        var fileName = string.IsNullOrWhiteSpace(request.FileName) ? null : Path.GetFileName(request.FileName.Trim());
+        new FieldErrors()
+            .Check(document.Length >= MinDocumentChars, "documentText", $"must have at least {MinDocumentChars} characters")
+            .Check(document.Length <= MaxDocumentChars, "documentText", $"must have at most {MaxDocumentChars} characters")
+            .MaxLength("fileName", fileName, 255)
+            .ThrowIfAny();
+
+        var version = await db.FindVersionAsync(versionId, cancellationToken);
+        version.EnsureMutable();
+        var recipe = await db.Recipes.AsNoTracking().SingleAsync(r => r.Id == version.RecipeId, cancellationToken);
+        if (recipe.Origin != RecipeOrigin.Existing)
+        {
+            throw DomainException.RuleViolation(ExtractionRule,
+                "A document is transcribed only for a drink the chain already sells (origin EXISTING). " +
+                "A new drink is drafted from a description.");
+        }
+        var (equipment, ingredients) = await db.LoadCatalogAsync(cancellationToken);
+
+        var prompt = DraftPromptBuilder.ForExtraction(recipe, document, ingredients, equipment);
+        var sha256 = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(document)));
+        ParsedExtraction? extraction = null;
+        var draft = await AskModelAsync(recipe.Id, version, prompt,
+            raw =>
+            {
+                (var result, extraction) = RecipeExtractionParser.Parse(raw, document, ingredients, equipment);
+                return result;
+            },
+            AuditActions.AiExtract,
+            () => new ExtractionRecord(version.VersionNo, model.ModelName, fileName, sha256, document,
+                [.. extraction!.Steps.Select(s => new ExtractionStepDto(s.StepOrder, s.SourceQuote, s.Grounded))],
+                [.. extraction.Unmapped]),
+            cancellationToken);
+
+        var result = await ValidateAndReturnAsync(version, draft.Notes, draft.ServingSizeMl, cancellationToken);
+        return new ExtractionResultDto(result, await GetExtractionAsync(versionId, cancellationToken));
+    }
+
+    /// <summary>The report of the last extraction into a version. 404 when it was never extracted into.</summary>
+    public async Task<ExtractionReportDto> GetExtractionAsync(long versionId, CancellationToken cancellationToken)
+    {
+        if (!await db.RecipeVersions.AnyAsync(v => v.Id == versionId, cancellationToken))
+        {
+            throw DomainException.NotFound("Recipe version", versionId);
+        }
+        var entry = await db.AuditLogs.AsNoTracking()
+                        .Where(a => a.EntityType == AuditEntities.RecipeVersion && a.EntityId == versionId
+                                    && a.Action == AuditActions.AiExtract)
+                        .OrderByDescending(a => a.Id).FirstOrDefaultAsync(cancellationToken)
+                    ?? throw DomainException.NotFound("Extraction of recipe version", versionId);
+
+        var record = JsonSerializer.Deserialize<ExtractionRecord>(entry.PayloadJson!, PayloadFormat)!;
+        return new ExtractionReportDto(versionId, record.FileName, record.SourceSha256, record.DocumentText.Length,
+            record.DocumentText, record.Model, entry.UserId, entry.CreatedAt, record.Steps.Count,
+            record.Steps.Count(step => step.Grounded), record.Steps, record.Unmapped);
     }
 
     public async Task<DraftResultDto> RepairAsync(long versionId, RepairRequest request,

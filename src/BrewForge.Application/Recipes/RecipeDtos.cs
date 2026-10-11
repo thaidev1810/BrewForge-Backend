@@ -35,6 +35,26 @@ public sealed record StepIngredientDto(long IngredientId, string? IngredientCode
 
 public sealed record StepDependencyDto(long StepId, int StepOrder, DependencyType Type);
 
+// ---------------------------------------------------------------- transcribing an existing document
+
+/// <summary>The document of an existing recipe, as text. <c>FileName</c> is kept for the record only.</summary>
+public sealed record ExtractDocumentRequest(string? DocumentText, string? FileName);
+
+/// <summary>A step as it was extracted: the passage the model took it from, and whether that passage is in the document.</summary>
+public sealed record ExtractionStepDto(int StepOrder, string SourceQuote, bool Grounded);
+
+/// <summary>
+/// What an extraction did: the document it read, where each step came from,
+/// and what the document says that the structure could not hold. It
+/// describes the draft as it was extracted, not as it may have been edited
+/// since.
+/// </summary>
+public sealed record ExtractionReportDto(long VersionId, string? FileName, string SourceSha256, int SourceChars,
+    string DocumentText, string Model, long? ExtractedBy, DateTimeOffset ExtractedAt, int TotalSteps,
+    int GroundedSteps, IReadOnlyList<ExtractionStepDto> Steps, IReadOnlyList<string> Unmapped);
+
+public sealed record ExtractionResultDto(DraftResultDto Draft, ExtractionReportDto Extraction);
+
 // ---------------------------------------------------------------- comparing two versions
 
 public sealed record VersionRefDto(long Id, int VersionNo, VersionState State);
