@@ -46,6 +46,20 @@ public sealed class RecipeVersionsController(RecipeService recipes, RecipeValida
         drafting.GenerateDraftAsync(id, request, cancellationToken);
 
     /// <summary>
+    /// Replaces the variants of a draft: <c>{ variants: [ { code, name, scale,
+    /// ingredients: [ { ingredientCode, scale } ] } ] }</c>. Not in the
+    /// contract table. 409 BR-01 on a released version.
+    /// </summary>
+    [HttpPut("{id:long}/variants"), Authorize(Policy = Policies.RdSpecialist)]
+    public Task<RecipeVersionDto> ReplaceVariants(long id, VariantsRequest request, CancellationToken cancellationToken) =>
+        recipes.ReplaceVariantsAsync(id, request, cancellationToken);
+
+    /// <summary>The version as one variant serves it, quantity by quantity. Not in the contract table.</summary>
+    [HttpGet("{id:long}/variants/{code}"), Authorize(Policy = Policies.HeadOffice)]
+    public Task<ServedRecipeDto> Served(long id, string code, CancellationToken cancellationToken) =>
+        recipes.GetServedAsync(id, code, cancellationToken);
+
+    /// <summary>
     /// Transcribes the chain's own document for an existing drink into the
     /// draft. Either <c>{ documentText, fileName? }</c> as JSON, or
     /// <c>multipart/form-data</c> with one .txt, .md or .docx in the field
