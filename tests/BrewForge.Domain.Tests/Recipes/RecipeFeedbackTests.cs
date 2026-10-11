@@ -5,11 +5,13 @@ using static BrewForge.Domain.Tests.Recipes.RecipeFixtures;
 namespace BrewForge.Domain.Tests.Recipes;
 
 /// <summary>
-/// Feedback on a recipe from the counter: who may give it, and what it has to say.
+/// Feedback on a recipe from the counter: who may give it, what it has to
+/// say, and what R&amp;D can make of it.
 /// </summary>
 public sealed class RecipeFeedbackTests
 {
     private const long Barista = 61;
+    private const long Reviewer = 4;
     private const long Branch = 1;
     private static readonly DateTimeOffset Now = new(2026, 10, 11, 9, 0, 0, TimeSpan.Zero);
 
@@ -88,5 +90,47 @@ public sealed class RecipeFeedbackTests
             "Lovely.", null, Now)).Details, d => d.Field == "rating");
         Assert.All(new[] { 0, 6 }, bad => Assert.Contains(Refused(() => RecipeFeedback.FromCustomer(Version(), null,
             Barista, Branch, FeedbackCategory.Taste, "Lovely.", bad, Now)).Details, d => d.Field == "rating"));
+    }
+
+    // ---------------------------------------------------------------- review
+
+    [Fact]
+    public void Research_accepts_a_remark_which_then_waits_for_a_version_that_takes_it_in()
+    {
+        var feedback = StaffNote();
+
+        feedback.Accept(Reviewer, "  Good catch.  ", Now.AddHours(2));
+
+        Assert.Equal((FeedbackState.Accepted, (long?)Reviewer, (DateTimeOffset?)Now.AddHours(2), "Good catch."),
+            (feedback.State, feedback.ReviewedBy, feedback.ReviewedAt, feedback.ReviewNote));
+        Assert.True(feedback.IsOpen);
+    }
+
+    [Fact]
+    public void Rejection_says_why()
+    {
+        var feedback = StaffNote();
+
+        Assert.Contains(Refused(() => feedback.Reject(Reviewer, " ", Now)).Details, d => d.Field == "note");
+        Assert.Equal(FeedbackState.New, feedback.State);
+
+        feedback.Reject(Reviewer, "The recipe already says this in step 2.", Now);
+
+        Assert.Equal((FeedbackState.Rejected, "The recipe already says this in step 2."), (feedback.State, feedback.ReviewNote));
+        Assert.False(feedback.IsOpen);
+    }
+
+    [Fact]
+    public void Remark_is_reviewed_once()
+    {
+        var accepted = StaffNote();
+        accepted.Accept(Reviewer, null, Now);
+        var rejected = StaffNote();
+        rejected.Reject(Reviewer, "No.", Now);
+
+        Assert.Equal(RecipeFeedback.StateRule, Refused(() => accepted.Reject(Reviewer, "Changed my mind.", Now)).Rule);
+        Assert.Equal(RecipeFeedback.StateRule, Refused(() => accepted.Accept(Reviewer, null, Now)).Rule);
+        Assert.Equal(RecipeFeedback.StateRule, Refused(() => rejected.Accept(Reviewer, null, Now)).Rule);
+        Assert.Equal((FeedbackState.Accepted, FeedbackState.Rejected), (accepted.State, rejected.State));
     }
 }

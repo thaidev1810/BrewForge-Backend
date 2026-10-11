@@ -41,7 +41,7 @@ public enum FeedbackState
 /// One remark about a released version of a drink, from somebody who makes
 /// it or somebody who drank it. A recipe is written at head office and
 /// learned at the counter; this is the way back. The remark never changes
-/// the recipe: it is there for R&amp;D to read.
+/// the recipe: R&amp;D reads it, and accepts or rejects it.
 /// </summary>
 public sealed class RecipeFeedback
 {
@@ -51,7 +51,11 @@ public sealed class RecipeFeedback
     /// <summary>Named when a customer's remark is recorded at a branch that does not sell the drink.</summary>
     public const string OnSaleRule = "FEEDBACK_NOT_ON_SALE";
 
+    /// <summary>Named when a remark that was already reviewed is reviewed again.</summary>
+    public const string StateRule = "FEEDBACK_STATE";
+
     public const int MaxContentLength = 1000;
+    public const int MaxNoteLength = 500;
 
     private RecipeFeedback() { }
 
@@ -148,5 +152,32 @@ public sealed class RecipeFeedback
             SubmittedBy = userId,
             CreatedAt = now,
         };
+    }
+
+    /// <summary>R&amp;D agrees: the remark is something the recipe should say. It waits for a version that does.</summary>
+    public void Accept(long reviewerId, string? note, DateTimeOffset now) =>
+        Review(FeedbackState.Accepted, reviewerId, note, now);
+
+    /// <summary>R&amp;D does not take the remark up, and says why: its author is told.</summary>
+    public void Reject(long reviewerId, string? note, DateTimeOffset now)
+    {
+        new FieldErrors().Required("note", note).ThrowIfAny();
+        Review(FeedbackState.Rejected, reviewerId, note, now);
+    }
+
+    private void Review(FeedbackState verdict, long reviewerId, string? note, DateTimeOffset now)
+    {
+        note = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        new FieldErrors().MaxLength("note", note, MaxNoteLength).ThrowIfAny();
+        if (State != FeedbackState.New)
+        {
+            throw DomainException.RuleViolation(StateRule,
+                $"Feedback that is {State.Code()} was already reviewed.");
+        }
+
+        State = verdict;
+        ReviewedBy = reviewerId;
+        ReviewedAt = now;
+        ReviewNote = note;
     }
 }
