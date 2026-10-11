@@ -22,17 +22,34 @@ public sealed record CourseDetailDto(long Id, long? RecipeVersionId, CourseType 
 public sealed record RecertificationDto(long FromVersionId, int FromVersionNo, int Added, int Removed, int Changed);
 
 
+/// <summary>
+/// <c>FieldNotes</c> on the COMMON_MISTAKES module are the notes from the
+/// counter that concern the drink as a whole, or a step of an earlier version.
+/// </summary>
 public sealed record CourseModuleDto(long Id, long CourseId, ModuleType ModuleType, int ModuleOrder,
-    ModuleSource Source, int? DurationMinutes, ModuleState State, IReadOnlyList<LessonDto> Lessons);
+    ModuleSource Source, int? DurationMinutes, ModuleState State, IReadOnlyList<LessonDto> Lessons,
+    IReadOnlyList<FieldNoteDto>? FieldNotes = null);
+
+/// <summary>
+/// A remark from somebody who makes the drink, which R&amp;D accepted and
+/// the recipe does not say yet. Like a reference value it is read when the
+/// lesson is, and never stored with it: a published course is not edited by
+/// it, and the note is gone from the course of the version that takes it in.
+/// </summary>
+public sealed record FieldNoteDto(long FeedbackId, FeedbackCategory Category, string Content, long? RecipeStepId,
+    int VersionNo, string? From, DateTimeOffset? AcceptedAt);
 
 /// <summary>
 /// <c>Content</c> is what the trainer wrote. <c>Reference</c> is what the
 /// lesson shows from the recipe; it is computed from the bound version every
 /// time the lesson is read and is never stored with the lesson (BR-22).
+/// <c>FieldNotes</c> are the notes from the counter about the step the
+/// lesson teaches.
 /// </summary>
 public sealed record LessonDto(long Id, int LessonOrder, string Title, long? RecipeStepId, string? Content,
     string? MediaUrl, bool Generated, object? Reference,
-    IReadOnlyList<LessonMediaDto>? Media = null);
+    IReadOnlyList<LessonMediaDto>? Media = null, IReadOnlyList<FieldNoteDto>? FieldNotes = null);
+
 
 /// <summary>A picture of a lesson. <c>Url</c> is where its content is served, relative to the API.</summary>
 public sealed record LessonMediaDto(long Id, long LessonId, int SortOrder, string FileName, string ContentType,
