@@ -167,6 +167,7 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | A course is not assigned to somebody who has not passed its prerequisite | `LearningPathService.OnlyWithPrerequisiteAsync`, `MissingPrerequisiteAsync` | `LearningPathApiTests.Course_is_not_opened_*` |
 | New staff are put on their path, moved on when they pass a stage, and reminded of due dates | `LearningPathService.AssignOpenStagesAsync`, `RemindAsync`; `TrainingReminderScheduler` | `LearningPathApiTests` |
 | A document of an existing drink is transcribed, each step held to the passage it quotes | `RecipeExtractSchema`, `SourceGrounding`, `RecipeExtractionParser`, `RecipeDraftingService.ExtractAsync` | `DocumentExtractionUnitTests`, `DocumentExtractionApiTests` |
+| A variant is content of its version and must pass like it | `RecipeVariant.Apply`, `RecipeVersion.ReplaceVariants`, `AsServed`, `RecipeValidator.Validate`; triggers on `recipe_variant` | `RecipeVariantTests`, `RecipeVariantApiTests` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -558,6 +559,34 @@ the recipe.
 - Seeded: the brewing windows of the four tea leaves (oolong 85-95, black tea
   90-100, jasmine 75-85, matcha 70-80), set also on a database seeded earlier,
   and the water temperature of the three brewed teas of the reference recipes.
+
+**Recipe variants** (`005_recipe_variants.sql`: tables `recipe_variant` and
+`recipe_variant_ingredient`, with two triggers). A drink is sold in sizes and
+hot or iced; the pack's schema has one set of quantities per version.
+
+- A variant is the same procedure with the quantities scaled: a `scale` for
+  the whole drink, and a scale of its own for an ingredient that does not
+  follow it (the leaf of a large tea that is brewed as ever is 1; the ice of a
+  hot drink is 0, which leaves it out). It has no steps of its own, so it can
+  prescribe nothing the version does not.
+- `PUT /recipe-versions/{id}/variants` replaces the variants of a draft, and
+  `GET /recipe-versions/{id}/variants/{code}` reads the version as one variant
+  serves it, each quantity beside the one the version prescribes. The version
+  itself lists its variants.
+- **BR-08 covers every serving.** The equipment and ingredient checks are run
+  again on the quantities of each variant, and what they find is reported
+  under the same check with `variant` naming the serving. A large size that
+  puts 27 g through a brewer that takes 25 fails the version, which cannot
+  then be submitted. A violation of the version as written is reported once,
+  not again for every variant.
+- **BR-01 covers them.** Variants are content: they change only while the
+  version is a draft, they are in the content hash (only where there are any,
+  so earlier hashes stand), and after release the application refuses a change
+  and two triggers refuse one that goes around it. A copy of a version and a
+  rollback carry the variants over.
+- Replacing the steps of a draft drops the scale of an ingredient the recipe
+  no longer uses. Courses and sales are per version, not per variant: a
+  trainee is certified on the drink, and a cup sold is a cup of the drink.
 
 **Digitising an existing recipe.** UC-26 in the pack is a person typing the
 chain's document into the structure. Here the model does the typing, and is
