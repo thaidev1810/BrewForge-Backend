@@ -178,4 +178,50 @@ public sealed class RecipeFeedbackTests
         Assert.All(new[] { fresh, rejected, addressed },
             feedback => Assert.Equal(RecipeFeedback.StateRule, Refused(() => feedback.MarkAddressed(about, later)).Rule));
     }
+
+    // ---------------------------------------------------------------- field notes
+
+    [Fact]
+    public void Accepted_staff_remark_is_a_field_note_from_its_version_onwards()
+    {
+        var note = StaffNote(Version(versionId: 320, versionNo: 2));
+        // Nothing R&D has not agreed with is put in front of a learner.
+        Assert.False(note.IsFieldNoteFor(aboutVersionNo: 2, addressedInVersionNo: null, readVersionNo: 2));
+
+        note.Accept(Reviewer, null, Now);
+
+        Assert.True(note.IsFieldNoteFor(2, null, readVersionNo: 2));
+        // Still worth knowing with a later version that did not take it in.
+        Assert.True(note.IsFieldNoteFor(2, null, readVersionNo: 3));
+        // It says nothing about a version made before anybody had made this one.
+        Assert.False(note.IsFieldNoteFor(2, null, readVersionNo: 1));
+    }
+
+    [Fact]
+    public void Addressed_remark_is_a_field_note_until_the_version_that_took_it_in()
+    {
+        var about = Version();
+        var note = StaffNote(about);
+        note.Accept(Reviewer, null, Now);
+        note.MarkAddressed(about, Version(versionId: 330, versionNo: 3));
+
+        Assert.True(note.IsFieldNoteFor(1, addressedInVersionNo: 3, readVersionNo: 1));
+        Assert.True(note.IsFieldNoteFor(1, addressedInVersionNo: 3, readVersionNo: 2));
+        // From version 3 on the recipe says it itself.
+        Assert.False(note.IsFieldNoteFor(1, addressedInVersionNo: 3, readVersionNo: 3));
+        Assert.False(note.IsFieldNoteFor(1, addressedInVersionNo: 3, readVersionNo: 4));
+    }
+
+    [Fact]
+    public void Rejected_remark_and_what_a_customer_said_are_never_field_notes()
+    {
+        var rejected = StaffNote();
+        rejected.Reject(Reviewer, "No.", Now);
+        var customers = RecipeFeedback.FromCustomer(Version(), null, Barista, Branch, FeedbackCategory.Taste, "Too sweet.", 2, Now);
+        customers.Accept(Reviewer, null, Now);
+
+        Assert.False(rejected.IsFieldNoteFor(1, null, 1));
+        // Accepted, and for R&D to act on: not something to teach.
+        Assert.False(customers.IsFieldNoteFor(1, null, 1));
+    }
 }

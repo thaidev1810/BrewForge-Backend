@@ -96,6 +96,24 @@ public sealed class RecipeFeedback
     public bool IsOpen => State == FeedbackState.Accepted;
 
     /// <summary>
+    /// Whether somebody learning a version of the drink should be shown this
+    /// remark next to the recipe. A staff remark R&amp;D accepted is, from
+    /// the version it is about onwards, until a version says it itself: a
+    /// remark addressed by version 3 is still worth reading with version 2,
+    /// and is part of the recipe in version 3. What a customer said is for
+    /// R&amp;D, not for the lesson.
+    /// </summary>
+    /// <param name="aboutVersionNo">The number of the version the remark is about.</param>
+    /// <param name="addressedInVersionNo">The number of the version that took it in, if one did.</param>
+    /// <param name="readVersionNo">The number of the version being learned.</param>
+    public bool IsFieldNoteFor(int aboutVersionNo, int? addressedInVersionNo, int readVersionNo) =>
+        Source == FeedbackSource.Staff
+        && aboutVersionNo <= readVersionNo
+        && (State == FeedbackState.Accepted
+            || (State == FeedbackState.Addressed && addressedInVersionNo is { } addressed && addressed > readVersionNo));
+
+
+    /// <summary>
     /// A remark from somebody who makes the drink. Only somebody who was
     /// certified on it may make one: the remark is worth reading because its
     /// author learned the recipe as written and then made it for real.
