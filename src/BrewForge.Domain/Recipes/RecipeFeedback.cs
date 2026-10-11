@@ -41,7 +41,8 @@ public enum FeedbackState
 /// One remark about a released version of a drink, from somebody who makes
 /// it or somebody who drank it. A recipe is written at head office and
 /// learned at the counter; this is the way back. The remark never changes
-/// the recipe: R&amp;D reads it, and accepts or rejects it.
+/// the recipe: R&amp;D reads it, accepts or rejects it, and when a later
+/// version takes it in, says which.
 /// </summary>
 public sealed class RecipeFeedback
 {
@@ -51,8 +52,11 @@ public sealed class RecipeFeedback
     /// <summary>Named when a customer's remark is recorded at a branch that does not sell the drink.</summary>
     public const string OnSaleRule = "FEEDBACK_NOT_ON_SALE";
 
-    /// <summary>Named when a remark that was already reviewed is reviewed again.</summary>
+    /// <summary>Named when a remark is reviewed or addressed in a state that does not allow it.</summary>
     public const string StateRule = "FEEDBACK_STATE";
+
+    /// <summary>Named when the version said to address a remark is not a later version of the same drink.</summary>
+    public const string AddressedRule = "FEEDBACK_ADDRESSED_VERSION";
 
     public const int MaxContentLength = 1000;
     public const int MaxNoteLength = 500;
@@ -179,5 +183,30 @@ public sealed class RecipeFeedback
         ReviewedBy = reviewerId;
         ReviewedAt = now;
         ReviewNote = note;
+    }
+
+    /// <summary>
+    /// A later version of the drink took the remark in. Only an accepted
+    /// remark can be addressed, and only by a version of the same drink that
+    /// came after the one it is about.
+    /// </summary>
+    /// <param name="about">The version the remark is about.</param>
+    public void MarkAddressed(RecipeVersion about, RecipeVersion inVersion)
+    {
+        if (about.Id != RecipeVersionId) throw new ArgumentException("Not the version of this feedback.", nameof(about));
+        if (State != FeedbackState.Accepted)
+        {
+            throw DomainException.RuleViolation(StateRule,
+                $"Only accepted feedback is addressed by a version; this one is {State.Code()}.");
+        }
+        if (inVersion.RecipeId != RecipeId || inVersion.VersionNo <= about.VersionNo)
+        {
+            throw DomainException.RuleViolation(AddressedRule,
+                "Feedback is addressed by a later version of the same drink.",
+                details: new ErrorDetail("recipeVersionId", "must be a later version of the drink the feedback is about"));
+        }
+
+        State = FeedbackState.Addressed;
+        AddressedInVersionId = inVersion.Id;
     }
 }

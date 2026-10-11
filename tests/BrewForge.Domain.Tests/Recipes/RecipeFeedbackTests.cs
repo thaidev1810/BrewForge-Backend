@@ -133,4 +133,49 @@ public sealed class RecipeFeedbackTests
         Assert.Equal(RecipeFeedback.StateRule, Refused(() => rejected.Accept(Reviewer, null, Now)).Rule);
         Assert.Equal((FeedbackState.Accepted, FeedbackState.Rejected), (accepted.State, rejected.State));
     }
+
+    // ---------------------------------------------------------------- addressed
+
+    [Fact]
+    public void Accepted_remark_is_addressed_by_a_later_version_of_the_same_drink()
+    {
+        var about = Version();
+        var feedback = StaffNote(about);
+        feedback.Accept(Reviewer, null, Now);
+
+        feedback.MarkAddressed(about, Version(versionId: 320, versionNo: 2));
+
+        Assert.Equal((FeedbackState.Addressed, (long?)320), (feedback.State, feedback.AddressedInVersionId));
+        Assert.False(feedback.IsOpen);
+        // Who reviewed it stays on record.
+        Assert.Equal(Reviewer, feedback.ReviewedBy);
+    }
+
+    [Fact]
+    public void Remark_is_not_addressed_by_its_own_version_an_earlier_one_or_another_drink()
+    {
+        var about = Version(versionId: 320, versionNo: 2);
+        var feedback = StaffNote(about);
+        feedback.Accept(Reviewer, null, Now);
+
+        Assert.All(new[] { about, Version(versionId: 310, versionNo: 1), Version(versionId: 990, recipeId: 99, versionNo: 5) },
+            other => Assert.Equal(RecipeFeedback.AddressedRule, Refused(() => feedback.MarkAddressed(about, other)).Rule));
+        Assert.Equal(FeedbackState.Accepted, feedback.State);
+    }
+
+    [Fact]
+    public void Only_an_accepted_remark_is_addressed()
+    {
+        var about = Version();
+        var later = Version(versionId: 320, versionNo: 2);
+        var fresh = StaffNote(about);
+        var rejected = StaffNote(about);
+        rejected.Reject(Reviewer, "No.", Now);
+        var addressed = StaffNote(about);
+        addressed.Accept(Reviewer, null, Now);
+        addressed.MarkAddressed(about, later);
+
+        Assert.All(new[] { fresh, rejected, addressed },
+            feedback => Assert.Equal(RecipeFeedback.StateRule, Refused(() => feedback.MarkAddressed(about, later)).Rule));
+    }
 }
