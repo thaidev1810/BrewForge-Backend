@@ -175,6 +175,25 @@ public sealed class BrewingParameterApiTests : IDisposable
         Assert.Equal((JsonValueKind.Null, JsonValueKind.Null), (removed.GetProperty("brewTempMinC").ValueKind, removed.GetProperty("brewTempMaxC").ValueKind));
     }
 
+    // ---------------------------------------------------------------- seed
+
+    [Fact]
+    public async Task Seeded_teas_state_the_temperature_of_the_water_and_their_leaves_have_a_window()
+    {
+        var leaves = await _factory.WithDbAsync(db => db.Ingredients
+            .Where(i => i.BrewTempMinC != null).ToDictionaryAsync(i => i.IngredientCode, i => (i.BrewTempMinC, i.BrewTempMaxC)));
+        Assert.Equal((85m, 95m), leaves["ING-OOLONG"]);
+        Assert.Equal((90m, 100m), leaves["ING-BLACKTEA"]);
+        Assert.Equal((75m, 85m), leaves["ING-JASMINE"]);
+        Assert.Equal((70m, 80m), leaves["ING-MATCHA"]);
+
+        // What the gate of the first step says in words, the step now says as a figure, inside the window of its leaf.
+        var brewing = await _factory.WithDbAsync(db => db.RecipeVersions
+            .Where(v => db.Recipes.Any(r => r.Id == v.RecipeId && r.RecipeCode == "R01"))
+            .SelectMany(v => v.Steps).Where(s => s.StepOrder == 1).SingleAsync());
+        Assert.Equal(("Water at 90 C", 90m), (brewing.TechniqueGate, brewing.TemperatureC));
+    }
+
     // ---------------------------------------------------------------- the language model
 
     [Fact]

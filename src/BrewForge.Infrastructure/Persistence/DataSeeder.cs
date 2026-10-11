@@ -195,7 +195,8 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
                 .. seed.Steps.Select((step, index) => new StepSpec(index + 1, step.Action, step.Equipment, step.Gate,
                     step.Seconds,
                     [.. step.Uses.Select(use => new IngredientSpec(ingredientIds[use.Code], use.Quantity, use.Unit))],
-                    [.. step.After.Select(after => new DependencySpec(after.Step, after.Type))])),
+                    [.. step.After.Select(after => new DependencySpec(after.Step, after.Type))],
+                    step.TemperatureC)),
             ], author);
             db.RecipeVersions.Add(version);
             await db.SaveChangesAsync(cancellationToken);
@@ -300,7 +301,19 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
                 seed.StorageRule));
         }
         await db.SaveChangesAsync(cancellationToken);
+
+        // The brewing windows came later than the catalogue: a seeded leaf that has none yet is given its own.
+        var leaves = await db.Ingredients
+            .Where(i => SeedData.BrewingWindows.Keys.Contains(i.IngredientCode) && i.BrewTempMinC == null)
+            .ToListAsync(cancellationToken);
+        foreach (var leaf in leaves)
+        {
+            var (minC, maxC) = SeedData.BrewingWindows[leaf.IngredientCode];
+            leaf.SetBrewingWindow(minC, maxC);
+        }
+        await db.SaveChangesAsync(cancellationToken);
     }
+
 
     private async Task SeedEquipmentAsync(CancellationToken cancellationToken)
     {

@@ -53,6 +53,20 @@ public static class SeedData
     ];
 
     /// <summary>
+    /// The water temperature each tea leaf of the catalogue is brewed at, in
+    /// degrees Celsius. A step that brews the leaf and states its temperature
+    /// is held to this window by the ingredient check.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, (decimal MinC, decimal MaxC)> BrewingWindows =
+        new Dictionary<string, (decimal, decimal)>
+        {
+            ["ING-OOLONG"] = (85m, 95m),
+            ["ING-BLACKTEA"] = (90m, 100m),
+            ["ING-JASMINE"] = (75m, 85m),
+            ["ING-MATCHA"] = (70m, 80m),
+        };
+
+    /// <summary>
     /// The induction course every new member of staff takes first: one or two
     /// lessons for each of the seven modules. It is built from no recipe, so
     /// the lessons of its TECHNIQUE module are its practical checklist.
