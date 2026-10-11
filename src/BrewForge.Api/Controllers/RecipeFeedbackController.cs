@@ -35,4 +35,24 @@ public sealed class RecipeFeedbackController(RecipeFeedbackService feedback) : C
     public Task<RecipeFeedbackDto> Get(long id, CancellationToken cancellationToken) =>
         feedback.GetAsync(id, cancellationToken);
 
+    /// <summary>The body is optional: <c>{ "note": "..." }</c>. The author is told.</summary>
+    [HttpPost("recipe-feedback/{id:long}/accept"), AuthorizeRoles(RoleName.RdSpecialist, RoleName.RdManager)]
+    public Task<RecipeFeedbackDto> Accept(long id, [FromBody] FeedbackReviewRequest? request,
+        CancellationToken cancellationToken) =>
+        feedback.AcceptAsync(id, request, cancellationToken);
+
+    /// <summary><c>{ "note": "..." }</c>, which is required: the author is told why.</summary>
+    [HttpPost("recipe-feedback/{id:long}/reject"), AuthorizeRoles(RoleName.RdSpecialist, RoleName.RdManager)]
+    public Task<RecipeFeedbackDto> Reject(long id, [FromBody] FeedbackReviewRequest? request,
+        CancellationToken cancellationToken) =>
+        feedback.RejectAsync(id, request, cancellationToken);
+
+    /// <summary>
+    /// <c>{ "recipeVersionId": 320 }</c>: the later version of the drink that
+    /// took the accepted remark in. 409 FEEDBACK_ADDRESSED_VERSION otherwise.
+    /// </summary>
+    [HttpPost("recipe-feedback/{id:long}/address"), AuthorizeRoles(RoleName.RdSpecialist, RoleName.RdManager)]
+    public Task<RecipeFeedbackDto> Address(long id, FeedbackAddressRequest request,
+        CancellationToken cancellationToken) =>
+        feedback.AddressAsync(id, request, cancellationToken);
 }

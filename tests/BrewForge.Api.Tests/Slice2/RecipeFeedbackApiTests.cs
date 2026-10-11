@@ -9,7 +9,8 @@ namespace BrewForge.Api.Tests.Slice2;
 
 /// <summary>
 /// Feedback on a recipe through the API: staff certified on a drink remark
-/// on how it is made, and a branch writes down what a customer said.
+/// on how it is made, a branch writes down what a customer said, R&amp;D
+/// reviews both and names the version that took a remark in.
 /// </summary>
 [Collection(ApiCollection.Name)]
 public sealed class RecipeFeedbackApiTests(BrewForgeApiFactory factory)
@@ -33,6 +34,13 @@ public sealed class RecipeFeedbackApiTests(BrewForgeApiFactory factory)
 
     private async Task<JsonElement> SubmittedAsync(string username, long recipeId, object body) =>
         await (await SubmitAsync(username, recipeId, body)).ShouldBeAsync(HttpStatusCode.Created);
+
+    private async Task<HttpResponseMessage> ReviewAsync(long feedbackId, string verdict, object? body = null,
+        string reviewer = TestUsers.RdSpecialist)
+    {
+        using var client = await factory.ClientForAsync(reviewer);
+        return await client.PostAsJsonAsync($"{Feedback}/{feedbackId}/{verdict}", body ?? new { });
+    }
 
     private async Task<int> SaidAsync(string username, string subject, long recipeId)
     {
@@ -139,5 +147,63 @@ public sealed class RecipeFeedbackApiTests(BrewForgeApiFactory factory)
         // A trainer works at no branch, and serves no customers.
         Assert.Contains("source", (await (await SubmitAsync(TestUsers.Trainer, drink.RecipeId, CustomerRemark()))
             .ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
+    }
+
+    // ---------------------------------------------------------------- review
+
+    [Fact]
+    public async Task Research_accepts_or_rejects_a_remark_once_and_its_author_is_told()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var note = await SubmittedAsync(TestUsers.Trainee, drink.RecipeId, StaffNote());
+        var doubtful = await SubmittedAsync("trainee2", drink.RecipeId, StaffNote("Skip the tap, it changes nothing."));
+
+        var accepted = await (await ReviewAsync(note.Id(), "accept", new { note = "Good catch." })).ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.Equal(("ACCEPTED", "Good catch."), (accepted.GetProperty("state").GetString(), accepted.GetProperty("reviewNote").GetString()));
+        Assert.Equal(await factory.UserIdAsync(TestUsers.RdSpecialist), accepted.GetProperty("reviewedBy").GetInt64());
+        Assert.Equal(1, await SaidAsync(TestUsers.Trainee, "Feedback accepted", drink.RecipeId));
+
+        // A rejection says why.
+        Assert.Contains("note", (await (await ReviewAsync(doubtful.Id(), "reject")).ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
+        var rejected = await (await ReviewAsync(doubtful.Id(), "reject", new { note = "The tap levels the dose: see the gate of step 1." },
+            TestUsers.RdManager)).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal("REJECTED", rejected.GetProperty("state").GetString());
+        Assert.Equal(1, await SaidAsync("trainee2", "Feedback not taken up", drink.RecipeId));
+
+        // Reviewed once.
+        await (await ReviewAsync(note.Id(), "reject", new { note = "On second thought." }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "FEEDBACK_STATE");
+        await (await ReviewAsync(doubtful.Id(), "accept")).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "FEEDBACK_STATE");
+        Assert.Equal(["CREATE", "ACCEPT_FEEDBACK"], await factory.WithDbAsync(db => db.AuditLogs
+            .Where(a => a.EntityType == "RecipeFeedback" && a.EntityId == note.Id()).OrderBy(a => a.Id).Select(a => a.Action).ToListAsync()));
+    }
+
+    [Fact]
+    public async Task Accepted_remark_is_addressed_by_the_later_version_that_took_it_in()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var note = await SubmittedAsync(TestUsers.Trainee, drink.RecipeId, StaffNote());
+        var unreviewed = await SubmittedAsync("trainee2", drink.RecipeId, StaffNote("Warm the cup first."));
+        await (await ReviewAsync(note.Id(), "accept")).ShouldBeAsync(HttpStatusCode.OK);
+
+        // Not by the version it is about, and not before it was accepted.
+        await (await ReviewAsync(note.Id(), "address", new { recipeVersionId = drink.VersionId }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "FEEDBACK_ADDRESSED_VERSION");
+        Assert.Contains("recipeVersionId", (await (await ReviewAsync(note.Id(), "address"))
+            .ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
+
+        var nextVersionId = await factory.ReleaseNewVersionAsync(drink.RecipeId);
+        await (await ReviewAsync(unreviewed.Id(), "address", new { recipeVersionId = nextVersionId }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "FEEDBACK_STATE");
+
+        var addressed = await (await ReviewAsync(note.Id(), "address", new { recipeVersionId = nextVersionId }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.Equal(("ADDRESSED", nextVersionId, 2), (addressed.GetProperty("state").GetString(),
+            addressed.GetProperty("addressedInVersionId").GetInt64(), addressed.GetProperty("addressedInVersionNo").GetInt32()));
+        // Still about the version its author made.
+        Assert.Equal(drink.VersionId, addressed.GetProperty("recipeVersionId").GetInt64());
+        Assert.Equal(1, await SaidAsync(TestUsers.Trainee, "Feedback taken into the recipe", drink.RecipeId));
     }
 }

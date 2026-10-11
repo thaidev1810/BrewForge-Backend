@@ -35,6 +35,13 @@ public static class AuditActions
     public const string ReleaseRefused = "RELEASE_REFUSED";
     public const string Supersede = "SUPERSEDE";
     public const string Rollback = "ROLLBACK";
+
+    /// <summary>R&amp;D agreed with a remark on a recipe.</summary>
+    public const string AcceptFeedback = "ACCEPT_FEEDBACK";
+    public const string RejectFeedback = "REJECT_FEEDBACK";
+
+    /// <summary>R&amp;D named the later version that took an accepted remark in.</summary>
+    public const string AddressFeedback = "ADDRESS_FEEDBACK";
     public const string ImportExisting = "IMPORT_EXISTING";
 
     public const string Delete = "DELETE";

@@ -23,9 +23,13 @@ public sealed record RecipeFeedbackDto(long Id, long RecipeId, string? RecipeCod
 public sealed record RecipeFeedbackRequest(FeedbackSource? Source, FeedbackCategory? Category, string? Content,
     int? Rating, long? RecipeVersionId, long? RecipeStepId);
 
+public sealed record FeedbackReviewRequest(string? Note);
+
+public sealed record FeedbackAddressRequest(long? RecipeVersionId);
+
 /// <summary>
 /// Feedback on a recipe from the people who make the drink and the people
-/// who drink it.
+/// who drink it, and what R&amp;D makes of it.
 /// </summary>
 public sealed class RecipeFeedbackService(IBrewForgeDbContext db, ICurrentUser currentUser, TimeProvider clock)
 {
@@ -149,6 +153,65 @@ public sealed class RecipeFeedbackService(IBrewForgeDbContext db, ICurrentUser c
                        ?? throw DomainException.NotFound("Recipe feedback", id);
         return (await ToDtosAsync([feedback], cancellationToken))[0];
     }
+
+    // ---------------------------------------------------------------- reviewing
+
+    public Task<RecipeFeedbackDto> AcceptAsync(long id, FeedbackReviewRequest? request, CancellationToken cancellationToken) =>
+        ReviewAsync(id, accept: true, request?.Note, cancellationToken);
+
+    public Task<RecipeFeedbackDto> RejectAsync(long id, FeedbackReviewRequest? request, CancellationToken cancellationToken) =>
+        ReviewAsync(id, accept: false, request?.Note, cancellationToken);
+
+    private async Task<RecipeFeedbackDto> ReviewAsync(long id, bool accept, string? note,
+        CancellationToken cancellationToken)
+    {
+        var feedback = await FindAsync(id, cancellationToken);
+        var now = clock.GetUtcNow();
+        if (accept) feedback.Accept(currentUser.RequireUserId(), note, now);
+        else feedback.Reject(currentUser.RequireUserId(), note, now);
+
+        db.Audit(AuditEntities.RecipeFeedback, () => feedback.Id,
+            accept ? AuditActions.AcceptFeedback : AuditActions.RejectFeedback, new { feedback.RecipeId, feedback.ReviewNote });
+        var name = await RecipeNameAsync(feedback.RecipeId, cancellationToken);
+        db.Notify(feedback.SubmittedBy, accept ? "Feedback accepted" : "Feedback not taken up",
+            accept
+                ? $"R&D accepted the feedback you sent on '{name}'."
+                : $"R&D did not take up the feedback you sent on '{name}': {feedback.ReviewNote}",
+            now, new { feedbackId = feedback.Id });
+        await db.SaveChangesAsync(cancellationToken);
+        return (await ToDtosAsync([feedback], cancellationToken))[0];
+    }
+
+    /// <summary>R&amp;D says which later version of the drink took an accepted remark in.</summary>
+    public async Task<RecipeFeedbackDto> AddressAsync(long id, FeedbackAddressRequest request,
+        CancellationToken cancellationToken)
+    {
+        new FieldErrors().Check(request.RecipeVersionId is not null, "recipeVersionId", "is required").ThrowIfAny();
+        var feedback = await FindAsync(id, cancellationToken);
+        var versions = await db.RecipeVersions.AsNoTracking()
+            .Where(v => v.Id == feedback.RecipeVersionId || v.Id == request.RecipeVersionId)
+            .ToListAsync(cancellationToken);
+        var inVersion = versions.SingleOrDefault(v => v.Id == request.RecipeVersionId)
+                        ?? throw DomainException.NotFound("Recipe version", request.RecipeVersionId!.Value);
+
+        feedback.MarkAddressed(versions.Single(v => v.Id == feedback.RecipeVersionId), inVersion);
+
+        var now = clock.GetUtcNow();
+        db.Audit(AuditEntities.RecipeFeedback, () => feedback.Id, AuditActions.AddressFeedback,
+            new { feedback.RecipeId, feedback.AddressedInVersionId });
+        db.Notify(feedback.SubmittedBy, "Feedback taken into the recipe",
+            $"Version {inVersion.VersionNo} of '{await RecipeNameAsync(feedback.RecipeId, cancellationToken)}' takes in the feedback you sent.",
+            now, new { feedbackId = feedback.Id });
+        await db.SaveChangesAsync(cancellationToken);
+        return (await ToDtosAsync([feedback], cancellationToken))[0];
+    }
+
+    private async Task<RecipeFeedback> FindAsync(long id, CancellationToken cancellationToken) =>
+        await db.RecipeFeedback.SingleOrDefaultAsync(f => f.Id == id, cancellationToken)
+        ?? throw DomainException.NotFound("Recipe feedback", id);
+
+    private Task<string> RecipeNameAsync(long recipeId, CancellationToken cancellationToken) =>
+        db.Recipes.AsNoTracking().Where(r => r.Id == recipeId).Select(r => r.Name).SingleAsync(cancellationToken);
 
     // ---------------------------------------------------------------- rendering
 
