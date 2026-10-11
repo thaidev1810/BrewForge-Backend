@@ -93,6 +93,12 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             branch.HasQueryFilter(b => BranchScope == null || b.Id == BranchScope);
         });
 
+        modelBuilder.Entity<Ingredient>(ingredient =>
+        {
+            ingredient.Property(i => i.BrewTempMinC).HasPrecision(5, 1);
+            ingredient.Property(i => i.BrewTempMaxC).HasPrecision(5, 1);
+        });
+
         modelBuilder.Entity<StandardEquipment>(equipment =>
         {
             equipment.Property(e => e.MinThreshold).HasPrecision(10, 3);
@@ -132,6 +138,8 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
 
         modelBuilder.Entity<RecipeStep>(step =>
         {
+            step.Property(s => s.TemperatureC).HasPrecision(5, 1);
+            step.Property(s => s.PressureBar).HasPrecision(4, 1);
             step.HasMany(s => s.Ingredients).WithOne().HasForeignKey(i => i.StepId)
                 .OnDelete(DeleteBehavior.Cascade);
             step.HasMany(s => s.Dependencies).WithOne(d => d.Step).HasForeignKey(d => d.StepId)

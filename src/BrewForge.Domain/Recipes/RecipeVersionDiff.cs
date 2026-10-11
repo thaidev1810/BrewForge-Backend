@@ -36,6 +36,8 @@ public sealed class RecipeVersionDiff
     public const string EquipmentClass = "equipmentClass";
     public const string TechniqueGate = "techniqueGate";
     public const string DurationSeconds = "durationSeconds";
+    public const string TemperatureC = "temperatureC";
+    public const string PressureBar = "pressureBar";
     public const string Ingredients = "ingredients";
     public const string DependsOn = "dependsOn";
 
@@ -136,6 +138,8 @@ public sealed class RecipeVersionDiff
         if (!string.Equals(before.EquipmentClass, after.EquipmentClass, StringComparison.Ordinal)) fields.Add(EquipmentClass);
         if (!string.Equals(Normalize(before.TechniqueGate), Normalize(after.TechniqueGate), StringComparison.Ordinal)) fields.Add(TechniqueGate);
         if (before.DurationSeconds != after.DurationSeconds) fields.Add(DurationSeconds);
+        if (before.TemperatureC != after.TemperatureC) fields.Add(TemperatureC);
+        if (before.PressureBar != after.PressureBar) fields.Add(PressureBar);
         if (ingredients.Count > 0) fields.Add(Ingredients);
         if (!SameDependencies(before, after, became)) fields.Add(DependsOn);
 

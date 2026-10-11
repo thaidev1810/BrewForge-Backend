@@ -240,6 +240,12 @@ public sealed class RecipeVersion : INeverDeleted
         {
             canonical.Append(CultureInfo.InvariantCulture,
                 $"S|{step.StepOrder}|{step.ActionText}|{step.EquipmentClass}|{step.TechniqueGate}|{step.DurationSeconds}\n");
+            // Only where a step states them, so that a version sealed before these existed still has the hash it was sealed with.
+            if (step.TemperatureC is not null || step.PressureBar is not null)
+            {
+                canonical.Append(CultureInfo.InvariantCulture, $"P|{step.TemperatureC:0.0}|{step.PressureBar:0.0}\n");
+            }
+
             foreach (var ingredient in step.Ingredients.OrderBy(i => i.IngredientId))
             {
                 canonical.Append(CultureInfo.InvariantCulture,
@@ -301,7 +307,13 @@ public sealed class RecipeVersion : INeverDeleted
             errors.RequiredMax($"{at}.actionText", step.ActionText?.Trim(), 500)
                 .MaxLength($"{at}.equipmentClass", step.EquipmentClass?.Trim(), 40)
                 .MaxLength($"{at}.techniqueGate", step.TechniqueGate?.Trim(), 255)
-                .Check(step.DurationSeconds is null or > 0, $"{at}.durationSeconds", "must be greater than 0");
+                .Check(step.DurationSeconds is null or > 0, $"{at}.durationSeconds", "must be greater than 0")
+                .Check(step.TemperatureC is null or (>= 0 and <= 100), $"{at}.temperatureC", "must be between 0 and 100")
+                .Check(step.TemperatureC is not { } t || decimal.Round(t, 1) == t, $"{at}.temperatureC",
+                    "may have at most 1 decimal place")
+                .Check(step.PressureBar is null or (> 0 and <= 20), $"{at}.pressureBar", "must be above 0 and at most 20")
+                .Check(step.PressureBar is not { } p || decimal.Round(p, 1) == p, $"{at}.pressureBar",
+                    "may have at most 1 decimal place");
 
             for (var j = 0; j < step.Ingredients.Count; j++)
             {
