@@ -41,6 +41,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<ValidationResult> ValidationResults => Set<ValidationResult>();
     public DbSet<AiDraftLog> AiDraftLogs => Set<AiDraftLog>();
     public DbSet<Course> Courses => Set<Course>();
+    public DbSet<LessonMedia> LessonMedia => Set<LessonMedia>();
     public DbSet<TrainingRegulation> TrainingRegulations => Set<TrainingRegulation>();
     public DbSet<TrainingClass> TrainingClasses => Set<TrainingClass>();
     public DbSet<Enrollment> Enrollments => Set<Enrollment>();
@@ -114,7 +115,21 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         ConfigureCourses(modelBuilder);
         ConfigureTraining(modelBuilder);
 
+        modelBuilder.Entity<Lesson>(lesson =>
+        {
+            lesson.HasMany(l => l.Media).WithOne().HasForeignKey(media => media.LessonId)
+                .OnDelete(DeleteBehavior.Cascade);
+            lesson.Navigation(l => l.Media).UsePropertyAccessMode(PropertyAccessMode.Field);
+        });
+
+        modelBuilder.Entity<LessonMedia>(media =>
+        {
+            media.Property(m => m.Sha256).HasMaxLength(64).IsFixedLength();
+            media.HasIndex(m => m.StorageKey).IsUnique();
+        });
+
         ApplySchemaConventions(modelBuilder);
+
     }
 
     /// <summary>

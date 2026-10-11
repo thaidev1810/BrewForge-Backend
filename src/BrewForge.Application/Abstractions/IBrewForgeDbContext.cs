@@ -35,6 +35,7 @@ public interface IBrewForgeDbContext
 
     /// <summary>The aggregate root. Modules, lessons and the quiz are reached through it.</summary>
     DbSet<Course> Courses { get; }
+    DbSet<LessonMedia> LessonMedia { get; }
 
     DbSet<TrainingRegulation> TrainingRegulations { get; }
 

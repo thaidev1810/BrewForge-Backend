@@ -162,6 +162,26 @@ public sealed class Course : INeverDeleted
         module.RemoveLesson(lesson);
     }
 
+    /// <summary>Whether a picture may be added to a lesson of this course now: only a draft is edited.</summary>
+    public void EnsureAcceptsLessonMedia(CourseModule module, Lesson lesson)
+    {
+        EnsureEditable();
+        module.EnsureAcceptsMedia(lesson);
+    }
+
+    public LessonMedia AddLessonMedia(CourseModule module, Lesson lesson, long uploadedBy, string fileName,
+        string contentType, long sizeBytes, string sha256, string storageKey, DateTimeOffset now)
+    {
+        EnsureEditable();
+        return module.AddLessonMedia(lesson, uploadedBy, fileName, contentType, sizeBytes, sha256, storageKey, now);
+    }
+
+    public void RemoveLessonMedia(CourseModule module, Lesson lesson, LessonMedia media)
+    {
+        EnsureEditable();
+        module.RemoveLessonMedia(lesson, media);
+    }
+
     /// <summary>
     /// Rebuilds one module from the bound version. Refused for an AUTHORED
     /// module, which regeneration must never overwrite (BR-30).

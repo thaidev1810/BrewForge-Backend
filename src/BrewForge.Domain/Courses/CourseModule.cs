@@ -37,6 +37,38 @@ public sealed class Lesson
 
     public bool HasContent => !string.IsNullOrWhiteSpace(Content);
 
+    private readonly List<LessonMedia> _media = [];
+
+    /// <summary>The pictures the trainer uploaded to the lesson. Use <see cref="OrderedMedia"/> to read them in order.</summary>
+    public IReadOnlyList<LessonMedia> Media => _media;
+
+    public IReadOnlyList<LessonMedia> OrderedMedia() => [.. _media.OrderBy(media => media.SortOrder).ThenBy(media => media.Id)];
+
+    internal LessonMedia AddMedia(long uploadedBy, string fileName, string contentType, long sizeBytes, string sha256,
+        string storageKey, DateTimeOffset now)
+    {
+        EnsureRoomForMedia();
+        var media = new LessonMedia(_media.Count == 0 ? 1 : _media.Max(m => m.SortOrder) + 1, uploadedBy, fileName,
+            contentType, sizeBytes, sha256, storageKey, now);
+        _media.Add(media);
+        return media;
+    }
+
+    internal void EnsureRoomForMedia()
+    {
+        if (_media.Count >= LessonMedia.MaxPerLesson)
+        {
+            throw DomainException.RuleViolation(LessonMedia.Rule,
+                $"A lesson carries at most {LessonMedia.MaxPerLesson} pictures. Remove one before adding another.");
+        }
+    }
+
+    internal void RemoveMedia(LessonMedia media)
+    {
+        if (!_media.Remove(media)) throw new ArgumentException("The picture is not part of this lesson.", nameof(media));
+    }
+
+
     internal void SetAuthored(string title, string? content, string? mediaUrl)
     {
         Title = title;
@@ -164,7 +196,35 @@ public sealed class CourseModule
         Touch();
     }
 
+    /// <summary>
+    /// Whether a picture may be added to the lesson, asked before the file is
+    /// stored. BR-30 holds here too: a generated module is the recipe's, and
+    /// a picture on it would be the trainer's.
+    /// </summary>
+    public void EnsureAcceptsMedia(Lesson lesson)
+    {
+        EnsureAuthorable();
+        EnsureOwns(lesson);
+        lesson.EnsureRoomForMedia();
+    }
+
+    public LessonMedia AddLessonMedia(Lesson lesson, long uploadedBy, string fileName, string contentType,
+        long sizeBytes, string sha256, string storageKey, DateTimeOffset now)
+    {
+        EnsureAcceptsMedia(lesson);
+        LessonMedia.EnsureSize(sizeBytes);
+        return lesson.AddMedia(uploadedBy, fileName, contentType, sizeBytes, sha256, storageKey, now);
+    }
+
+    public void RemoveLessonMedia(Lesson lesson, LessonMedia media)
+    {
+        EnsureAuthorable();
+        EnsureOwns(lesson);
+        lesson.RemoveMedia(media);
+    }
+
     // ---------------------------------------------------------------- generation (internal)
+
 
     internal void ReplaceGenerated(IEnumerable<(string Title, long? RecipeStepId)> lessons, int durationMinutes)
     {
