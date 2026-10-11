@@ -51,6 +51,7 @@ public static class DependencyInjection
 
         services.Configure<StorageOptions>(configuration.GetSection(StorageOptions.Section));
         services.AddSingleton<IPracticalVideoStorage, LocalPracticalVideoStorage>();
+        services.AddSingleton<ILessonMediaStorage, LocalLessonMediaStorage>();
 
         services.Configure<EmailOptions>(configuration.GetSection(EmailOptions.Section));
         services.AddSingleton<IEmailSender, SmtpEmailSender>();

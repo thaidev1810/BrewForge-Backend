@@ -61,6 +61,7 @@ public sealed class BrewForgeApiFactory : WebApplicationFactory<Program>, IAsync
         builder.UseSetting("Scheduler:NotificationIntervalSeconds", "0");
         builder.UseSetting("Scheduler:ReminderIntervalMinutes", "0");
         builder.UseSetting("Storage:PracticalVideoRoot", VideoRoot);
+        builder.UseSetting("Storage:LessonMediaRoot", Path.Combine(VideoRoot, "lesson-media"));
 
         // No test ever reaches a real language model.
         builder.ConfigureTestServices(services =>
