@@ -175,4 +175,37 @@ public sealed class BrewingParameterApiTests : IDisposable
         Assert.Equal((JsonValueKind.Null, JsonValueKind.Null), (removed.GetProperty("brewTempMinC").ValueKind, removed.GetProperty("brewTempMaxC").ValueKind));
     }
 
+    // ---------------------------------------------------------------- the language model
+
+    [Fact]
+    public async Task Model_answer_may_state_the_temperature_of_a_step_and_it_is_checked_like_any_other()
+    {
+        var tea = await NewTeaSetAsync();
+        var (_, versionId) = await _factory.NewDraftAsync();
+        using var specialist = await _factory.ClientForAsync(TestUsers.RdSpecialist);
+        _factory.DraftModel.Answer(JsonSerializer.Serialize(new
+        {
+            drinkName = "Green tea", category = "TEA",
+            steps = new object[]
+            {
+                new
+                {
+                    stepOrder = 1, actionText = "Heat the water", equipmentClass = tea.Kettle, techniqueGate = (string?)null, durationSeconds = 120,
+                    temperatureC = 82.46, pressureBar = (decimal?)null,
+                    ingredients = new[] { new { ingredientCode = "ING-WATER", quantity = 300, unit = "ml" } }, dependsOnSteps = Array.Empty<object>(),
+                },
+            },
+        }));
+
+        var result = await (await specialist.PostAsJsonAsync($"{Versions}/{versionId}/generate-draft", new { description = "A plain green tea" }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        // Stored to one decimal place, and within the range of the kettle.
+        Assert.Equal(82.5m, result.GetProperty("version").GetProperty("steps")[0].GetProperty("temperatureC").GetDecimal());
+        Assert.True(result.GetProperty("validation").GetProperty("passed").GetBoolean());
+        // The model was told about the brewing window of the leaf.
+        Assert.Contains($"{tea.Leaf} | Green tea leaf", Assert.Single(_factory.DraftModel.Calls).UserPrompt);
+        Assert.Contains("| 75-85", _factory.DraftModel.Calls[0].UserPrompt);
+        Assert.Contains("temperatureC", _factory.DraftModel.Calls[0].JsonSchema);
+    }
 }

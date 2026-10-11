@@ -159,7 +159,7 @@ public static class RecipeDraftParser
 
             specs.Add(new StepSpec(order, step.GetProperty("actionText").GetString(), equipmentClass,
                 OptionalString(step, "techniqueGate"), OptionalInt(step, "durationSeconds"), ingredientSpecs,
-                dependencySpecs));
+                dependencySpecs, OptionalTenths(step, "temperatureC"), OptionalTenths(step, "pressureBar")));
         }
 
         return problems.Count > 0
@@ -173,6 +173,12 @@ public static class RecipeDraftParser
     private static string? OptionalString(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
+            : null;
+
+    /// <summary>A setting to one decimal place, as it is stored; a model is free to answer with more digits.</summary>
+    private static decimal? OptionalTenths(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
+            ? decimal.Round(value.GetDecimal(), 1, MidpointRounding.AwayFromZero)
             : null;
 
     private static int? OptionalInt(JsonElement element, string name) =>
