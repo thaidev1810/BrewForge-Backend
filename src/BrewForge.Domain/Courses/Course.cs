@@ -237,10 +237,10 @@ public sealed class Course : INeverDeleted
     public IReadOnlyList<long> PracticalChecklistItemIds() =>
         [.. PracticalChecklist().Select(lesson => lesson.RecipeStepId ?? lesson.Id)];
 
-    public void UpdateQuiz(string? title, int? passScore)
+    public void UpdateQuiz(string? title, int? passScore, int? drawPerModule = null)
     {
         EnsureEditable();
-        Quiz.Update(title, passScore);
+        Quiz.Update(title, passScore, drawPerModule);
     }
 
     public QuizQuestion AddQuizQuestion(long? courseModuleId, string? questionText,
