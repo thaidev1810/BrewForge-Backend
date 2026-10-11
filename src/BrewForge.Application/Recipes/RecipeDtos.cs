@@ -28,7 +28,7 @@ public sealed record RecipeVersionDto(long Id, long RecipeId, int VersionNo, Ver
 
 public sealed record StepDto(long Id, int StepOrder, string ActionText, string? EquipmentClass,
     string? TechniqueGate, int? DurationSeconds, IReadOnlyList<StepIngredientDto> Ingredients,
-    IReadOnlyList<StepDependencyDto> DependsOn);
+    IReadOnlyList<StepDependencyDto> DependsOn, decimal? TemperatureC = null, decimal? PressureBar = null);
 
 public sealed record StepIngredientDto(long IngredientId, string? IngredientCode, string? IngredientName,
     decimal Quantity, string Unit);
@@ -80,9 +80,10 @@ public sealed record RecipeVersionDiffDto(long RecipeId, VersionRefDto Before, V
 /// <summary>The whole content of a draft. A PUT replaces the content; it does not patch it.</summary>
 public sealed record RecipeContentRequest(IReadOnlyList<StepRequest>? Steps);
 
+/// <summary><c>TemperatureC</c> and <c>PressureBar</c> are optional: the setting the step is done at, where the recipe states one.</summary>
 public sealed record StepRequest(int? StepOrder, string? ActionText, string? EquipmentClass, string? TechniqueGate,
     int? DurationSeconds, IReadOnlyList<StepIngredientRequest>? Ingredients,
-    IReadOnlyList<StepDependencyRequest>? DependsOn);
+    IReadOnlyList<StepDependencyRequest>? DependsOn, decimal? TemperatureC = null, decimal? PressureBar = null);
 
 /// <summary>The ingredient is named by <c>IngredientId</c> or, failing that, by <c>IngredientCode</c>.</summary>
 public sealed record StepIngredientRequest(long? IngredientId, string? IngredientCode, decimal? Quantity, string? Unit);

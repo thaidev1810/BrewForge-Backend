@@ -77,7 +77,7 @@ internal static class RecipeContentResolver
                 [
                     .. step.Dependencies.OrderBy(d => d.DependsOnStep.StepOrder).Select(d =>
                         new StepDependencyDto(d.DependsOnStepId, d.DependsOnStep.StepOrder, d.DependencyType)),
-                ])),
+                ], step.TemperatureC, step.PressureBar)),
         ]);
 
     /// <summary>
@@ -152,7 +152,7 @@ internal static class RecipeContentResolver
             }
 
             specs.Add(new StepSpec(step.StepOrder ?? 0, step.ActionText, equipmentClass, step.TechniqueGate,
-                step.DurationSeconds, ingredientSpecs, dependencySpecs));
+                step.DurationSeconds, ingredientSpecs, dependencySpecs, step.TemperatureC, step.PressureBar));
         }
 
         errors.ThrowIfAny();

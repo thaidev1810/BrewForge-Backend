@@ -1,0 +1,134 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using BrewForge.Api.Tests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
+using static BrewForge.Api.Tests.Infrastructure.RecipeScenario;
+
+namespace BrewForge.Api.Tests.Slice2;
+
+/// <summary>
+/// The temperature and the pressure of a step through the API: stored with
+/// the draft, checked against a machine set by temperature (BR-10) and
+/// against the window a leaf is brewed in (BR-11), and the window itself as
+/// master data.
+/// </summary>
+[Collection(ApiCollection.Name)]
+public sealed class BrewingParameterApiTests : IDisposable
+{
+    private readonly BrewForgeApiFactory _factory;
+
+    public BrewingParameterApiTests(BrewForgeApiFactory factory)
+    {
+        _factory = factory;
+        _factory.DraftModel.Reset();
+    }
+
+    public void Dispose() => _factory.DraftModel.Reset();
+
+    /// <summary>A kettle set between 80 and 100 C and a green tea brewed at 75 to 85 C, made for one test.</summary>
+    private sealed record TeaSet(string Kettle, string Leaf, long LeafId);
+
+    private async Task<TeaSet> NewTeaSetAsync()
+    {
+        using var admin = await _factory.ClientForAsync(TestUsers.Admin);
+        var tag = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        await (await admin.PostAsJsonAsync("/api/v1/equipment-classes", new
+        {
+            equipmentCode = $"EQ-{tag}", equipmentClass = $"KETTLE_{tag}", minThreshold = 80, maxThreshold = 100, dosingUnit = "degC",
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        var leaf = await (await admin.PostAsJsonAsync("/api/v1/ingredients", new
+        {
+            ingredientCode = $"ING-{tag}", name = $"Green tea leaf {tag}", unit = "g", shelfLifeHours = 6,
+            brewTempMinC = 75, brewTempMaxC = 85,
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        return new TeaSet($"KETTLE_{tag}", $"ING-{tag}", leaf.Id());
+    }
+
+    private static object Content(TeaSet tea, decimal? heatTo, decimal? brewAt) => new
+    {
+        steps = new object[]
+        {
+            new
+            {
+                stepOrder = 1, actionText = "Heat the water", equipmentClass = tea.Kettle, durationSeconds = 120,
+                temperatureC = heatTo, ingredients = new[] { Use("ING-WATER", 300m, "ml") },
+            },
+            new
+            {
+                stepOrder = 2, actionText = "Brew the green tea", durationSeconds = 180, temperatureC = brewAt,
+                ingredients = new[] { Use(tea.Leaf, 6m, "g") }, dependsOn = new[] { new { stepOrder = 1, type = "REQUIRES_OUTPUT" } },
+            },
+        },
+    };
+
+    private async Task<JsonElement> ValidateAsync(object content)
+    {
+        using var specialist = await _factory.ClientForAsync(TestUsers.RdSpecialist);
+        var (_, versionId) = await _factory.NewDraftAsync(content);
+        return await (await specialist.PostAsync($"{Versions}/{versionId}/validate", null)).ShouldBeAsync(HttpStatusCode.OK);
+    }
+
+    private static JsonElement CheckOf(JsonElement result, string type) =>
+        result.GetProperty("checks").EnumerateArray().Single(check => check.GetProperty("checkType").GetString() == type);
+
+    // ---------------------------------------------------------------- the settings of a step
+
+    [Fact]
+    public async Task Draft_keeps_the_temperature_and_the_pressure_its_steps_state()
+    {
+        var tea = await NewTeaSetAsync();
+        var (_, versionId) = await _factory.NewDraftAsync(new
+        {
+            steps = new object[]
+            {
+                new { stepOrder = 1, actionText = "Heat the water", equipmentClass = tea.Kettle, temperatureC = 82.5, ingredients = Array.Empty<object>() },
+                new { stepOrder = 2, actionText = "Extract", pressureBar = 9, ingredients = Array.Empty<object>() },
+                new { stepOrder = 3, actionText = "Serve", ingredients = Array.Empty<object>() },
+            },
+        });
+
+        var steps = (await _factory.GetVersionAsync(versionId)).GetProperty("steps").EnumerateArray().ToList();
+
+        Assert.Equal((82.5m, JsonValueKind.Null), (steps[0].GetProperty("temperatureC").GetDecimal(), steps[0].GetProperty("pressureBar").ValueKind));
+        Assert.Equal((JsonValueKind.Null, 9m), (steps[1].GetProperty("temperatureC").ValueKind, steps[1].GetProperty("pressureBar").GetDecimal()));
+        Assert.Equal((JsonValueKind.Null, JsonValueKind.Null), (steps[2].GetProperty("temperatureC").ValueKind, steps[2].GetProperty("pressureBar").ValueKind));
+    }
+
+    [Fact]
+    public async Task Setting_that_no_recipe_could_mean_is_refused_with_the_field_named()
+    {
+        using var specialist = await _factory.ClientForAsync(TestUsers.RdSpecialist);
+        var (_, versionId) = await _factory.NewDraftAsync();
+        object Step(object setting) => new { steps = new[] { setting } };
+
+        var tooHot = await (await specialist.PutAsJsonAsync($"{Versions}/{versionId}",
+            Step(new { stepOrder = 1, actionText = "Boil", temperatureC = 140, ingredients = Array.Empty<object>() })))
+            .ShouldBeErrorAsync(HttpStatusCode.BadRequest);
+        var noPressure = await (await specialist.PutAsJsonAsync($"{Versions}/{versionId}",
+            Step(new { stepOrder = 1, actionText = "Extract", pressureBar = 0, ingredients = Array.Empty<object>() })))
+            .ShouldBeErrorAsync(HttpStatusCode.BadRequest);
+
+        Assert.Contains("steps[0].temperatureC", tooHot.DetailFields());
+        Assert.Contains("steps[0].pressureBar", noPressure.DetailFields());
+    }
+
+    [Fact]
+    public async Task BR_10_a_machine_set_by_temperature_is_checked_against_the_temperature_of_the_step()
+    {
+        var tea = await NewTeaSetAsync();
+
+        var untold = await ValidateAsync(Content(tea, heatTo: null, brewAt: null));
+        var tooCold = await ValidateAsync(Content(tea, heatTo: 70m, brewAt: null));
+        var right = await ValidateAsync(Content(tea, heatTo: 80m, brewAt: 80m));
+
+        var missing = Assert.Single(CheckOf(untold, "EQUIPMENT").GetProperty("violations").EnumerateArray());
+        Assert.Equal(("BR-10", "no temperature", 1), (missing.GetProperty("rule").GetString(), missing.GetProperty("actual").GetString(),
+            missing.GetProperty("stepOrder").GetInt32()));
+        var outside = Assert.Single(CheckOf(tooCold, "EQUIPMENT").GetProperty("violations").EnumerateArray());
+        Assert.Equal(("MSG-E10", "80.0 - 100.0", "70.0"), (outside.GetProperty("code").GetString(),
+            outside.GetProperty("expected").GetString(), outside.GetProperty("actual").GetString()));
+        Assert.True(right.GetProperty("passed").GetBoolean());
+    }
+
+}

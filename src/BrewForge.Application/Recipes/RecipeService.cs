@@ -239,6 +239,7 @@ internal static class RecipeVersionCopy
         .. version.OrderedSteps().Select(step => new StepSpec(step.StepOrder, step.ActionText, step.EquipmentClass,
             step.TechniqueGate, step.DurationSeconds,
             [.. step.Ingredients.Select(i => new IngredientSpec(i.IngredientId, i.Quantity, i.Unit))],
-            [.. step.Dependencies.Select(d => new DependencySpec(d.DependsOnStep.StepOrder, d.DependencyType))])),
+            [.. step.Dependencies.Select(d => new DependencySpec(d.DependsOnStep.StepOrder, d.DependencyType))],
+            step.TemperatureC, step.PressureBar)),
     ];
 }
