@@ -1,18 +1,22 @@
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
+using BrewForge.Domain.Training;
 using static BrewForge.Domain.Tests.Recipes.RecipeFixtures;
 
 namespace BrewForge.Domain.Tests.Courses;
 
 /// <summary>
 /// A quiz as a bank of questions: an attempt is given so many from each
-/// module, and other ones the next time.
+/// module, the same ones it is then marked against, and other ones the next
+/// time.
 /// </summary>
 public sealed class QuestionDrawTests
 {
     private const long Trainer = 6;
+    private const long Trainee = 61;
     private const int PerModule = 6;
     private static readonly DateTimeOffset Now = new(2026, 10, 11, 9, 0, 0, TimeSpan.Zero);
+    private static readonly TrainingRules Rules = new(3, DueDays: 14, MaxRetakes: 2, MinAttendancePct: 80);
     private static readonly QuizOption[] Options = [new("A", "Right"), new("B", "Wrong")];
 
     private static DomainException Refused(Action action) => Assert.Throws<DomainException>(action);
@@ -49,6 +53,14 @@ public sealed class QuestionDrawTests
             course.Approve(8, Now);
         }
         return course;
+    }
+
+    private static Enrollment Eligible(Course course, long enrollmentId = 501)
+    {
+        var enrollment = WithId(Enrollment.Assign(course, Trainee, null, Rules, Now), enrollmentId);
+        foreach (var module in enrollment.Modules.ToList()) enrollment.CompleteModule(module.CourseModuleId, Now);
+        enrollment.EvaluateEligibility(AttendanceSummary.NoSessions, Rules);
+        return enrollment;
     }
 
     private static long[] Ids(IEnumerable<QuizQuestion> questions) => [.. questions.Select(question => question.Id)];
@@ -128,5 +140,58 @@ public sealed class QuestionDrawTests
 
         course.Submit();
         Assert.Equal(Course.StateRule, Refused(() => course.UpdateQuiz(null, null, 2)).Rule);
+    }
+
+    // ---------------------------------------------------------------- an attempt on a draw
+
+    [Fact]
+    public void Attempt_is_marked_against_the_questions_it_was_given_and_no_others()
+    {
+        var course = CourseWithBank(drawPerModule: 2);
+        var enrollment = Eligible(course);
+        var drawn = course.Quiz.DrawFor(enrollment.Id, enrollment.NextAttemptNo);
+
+        var result = enrollment.AttemptQuiz(course, drawn.ToDictionary(q => q.Id, _ => (string?)"A"),
+            AttendanceSummary.NoSessions, Rules, Now);
+
+        // Five questions were asked and five answered: that is the whole quiz for this attempt.
+        Assert.Equal((100, true, 5), (result.Attempt.Score, result.Attempt.Passed, result.PerModule.Sum(m => m.Total)));
+        Assert.Equal([(ModuleType.Sop, 2, 2), (ModuleType.Technique, 2, 2), (ModuleType.CommonMistakes, 1, 1)],
+            result.PerModule.Select(m => (m.ModuleType, m.Correct, m.Total)));
+    }
+
+    [Fact]
+    public void Answer_to_a_question_that_was_not_in_the_draw_is_refused()
+    {
+        var course = CourseWithBank(drawPerModule: 2);
+        var enrollment = Eligible(course);
+        var drawn = Ids(course.Quiz.DrawFor(enrollment.Id, enrollment.NextAttemptNo));
+        var notDrawn = Enumerable.Range(1, 12).Select(i => (long)i).First(id => !drawn.Contains(id));
+        var answers = drawn.Append(notDrawn).ToDictionary(id => id, _ => (string?)"A");
+
+        var refusal = Refused(() => enrollment.AttemptQuiz(course, answers, AttendanceSummary.NoSessions, Rules, Now));
+
+        Assert.Contains(refusal.Details, d => d.Field == "answers" && d.Issue.Contains(notDrawn.ToString()));
+        Assert.Empty(enrollment.QuizAttempts);
+    }
+
+    [Fact]
+    public void Retake_is_another_attempt_with_its_own_draw_and_its_own_number()
+    {
+        var course = CourseWithBank(drawPerModule: 2);
+        var enrollment = Eligible(course);
+        var first = course.Quiz.DrawFor(enrollment.Id, 1);
+
+        // Everything wrong: failed, and the modules that were wrong are to be studied again.
+        var failed = enrollment.AttemptQuiz(course, first.ToDictionary(q => q.Id, _ => (string?)"B"), AttendanceSummary.NoSessions, Rules, Now);
+        Assert.Equal((false, 2), (failed.Attempt.Passed, enrollment.NextAttemptNo));
+        foreach (var module in enrollment.Modules.ToList()) enrollment.CompleteModule(module.CourseModuleId, Now);
+        enrollment.EvaluateEligibility(AttendanceSummary.NoSessions, Rules);
+
+        var second = course.Quiz.DrawFor(enrollment.Id, enrollment.NextAttemptNo);
+        var passed = enrollment.AttemptQuiz(course, second.ToDictionary(q => q.Id, _ => (string?)"A"), AttendanceSummary.NoSessions, Rules, Now.AddHours(1));
+
+        Assert.Equal((2, true), (passed.Attempt.AttemptNo, passed.Attempt.Passed));
+        Assert.Equal(Ids(second), Ids(course.Quiz.DrawFor(enrollment.Id, 2)));
     }
 }

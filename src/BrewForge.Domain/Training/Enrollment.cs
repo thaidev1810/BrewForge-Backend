@@ -306,6 +306,9 @@ public sealed class Enrollment
     public int RetakesLeft(TrainingRules rules) =>
         Math.Max(0, rules.MaxRetakes - Math.Max(0, CurrentAttempts().Count - 1));
 
+    /// <summary>The number the next attempt will have. Numbers run on across a reset: they are never reused.</summary>
+    public int NextAttemptNo => _quizAttempts.Count == 0 ? 1 : _quizAttempts.Max(attempt => attempt.AttemptNo) + 1;
+
     public bool HasPassedQuiz => CurrentAttempts().Any(attempt => attempt.Passed);
 
     /// <summary>The verdict that counts is the most recent one of the current cycle.</summary>
@@ -344,11 +347,14 @@ public sealed class Enrollment
             throw DomainException.RuleViolation("QUIZ_ALREADY_PASSED", "The quiz of this enrolment has already been passed.");
         }
 
-        var questions = course.Quiz.Questions;
+        // The questions of this attempt: all of the quiz, or the draw that this enrolment's attempt of this number is given.
+        var attemptNo = NextAttemptNo;
+        var questions = course.Quiz.DrawFor(Id, attemptNo);
         var unknown = answers.Keys.Where(id => questions.All(question => question.Id != id)).ToList();
         new FieldErrors()
-            .Check(unknown.Count == 0, "answers", $"refers to questions that are not in this quiz: {string.Join(", ", unknown)}")
+            .Check(unknown.Count == 0, "answers", $"refers to questions that are not in this attempt: {string.Join(", ", unknown)}")
             .ThrowIfAny();
+
 
         var moduleTypes = course.Modules.ToDictionary(module => module.Id, module => module.ModuleType);
         var perModule = questions
@@ -361,7 +367,6 @@ public sealed class Enrollment
         var score = questions.Count == 0 ? 0 : correct * 100 / questions.Count;
         var passed = questions.Count > 0 && score >= course.Quiz.PassScore;
 
-        var attemptNo = _quizAttempts.Count == 0 ? 1 : _quizAttempts.Max(attempt => attempt.AttemptNo) + 1;
         var attempt = new QuizAttempt(course.Quiz.Id, attemptNo, score, passed, new QuizAnswerSheet(answers, perModule), now);
         _quizAttempts.Add(attempt);
 
