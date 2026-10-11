@@ -32,6 +32,7 @@ public sealed class RecipeVersion : INeverDeleted
     ];
 
     private readonly List<RecipeStep> _steps = [];
+    private readonly List<RecipeVariant> _variants = [];
 
     private RecipeVersion() { }
 
@@ -60,6 +61,13 @@ public sealed class RecipeVersion : INeverDeleted
     public IReadOnlyList<RecipeStep> Steps => _steps;
 
     public IReadOnlyList<RecipeStep> OrderedSteps() => [.. _steps.OrderBy(step => step.StepOrder)];
+
+    /// <summary>The ways the version is served besides as written: sizes, hot or iced. Often none.</summary>
+    public IReadOnlyList<RecipeVariant> Variants => _variants;
+
+    public RecipeVariant? Variant(string code) =>
+        _variants.FirstOrDefault(variant => string.Equals(variant.VariantCode, code?.Trim(), StringComparison.OrdinalIgnoreCase));
+
 
     // A version is retained forever, released or not: its number is never reused (BR-01, BR-03).
     string INeverDeleted.RetentionRule => "BR-01";
@@ -101,7 +109,71 @@ public sealed class RecipeVersion : INeverDeleted
             }
             _steps.Add(step);
         }
+
+        // A variant scales the ingredients of the steps: one that is no longer used has nothing to scale.
+        var used = _steps.SelectMany(step => step.Ingredients).Select(i => i.IngredientId).ToHashSet();
+        foreach (var variant in _variants) variant.ForgetIngredientsNotIn(used);
     }
+
+    /// <summary>
+    /// Replaces the variants of the draft. They are content like the steps:
+    /// allowed in DRAFT, and in REJECTED, which it reopens as DRAFT, and the
+    /// editor becomes the author on record (BR-12).
+    /// </summary>
+    public void ReplaceVariants(IReadOnlyList<VariantSpec> variants, long editorId)
+    {
+        EnsureMutable();
+        if (State == VersionState.Validated)
+        {
+            throw DomainException.RuleViolation(StateRule,
+                "A VALIDATED version is awaiting review and can only be changed through the review.");
+        }
+        ValidateVariants(variants);
+
+        TransitionTo(VersionState.Draft);
+        CreatedBy = editorId;
+        _variants.Clear();
+        _variants.AddRange(variants.Select(spec => new RecipeVariant(spec)));
+    }
+
+    /// <summary>The variants as specifications, ready to become those of another version.</summary>
+    public IReadOnlyList<VariantSpec> VariantSpecs() => [.. _variants.Select(variant => variant.ToSpec())];
+
+    private void ValidateVariants(IReadOnlyList<VariantSpec> variants)
+    {
+        ArgumentNullException.ThrowIfNull(variants);
+        var used = _steps.SelectMany(step => step.Ingredients).Select(i => i.IngredientId).ToHashSet();
+        var codes = variants.Select(variant => variant.Code?.Trim().ToUpperInvariant()).ToList();
+        var errors = new FieldErrors()
+            .Check(variants.Count <= RecipeVariant.MaxVariants, "variants", $"a recipe may have at most {RecipeVariant.MaxVariants} variants")
+            .Check(codes.Distinct().Count() == codes.Count, "variants", "two variants have the same code");
+
+        for (var i = 0; i < variants.Count; i++)
+        {
+            var variant = variants[i];
+            var at = $"variants[{i}]";
+            errors.RequiredMax($"{at}.code", variant.Code?.Trim(), 24)
+                .Check(variant.Code is null || variant.Code.Trim().All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'),
+                    $"{at}.code", "may only have letters, digits, - and _")
+                .RequiredMax($"{at}.name", variant.Name?.Trim(), 80)
+                .Check(variant.Scale is > 0 and <= RecipeVariant.MaxScale, $"{at}.scale", $"must be above 0 and at most {RecipeVariant.MaxScale:0}")
+                .Check(decimal.Round(variant.Scale, 3) == variant.Scale, $"{at}.scale", "may have at most 3 decimal places")
+                .Check(variant.Ingredients.Select(x => x.IngredientId).Distinct().Count() == variant.Ingredients.Count,
+                    $"{at}.ingredients", "an ingredient may be scaled only once in a variant");
+
+            for (var j = 0; j < variant.Ingredients.Count; j++)
+            {
+                var ingredient = variant.Ingredients[j];
+                errors.Check(used.Contains(ingredient.IngredientId), $"{at}.ingredients[{j}].ingredientId", "is not an ingredient of this recipe")
+                    .Check(ingredient.Scale is >= 0 and <= RecipeVariant.MaxScale, $"{at}.ingredients[{j}].scale",
+                        $"must be between 0 and {RecipeVariant.MaxScale:0}")
+                    .Check(decimal.Round(ingredient.Scale, 3) == ingredient.Scale, $"{at}.ingredients[{j}].scale",
+                        "may have at most 3 decimal places");
+            }
+        }
+        errors.ThrowIfAny();
+    }
+
 
     /// <summary>
     /// The aggregate decides whether it is valid: the three independent
@@ -257,7 +329,42 @@ public sealed class RecipeVersion : INeverDeleted
                     $"D|{dependency.DependsOnStep.StepOrder}|{dependency.DependencyType.Code()}\n");
             }
         }
+        // The variants are content too. Listed only where there are any, so that a version sealed before they existed keeps its hash.
+        foreach (var variant in _variants.OrderBy(v => v.VariantCode, StringComparer.Ordinal))
+        {
+            canonical.Append(CultureInfo.InvariantCulture, $"V|{variant.VariantCode}|{variant.Name}|{variant.Scale:0.000}\n");
+            foreach (var ingredient in variant.Ingredients.OrderBy(i => i.IngredientId))
+            {
+                canonical.Append(CultureInfo.InvariantCulture, $"VI|{ingredient.IngredientId}|{ingredient.Scale:0.000}\n");
+            }
+        }
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
+
+    }
+
+    /// <summary>
+    /// The version with the quantities of one of its variants: the same
+    /// steps, dependencies and settings, never stored, made so that the
+    /// checks can be run on what is actually served.
+    /// </summary>
+    public RecipeVersion AsServed(RecipeVariant variant)
+    {
+        var served = new RecipeVersion { Id = Id, RecipeId = RecipeId, VersionNo = VersionNo, CreatedBy = CreatedBy };
+        var copies = variant.Apply(this).Select(scaled => (scaled.Step, Copy: new RecipeStep(new StepSpec(
+            scaled.Step.StepOrder, scaled.Step.ActionText, scaled.Step.EquipmentClass, scaled.Step.TechniqueGate,
+            scaled.Step.DurationSeconds,
+            [.. scaled.Ingredients.Select(i => new IngredientSpec(i.IngredientId, i.Quantity, i.Unit))], [],
+            scaled.Step.TemperatureC, scaled.Step.PressureBar)))).ToList();
+        var byOrder = copies.ToDictionary(pair => pair.Step.StepOrder, pair => pair.Copy);
+        foreach (var (step, copy) in copies)
+        {
+            foreach (var dependency in step.Dependencies)
+            {
+                copy.DependOn(byOrder[dependency.DependsOnStep.StepOrder], dependency.DependencyType);
+            }
+            served._steps.Add(copy);
+        }
+        return served;
     }
 
     /// <summary>BR-01: nothing about a released version may change.</summary>

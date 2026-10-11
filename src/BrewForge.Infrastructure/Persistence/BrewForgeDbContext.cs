@@ -134,7 +134,27 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
                 .OnDelete(DeleteBehavior.Cascade);
             version.Navigation(v => v.Steps).UsePropertyAccessMode(PropertyAccessMode.Field);
             version.HasIndex(v => new { v.RecipeId, v.VersionNo }).IsUnique();
+            version.HasMany(v => v.Variants).WithOne().HasForeignKey(variant => variant.RecipeVersionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            version.Navigation(v => v.Variants).UsePropertyAccessMode(PropertyAccessMode.Field);
         });
+
+        modelBuilder.Entity<RecipeVariant>(variant =>
+        {
+            variant.Property(v => v.Scale).HasPrecision(5, 3);
+            variant.HasMany(v => v.Ingredients).WithOne().HasForeignKey(i => i.RecipeVariantId)
+                .OnDelete(DeleteBehavior.Cascade);
+            variant.Navigation(v => v.Ingredients).UsePropertyAccessMode(PropertyAccessMode.Field);
+            // Declared so that replacing the variants of a draft deletes the old ones before it inserts the new.
+            variant.HasIndex(v => new { v.RecipeVersionId, v.VariantCode }).IsUnique();
+        });
+
+        modelBuilder.Entity<RecipeVariantIngredient>(ingredient =>
+        {
+            ingredient.Property(i => i.Scale).HasPrecision(5, 3);
+            ingredient.HasIndex(i => new { i.RecipeVariantId, i.IngredientId }).IsUnique();
+        });
+
 
         modelBuilder.Entity<RecipeStep>(step =>
         {
@@ -460,6 +480,19 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             || ChangeTracker.Entries<StepDependency>().Any(entry =>
                 entry.State != EntityState.Unchanged && sealedStepIds.Contains(entry.Entity.StepId));
         if (childChanged) throw ReleasedVersionIsImmutable();
+
+        // The variants of a sealed version are frozen with its steps.
+        var sealedVariantIds = ChangeTracker.Entries<RecipeVariant>()
+            .Where(entry => sealedVersionIds.Contains(entry.Entity.RecipeVersionId))
+            .Select(entry => entry.Entity.Id)
+            .ToHashSet();
+        var variantChanged =
+            ChangeTracker.Entries<RecipeVariant>().Any(entry =>
+                entry.State != EntityState.Unchanged && sealedVersionIds.Contains(entry.Entity.RecipeVersionId))
+            || ChangeTracker.Entries<RecipeVariantIngredient>().Any(entry =>
+                entry.State != EntityState.Unchanged && sealedVariantIds.Contains(entry.Entity.RecipeVariantId));
+        if (variantChanged) throw ReleasedVersionIsImmutable();
+
     }
 
     private static DomainException ReleasedVersionIsImmutable() =>
