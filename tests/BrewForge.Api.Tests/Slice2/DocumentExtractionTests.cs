@@ -233,3 +233,211 @@ public sealed class DocumentExtractionUnitTests
         return buffer.ToArray();
     }
 }
+
+/// <summary>
+/// Digitising an existing recipe through the API with a scripted language
+/// model: the chain's document becomes a draft, with a report of where each
+/// step came from, and from there it goes the way of any draft.
+/// </summary>
+[Collection(ApiCollection.Name)]
+public sealed class DocumentExtractionApiTests : IDisposable
+{
+    private readonly BrewForgeApiFactory _factory;
+
+    public DocumentExtractionApiTests(BrewForgeApiFactory factory)
+    {
+        _factory = factory;
+        _factory.DraftModel.Reset();
+    }
+
+    public void Dispose() => _factory.DraftModel.Reset();
+
+    private async Task<(long RecipeId, long VersionId)> NewExistingDraftAsync(string origin = "EXISTING")
+    {
+        using var specialist = await _factory.ClientForAsync(TestUsers.RdSpecialist);
+        var recipeId = await _factory.NewRecipeAsync(origin: origin);
+        var version = await (await specialist.PostAsJsonAsync($"{Recipes}/{recipeId}/versions", new { })).ShouldBeAsync(HttpStatusCode.Created);
+        return (recipeId, version.Id());
+    }
+
+    private async Task<HttpResponseMessage> ExtractAsync(long versionId, string documentText = ExistingDocument.Text,
+        string? fileName = "oolong-milk-tea.txt")
+    {
+        using var specialist = await _factory.ClientForAsync(TestUsers.RdSpecialist);
+        return await specialist.PostAsJsonAsync($"{Versions}/{versionId}/extract-document", new { documentText, fileName });
+    }
+
+    [Fact]
+    public async Task Document_of_an_existing_drink_becomes_a_validated_draft_with_a_report_of_where_each_step_came_from()
+    {
+        var (recipeId, versionId) = await NewExistingDraftAsync();
+        _factory.DraftModel.Answer(ExistingDocument.Faithful());
+
+        var result = await (await ExtractAsync(versionId)).ShouldBeAsync(HttpStatusCode.OK);
+
+        // A draft like any other (BR-05), validated at once.
+        var draft = result.GetProperty("draft");
+        Assert.Equal("DRAFT", draft.GetProperty("version").GetProperty("state").GetString());
+        Assert.Equal(["Brew the oolong", "Add the milk tea base", "Garnish with peach"],
+            draft.GetProperty("version").GetProperty("steps").EnumerateArray().Select(s => s.GetProperty("actionText").GetString()));
+        Assert.True(draft.GetProperty("validation").GetProperty("passed").GetBoolean());
+
+        // The report: the document as it was read, each step with its passage, and the line that had no place.
+        var extraction = result.GetProperty("extraction");
+        var document = ExistingDocument.Text.Trim();
+        Assert.Equal((versionId, "oolong-milk-tea.txt", document, document.Length, "fake-draft-model"),
+            (extraction.GetProperty("versionId").GetInt64(), extraction.GetProperty("fileName").GetString(),
+                extraction.GetProperty("documentText").GetString(), extraction.GetProperty("sourceChars").GetInt32(),
+                extraction.GetProperty("model").GetString()));
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(document))), extraction.GetProperty("sourceSha256").GetString());
+        Assert.Equal((3, 3), (extraction.GetProperty("totalSteps").GetInt32(), extraction.GetProperty("groundedSteps").GetInt32()));
+        Assert.Equal([(1, "Brew 18 g oolong leaf with 300 ml water in the tea brewer for 8 minutes.", true),
+                (2, "Add 120 ml milk tea base.", true), (3, "Garnish with 2 peach slices.", true)],
+            extraction.GetProperty("steps").EnumerateArray().Select(s => (s.GetProperty("stepOrder").GetInt32(),
+                s.GetProperty("sourceQuote").GetString(), s.GetProperty("grounded").GetBoolean())));
+        Assert.Equal(["Serve with a smile."], extraction.GetProperty("unmapped").EnumerateArray().Select(u => u.GetString()));
+        Assert.Equal(await _factory.UserIdAsync(TestUsers.RdSpecialist), extraction.GetProperty("extractedBy").GetInt64());
+
+        // The model was asked to transcribe this document, in the schema of an extraction.
+        var call = Assert.Single(_factory.DraftModel.Calls);
+        Assert.Contains(document, call.UserPrompt);
+        Assert.Contains("ING-OOLONG", call.UserPrompt);
+        Assert.Equal(RecipeExtractSchema.Text, call.JsonSchema);
+
+        // BR-06: the call is logged, and the extraction is on record against the version.
+        var log = await _factory.WithDbAsync(db => db.AiDraftLogs.SingleAsync(l => l.RecipeId == recipeId));
+        Assert.True(log.SchemaValid);
+        Assert.Contains(document.ReplaceLineEndings("\n"), log.PromptText.ReplaceLineEndings("\n"));
+        Assert.True(await _factory.WithDbAsync(db => db.AuditLogs.AnyAsync(a =>
+            a.EntityType == "RecipeVersion" && a.EntityId == versionId && a.Action == "AI_EXTRACT")));
+
+        // The reviewer reads the same report later.
+        using var manager = await _factory.ClientForAsync(TestUsers.RdManager);
+        var read = await (await manager.GetAsync($"{Versions}/{versionId}/extraction")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(extraction.GetRawText(), read.GetRawText());
+    }
+
+    [Fact]
+    public async Task Word_document_is_uploaded_and_transcribed_the_same_way()
+    {
+        var (_, versionId) = await NewExistingDraftAsync();
+        _factory.DraftModel.Answer(ExistingDocument.Answer([ExistingDocument.Brew("Brew 18 g oolong leaf in the tea brewer.")]));
+        using var specialist = await _factory.ClientForAsync(TestUsers.RdSpecialist);
+        using var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(DocumentExtractionUnitTests.Docx(
+            "<w:p><w:r><w:t>House recipe</w:t></w:r></w:p><w:p><w:r><w:t>Brew 18 g oolong leaf in the tea brewer.</w:t></w:r></w:p>"));
+        file.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        form.Add(file, "file", "House recipe.docx");
+
+        var result = await (await specialist.PostAsync($"{Versions}/{versionId}/extract-document", form)).ShouldBeAsync(HttpStatusCode.OK);
+
+        var extraction = result.GetProperty("extraction");
+        Assert.Equal(("House recipe.docx", 1, 1), (extraction.GetProperty("fileName").GetString(),
+            extraction.GetProperty("totalSteps").GetInt32(), extraction.GetProperty("groundedSteps").GetInt32()));
+        Assert.Contains("Brew 18 g oolong leaf in the tea brewer.", extraction.GetProperty("documentText").GetString());
+        Assert.Contains("House recipe", Assert.Single(_factory.DraftModel.Calls).UserPrompt);
+    }
+
+    [Fact]
+    public async Task Step_the_document_does_not_contain_is_kept_and_flagged_for_the_reviewer()
+    {
+        var (_, versionId) = await NewExistingDraftAsync();
+        _factory.DraftModel.Answer(ExistingDocument.Answer([ExistingDocument.Brew(), ExistingDocument.Milk("Shake hard with ice for ten seconds.")]));
+
+        var extraction = (await (await ExtractAsync(versionId)).ShouldBeAsync(HttpStatusCode.OK)).GetProperty("extraction");
+
+        Assert.Equal((2, 1), (extraction.GetProperty("totalSteps").GetInt32(), extraction.GetProperty("groundedSteps").GetInt32()));
+        Assert.Equal([true, false], extraction.GetProperty("steps").EnumerateArray().Select(s => s.GetProperty("grounded").GetBoolean()));
+    }
+
+    [Fact]
+    public async Task BR_07_an_answer_of_which_no_step_is_in_the_document_is_retried_once_and_then_rejected_unseen()
+    {
+        var (recipeId, versionId) = await NewExistingDraftAsync();
+        var invented = ExistingDocument.Answer([ExistingDocument.Brew("Steep the leaves until fragrant."), ExistingDocument.Milk("Top with foam.")]);
+        _factory.DraftModel.Answer(invented).Answer(ValidModelDraft());
+
+        var refusal = await (await ExtractAsync(versionId)).ShouldBeErrorAsync(HttpStatusCode.UnprocessableEntity, "MSG-E04", "BR-07");
+
+        // Nothing of either answer reached the caller or the draft.
+        Assert.DoesNotContain("Steep the leaves", refusal.GetRawText());
+        Assert.Equal(2, _factory.DraftModel.Calls.Count);
+        Assert.Empty((await _factory.GetVersionAsync(versionId)).GetProperty("steps").EnumerateArray());
+        // BR-06 all the same: both calls are logged, as answers that did not conform.
+        Assert.Equal([false, false], await _factory.WithDbAsync(db => db.AiDraftLogs.Where(l => l.RecipeId == recipeId)
+            .OrderBy(l => l.Id).Select(l => l.SchemaValid).ToListAsync()));
+        using var manager = await _factory.ClientForAsync(TestUsers.RdManager);
+        await (await manager.GetAsync($"{Versions}/{versionId}/extraction")).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Second_answer_is_used_when_the_first_does_not_conform()
+    {
+        var (_, versionId) = await NewExistingDraftAsync();
+        _factory.DraftModel.Answer("Here is the recipe you asked for!").Answer(ExistingDocument.Faithful());
+
+        var result = await (await ExtractAsync(versionId)).ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.Equal(3, result.GetProperty("extraction").GetProperty("groundedSteps").GetInt32());
+        Assert.Equal(2, _factory.DraftModel.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Document_is_transcribed_only_for_a_drink_the_chain_already_sells_and_only_into_a_draft()
+    {
+        var (_, newDrink) = await NewExistingDraftAsync(origin: "NEW");
+        var (existing, _) = await _factory.NewReleasedRecipeAsync(origin: "EXISTING");
+        var released = await _factory.WithDbAsync(db => db.RecipeVersions.Where(v => v.RecipeId == existing).Select(v => v.Id).SingleAsync());
+
+        await (await ExtractAsync(newDrink)).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "EXTRACT_EXISTING_ONLY");
+        await (await ExtractAsync(released)).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "BR-01");
+        await (await ExtractAsync(999999999)).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+
+        // Refused before the model was asked anything.
+        Assert.Empty(_factory.DraftModel.Calls);
+    }
+
+    [Fact]
+    public async Task Document_must_be_there_and_of_a_readable_kind()
+    {
+        var (_, versionId) = await NewExistingDraftAsync();
+        using var specialist = await _factory.ClientForAsync(TestUsers.RdSpecialist);
+        using var pdf = new MultipartFormDataContent { { new ByteArrayContent("%PDF-1.7"u8.ToArray()), "file", "recipe.pdf" } };
+        using var noFile = new MultipartFormDataContent { { new StringContent("x"), "note" } };
+
+        var tooShort = await (await ExtractAsync(versionId, documentText: "Brew tea.")).ShouldBeErrorAsync(HttpStatusCode.BadRequest);
+        var tooLong = await (await ExtractAsync(versionId, documentText: new string('a', RecipeDraftingService.MaxDocumentChars + 1)))
+            .ShouldBeErrorAsync(HttpStatusCode.BadRequest);
+        var wrongKind = await (await specialist.PostAsync($"{Versions}/{versionId}/extract-document", pdf)).ShouldBeErrorAsync(HttpStatusCode.BadRequest);
+        var missing = await (await specialist.PostAsync($"{Versions}/{versionId}/extract-document", noFile)).ShouldBeErrorAsync(HttpStatusCode.BadRequest);
+
+        Assert.Contains("documentText", tooShort.DetailFields());
+        Assert.Contains("documentText", tooLong.DetailFields());
+        Assert.Contains("file", wrongKind.DetailFields());
+        Assert.Contains("file", missing.DetailFields());
+        Assert.Empty(_factory.DraftModel.Calls);
+    }
+
+    [Fact]
+    public async Task Extracted_draft_is_submitted_and_released_like_any_other_and_the_drink_is_on_sale_without_a_pilot()
+    {
+        var (recipeId, versionId) = await NewExistingDraftAsync();
+        _factory.DraftModel.Answer(ExistingDocument.Faithful());
+        await (await ExtractAsync(versionId)).ShouldBeAsync(HttpStatusCode.OK);
+        using var specialist = await _factory.ClientForAsync(TestUsers.RdSpecialist);
+        using var manager = await _factory.ClientForAsync(TestUsers.RdManager);
+
+        await (await specialist.PostAsync($"{Versions}/{versionId}/submit", null)).ShouldBeAsync(HttpStatusCode.OK);
+        // BR-12 as ever: the one who extracted it is its author, and somebody else releases it.
+        var release = await (await manager.PostAsync($"{Versions}/{versionId}/release", null)).ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.Equal("RELEASED", release.GetProperty("version").GetProperty("state").GetString());
+        // BR-36: an existing drink is LIVE at the branches the moment it is released.
+        var statuses = await _factory.LaunchStatusesAsync(recipeId);
+        Assert.NotEmpty(statuses);
+        Assert.All(statuses, row => Assert.Equal(("LIVE", versionId), (row.GetProperty("status").GetString(), row.GetProperty("recipeVersionId").GetInt64())));
+        // The report of where it came from stays with the released version.
+        var report = await (await manager.GetAsync($"{Versions}/{versionId}/extraction")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(3, report.GetProperty("groundedSteps").GetInt32());
+    }
+}

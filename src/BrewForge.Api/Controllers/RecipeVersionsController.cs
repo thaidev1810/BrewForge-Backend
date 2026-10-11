@@ -1,7 +1,10 @@
 using BrewForge.Api.Auth;
+using BrewForge.Application.Abstractions;
 using BrewForge.Application.Recipes;
 using BrewForge.Application.Recipes.Drafting;
+using BrewForge.Domain.Common;
 using BrewForge.Domain.Identity;
+using BrewForge.Infrastructure.Files;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -41,6 +44,50 @@ public sealed class RecipeVersionsController(RecipeService recipes, RecipeValida
     public Task<DraftResultDto> GenerateDraft(long id, GenerateDraftRequest request,
         CancellationToken cancellationToken) =>
         drafting.GenerateDraftAsync(id, request, cancellationToken);
+
+    /// <summary>
+    /// Transcribes the chain's own document for an existing drink into the
+    /// draft. Either <c>{ documentText, fileName? }</c> as JSON, or
+    /// <c>multipart/form-data</c> with one .txt, .md or .docx in the field
+    /// <c>file</c>. Not in the contract table. 409 unless the recipe is of
+    /// origin EXISTING.
+    /// </summary>
+    [HttpPost("{id:long}/extract-document"), Authorize(Policy = Policies.RdSpecialist)]
+    [RequestSizeLimit(DocumentTextReader.MaxBytes + 64 * 1024)]
+    public async Task<ExtractionResultDto> ExtractDocument(long id, [FromServices] IDocumentTextReader reader,
+        CancellationToken cancellationToken)
+    {
+        // Read here rather than bound: the body is a form or JSON, and a bound parameter admits only one of them.
+        ExtractDocumentRequest request;
+        if (Request.HasFormContentType)
+        {
+            var file = (await Request.ReadFormAsync(cancellationToken)).Files.GetFile("file")
+                       ?? throw DomainException.Validation("A document is required in the field 'file'.",
+                           new ErrorDetail("file", "is required"));
+            await using var content = file.OpenReadStream();
+            request = new ExtractDocumentRequest(await reader.ReadAsync(content, file.FileName, cancellationToken),
+                file.FileName);
+        }
+        else if (Request.HasJsonContentType())
+        {
+            request = await Request.ReadFromJsonAsync<ExtractDocumentRequest>(cancellationToken)
+                      ?? new ExtractDocumentRequest(null, null);
+        }
+        else
+        {
+            request = new ExtractDocumentRequest(null, null);
+        }
+        return await drafting.ExtractAsync(id, request, cancellationToken);
+    }
+
+    /// <summary>
+    /// The report of the last extraction into this version: the document,
+    /// the passage each step was taken from and whether it is in the
+    /// document, and what could not be expressed. Not in the contract table.
+    /// </summary>
+    [HttpGet("{id:long}/extraction"), Authorize(Policy = Policies.HeadOffice)]
+    public Task<ExtractionReportDto> Extraction(long id, CancellationToken cancellationToken) =>
+        drafting.GetExtractionAsync(id, cancellationToken);
 
     /// <summary>UC-07. Runs all three checks. 200 even when a check fails.</summary>
     [HttpPost("{id:long}/validate"), AuthorizeRoles(RoleName.RdSpecialist, RoleName.RdManager)]
