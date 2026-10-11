@@ -111,6 +111,63 @@ public sealed class RecipeVariantTests
         Assert.Equal([(Oolong, 1m)], variant.Ingredients.Select(i => (i.IngredientId, i.Scale)));
     }
 
+    // ---------------------------------------------------------------- BR-08: every way it is served
+
+    [Fact]
+    public void BR_08_a_version_fails_when_one_of_its_variants_puts_too_much_through_a_machine()
+    {
+        // 18 g of leaf is within the brewer's 15-25 g; half as much again is 27 g.
+        var version = Drink(Variant("M", 1m), Variant("L", 1.5m));
+
+        var report = version.Validate(Catalog());
+
+        Assert.False(report.Passed);
+        var violation = Assert.Single(report.Violations);
+        Assert.Equal(("BR-10", "L", 1, "27.0"), (violation.Rule, violation.Variant, violation.StepOrder, violation.Actual));
+        Assert.Equal("Variant L: 27.0 g is outside the 15.0-25.0 g range of TEA_BREWER", violation.Message);
+        // The other two checks have nothing against it: it is the equipment check that fails.
+        Assert.True(report.Check(CheckType.Ordering).Passed);
+        Assert.True(report.Check(CheckType.Ingredient).Passed);
+        Assert.Equal("BR-08", Refused(() => version.Submit(report)).Rule);
+    }
+
+    [Fact]
+    public void Variant_that_keeps_the_dose_of_the_machine_passes()
+    {
+        var version = Drink(Variant("L", 1.5m, (Oolong, 1m)), Variant("S", 0.9m));
+
+        Assert.True(version.Validate(Catalog()).Passed);
+    }
+
+    [Fact]
+    public void Violation_of_the_version_as_written_is_reported_once_not_again_for_every_variant()
+    {
+        // The retired brewer is wrong whatever the quantity.
+        var version = Draft(Step(1, "Brew the oolong", "RETIRED_BREWER", 480, [(Oolong, 18m, "g")]));
+        version.ReplaceVariants([Variant("M", 1m), Variant("L", 1.2m)], Author);
+
+        var violations = version.Validate(Catalog()).Violations.ToList();
+
+        Assert.Null(Assert.Single(violations).Variant);
+    }
+
+    [Fact]
+    public void Version_as_served_keeps_the_order_and_the_settings_of_its_steps()
+    {
+        var version = Draft(
+            Step(1, "Heat the water", "KETTLE", 120, [(Water, 300m, "ml")]) with { TemperatureC = 90m },
+            Step(2, "Brew the oolong", "TEA_BREWER", 480, [(Oolong, 18m, "g")], dependsOn: [1]));
+        version.ReplaceVariants([Variant("L", 1.2m)], Author);
+
+        var served = version.AsServed(version.Variants.Single());
+
+        Assert.Equal((90m, "KETTLE"), (served.OrderedSteps()[0].TemperatureC, served.OrderedSteps()[0].EquipmentClass));
+        Assert.Equal([1], served.OrderedSteps()[1].Dependencies.Select(d => d.DependsOnStep.StepOrder));
+        Assert.Equal(21.6m, served.OrderedSteps()[1].Ingredients.Single().Quantity);
+        // The version itself is as it was.
+        Assert.Equal(18m, version.OrderedSteps()[1].Ingredients.Single().Quantity);
+    }
+
     // ---------------------------------------------------------------- BR-01: content of the version
 
     [Fact]

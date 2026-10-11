@@ -52,7 +52,7 @@ public sealed class ValidationResult
                 ViolationDetail = JsonSerializer.Serialize(new
                 {
                     violation.Rule, violation.Message, violation.Expected, violation.Actual, violation.StepOrder,
-                    violation.Code,
+                    violation.Code, violation.Variant,
                 }, DetailJson),
                 RunAt = runAt,
             }));

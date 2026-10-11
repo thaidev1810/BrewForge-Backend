@@ -5,10 +5,13 @@ namespace BrewForge.Domain.Recipes.Validation;
 /// <summary>
 /// One finding of a validator check, attached to the step that caused it.
 /// <c>Rule</c>, <c>Message</c>, <c>Expected</c> and <c>Actual</c> are what is
-/// stored in <c>validation_result.violation_detail</c>.
+/// stored in <c>validation_result.violation_detail</c>. <c>Variant</c> is the
+/// code of the variant whose quantities caused it, and null for a finding
+/// about the version as written.
 /// </summary>
 public sealed record Violation(long? StepId, int? StepOrder, string Rule, string Message, string Expected,
-    string Actual, string? Code = null);
+    string Actual, string? Code = null, string? Variant = null);
+
 
 public sealed record CheckResult(CheckType CheckType, IReadOnlyList<Violation> Violations)
 {
@@ -67,10 +70,42 @@ public static class RecipeValidator
 {
     private static readonly IRecipeCheck[] Checks = [new EquipmentCheck(), new OrderingCheck(), new IngredientCheck()];
 
+    /// <summary>The checks whose outcome depends on a quantity. The order of the steps is that of the version in every variant.</summary>
+    private static readonly IRecipeCheck[] QuantityChecks = [new EquipmentCheck(), new IngredientCheck()];
+
     /// <summary>
     /// Runs the three checks independently: each one runs to the end whatever
     /// the others found, so the author sees every violation in one pass.
+    ///
+    /// A variant is the version with other quantities, so the checks that
+    /// read a quantity are run again for each one, and what they find is
+    /// reported under the same check with the variant named. A version passes
+    /// only if it passes as written and in every way it is served (BR-08).
     /// </summary>
-    public static ValidationReport Validate(RecipeVersion version, ValidationCatalog catalog) =>
-        new([.. Checks.Select(check => new CheckResult(check.CheckType, check.Run(version, catalog)))]);
+    public static ValidationReport Validate(RecipeVersion version, ValidationCatalog catalog)
+    {
+        var found = Checks.ToDictionary(check => check.CheckType, check => check.Run(version, catalog).ToList());
+
+        foreach (var variant in version.Variants.OrderBy(v => v.VariantCode, StringComparer.Ordinal))
+        {
+            var served = version.AsServed(variant);
+            var stepIds = version.Steps.ToDictionary(step => step.StepOrder, step => step.Id);
+            foreach (var check in QuantityChecks)
+            {
+                found[check.CheckType].AddRange(check.Run(served, catalog)
+                    // What is wrong with the version as written was said once already.
+                    .Where(violation => !found[check.CheckType].Any(known => known.Variant is null
+                        && known.StepOrder == violation.StepOrder && known.Message == violation.Message))
+                    .Select(violation => violation with
+                    {
+                        StepId = violation.StepOrder is { } order ? stepIds.GetValueOrDefault(order) : null,
+                        Message = $"Variant {variant.VariantCode}: {violation.Message}",
+                        Variant = variant.VariantCode,
+                    }));
+            }
+        }
+
+        return new ValidationReport([.. Checks.Select(check => new CheckResult(check.CheckType, found[check.CheckType]))]);
+    }
 }
+
