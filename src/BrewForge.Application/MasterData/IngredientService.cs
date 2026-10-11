@@ -7,16 +7,23 @@ using Microsoft.EntityFrameworkCore;
 namespace BrewForge.Application.MasterData;
 
 public sealed record IngredientDto(long Id, string IngredientCode, string Name, IngredientUnit Unit,
-    int ShelfLifeHours, string? StorageRule, CatalogStatus Status)
+    int ShelfLifeHours, string? StorageRule, CatalogStatus Status, decimal? BrewTempMinC = null,
+    decimal? BrewTempMaxC = null)
 {
     public static IngredientDto From(Ingredient ingredient) =>
         new(ingredient.Id, ingredient.IngredientCode, ingredient.Name, ingredient.Unit,
-            ingredient.ShelfLifeHours, ingredient.StorageRule, ingredient.Status);
+            ingredient.ShelfLifeHours, ingredient.StorageRule, ingredient.Status, ingredient.BrewTempMinC,
+            ingredient.BrewTempMaxC);
 }
 
-/// <summary><c>Status</c> is optional on update and reactivates or deactivates the ingredient.</summary>
+/// <summary>
+/// <c>Status</c> is optional on update and reactivates or deactivates the
+/// ingredient. <c>BrewTempMinC</c> and <c>BrewTempMaxC</c> are the window a
+/// leaf is brewed in: both, or neither for an ingredient that is not brewed.
+/// </summary>
 public sealed record IngredientRequest(string? IngredientCode, string? Name, IngredientUnit? Unit,
-    int? ShelfLifeHours, string? StorageRule, CatalogStatus? Status);
+    int? ShelfLifeHours, string? StorageRule, CatalogStatus? Status, decimal? BrewTempMinC = null,
+    decimal? BrewTempMaxC = null);
 
 /// <summary>UC-02: the ingredient catalogue (SCR-04).</summary>
 public sealed class IngredientService(IBrewForgeDbContext db)
@@ -55,6 +62,7 @@ public sealed class IngredientService(IBrewForgeDbContext db)
         RequireUnitAndShelfLife(request);
         var ingredient = Ingredient.Create(request.IngredientCode!, request.Name!, request.Unit!.Value,
             request.ShelfLifeHours!.Value, request.StorageRule);
+        ingredient.SetBrewingWindow(request.BrewTempMinC, request.BrewTempMaxC);
 
         if (await db.Ingredients.AnyAsync(i => i.IngredientCode == ingredient.IngredientCode, cancellationToken))
         {
@@ -77,6 +85,7 @@ public sealed class IngredientService(IBrewForgeDbContext db)
         RequireUnitAndShelfLife(request);
 
         ingredient.Update(request.Name!, request.Unit!.Value, request.ShelfLifeHours!.Value, request.StorageRule);
+        ingredient.SetBrewingWindow(request.BrewTempMinC, request.BrewTempMaxC);
         if (request.Status == CatalogStatus.Inactive) ingredient.Deactivate();
         if (request.Status == CatalogStatus.Active) ingredient.Reactivate();
 

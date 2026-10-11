@@ -131,4 +131,48 @@ public sealed class BrewingParameterApiTests : IDisposable
         Assert.True(right.GetProperty("passed").GetBoolean());
     }
 
+    // ---------------------------------------------------------------- the brewing window
+
+    [Fact]
+    public async Task BR_11_a_leaf_is_held_to_the_window_it_is_brewed_in_when_the_step_states_its_temperature()
+    {
+        var tea = await NewTeaSetAsync();
+
+        var scalded = await ValidateAsync(Content(tea, heatTo: 100m, brewAt: 100m));
+        var unstated = await ValidateAsync(Content(tea, heatTo: 100m, brewAt: null));
+
+        // The kettle is within its range; it is the leaf that cannot take boiling water. One failed check fails the whole (BR-08).
+        Assert.False(scalded.GetProperty("passed").GetBoolean());
+        Assert.True(CheckOf(scalded, "EQUIPMENT").GetProperty("passed").GetBoolean());
+        var violation = Assert.Single(CheckOf(scalded, "INGREDIENT").GetProperty("violations").EnumerateArray());
+        Assert.Equal(("BR-11", 2, "75 - 85", "100"), (violation.GetProperty("rule").GetString(), violation.GetProperty("stepOrder").GetInt32(),
+            violation.GetProperty("expected").GetString(), violation.GetProperty("actual").GetString()));
+        Assert.Contains(tea.Leaf, violation.GetProperty("message").GetString());
+
+        // A step that states no temperature is not held to the window.
+        Assert.True(unstated.GetProperty("passed").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Brewing_window_of_a_leaf_is_master_data_the_admin_keeps()
+    {
+        using var admin = await _factory.ClientForAsync(TestUsers.Admin);
+        var tea = await NewTeaSetAsync();
+        var url = $"/api/v1/ingredients/{tea.LeafId}";
+        object Leaf(decimal? min, decimal? max) => new { name = "Green tea leaf", unit = "g", shelfLifeHours = 6, brewTempMinC = min, brewTempMaxC = max };
+
+        var created = await (await admin.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal((75m, 85m), (created.GetProperty("brewTempMinC").GetDecimal(), created.GetProperty("brewTempMaxC").GetDecimal()));
+
+        var widened = await (await admin.PutAsJsonAsync(url, Leaf(70m, 90m))).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal((70m, 90m), (widened.GetProperty("brewTempMinC").GetDecimal(), widened.GetProperty("brewTempMaxC").GetDecimal()));
+
+        // Half a window, or one upside down, is not a window.
+        Assert.Contains("brewTempMaxC", (await (await admin.PutAsJsonAsync(url, Leaf(70m, null))).ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
+        Assert.Contains("brewTempMinC", (await (await admin.PutAsJsonAsync(url, Leaf(95m, 80m))).ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
+
+        var removed = await (await admin.PutAsJsonAsync(url, Leaf(null, null))).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal((JsonValueKind.Null, JsonValueKind.Null), (removed.GetProperty("brewTempMinC").ValueKind, removed.GetProperty("brewTempMaxC").ValueKind));
+    }
+
 }
