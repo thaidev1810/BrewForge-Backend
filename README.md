@@ -168,6 +168,7 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | New staff are put on their path, moved on when they pass a stage, and reminded of due dates | `LearningPathService.AssignOpenStagesAsync`, `RemindAsync`; `TrainingReminderScheduler` | `LearningPathApiTests` |
 | A document of an existing drink is transcribed, each step held to the passage it quotes | `RecipeExtractSchema`, `SourceGrounding`, `RecipeExtractionParser`, `RecipeDraftingService.ExtractAsync` | `DocumentExtractionUnitTests`, `DocumentExtractionApiTests` |
 | A variant is content of its version and must pass like it | `RecipeVariant.Apply`, `RecipeVersion.ReplaceVariants`, `AsServed`, `RecipeValidator.Validate`; triggers on `recipe_variant` | `RecipeVariantTests`, `RecipeVariantApiTests` |
+| A picture of a lesson is a picture by its content, and goes only where the trainer writes | `LessonMedia.Format`, `CourseModule.EnsureAcceptsMedia`, `Course.AddLessonMedia` | `LessonMediaTests`, `LessonMediaApiTests` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -587,6 +588,28 @@ hot or iced; the pack's schema has one set of quantities per version.
 - Replacing the steps of a draft drops the scale of an ingredient the recipe
   no longer uses. Courses and sales are per version, not per variant: a
   trainee is certified on the drink, and a cup sold is a cup of the drink.
+
+**The pictures of a lesson** (`006_lesson_media.sql`: table `lesson_media`).
+The pack gives a lesson one `media_url`, "image upload or embedded video
+link", and nowhere to keep an upload. A lesson may now carry up to eight
+pictures, in order; `media_url` stays the link of an embedded video, and a
+video is not uploaded to a lesson.
+
+- `POST /lessons/{id}/media` (multipart, field `file`; PNG, JPEG, WebP or GIF,
+  at most 5 MB) adds a picture, `DELETE /lesson-media/{id}` removes one, and
+  `GET /lesson-media/{id}` serves it to any signed-in user, since a learner
+  sees it in the lesson. Every rendering of a lesson lists its `media`, each
+  with the `url` it is served at.
+- What a file is, is decided by its first bytes, and its name has to agree: a
+  script named `pour.png` is refused, and so is a PNG named `pour.jpg`.
+- A picture goes where the trainer's own text goes. A lesson of a GENERATED
+  module belongs to the recipe and takes none (`409 BR-30`); a technique gate
+  of the MIXED module does. Pictures are added and removed only while the
+  course is a draft, like everything else about it.
+- Deleting a lesson deletes its pictures and their files. The files are kept
+  under `Storage:LessonMediaRoot` (`storage/lesson-media` by default), behind
+  `ILessonMediaStorage`, on the same local file store as the recordings of
+  practicals.
 
 **Digitising an existing recipe.** UC-26 in the pack is a person typing the
 chain's document into the structure. Here the model does the typing, and is
