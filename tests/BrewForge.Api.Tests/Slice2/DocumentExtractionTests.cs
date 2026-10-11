@@ -165,6 +165,58 @@ public sealed class DocumentExtractionUnitTests
         });
     }
 
+    // ---------------------------------------------------------------- uploaded documents
+
+    [Fact]
+    public async Task Text_and_markdown_are_read_as_utf8()
+    {
+        var reader = new DocumentTextReader();
+        var withBom = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes("Trà sữa ô long: 18 g")).ToArray();
+
+        Assert.Equal("Trà sữa ô long: 18 g", await reader.ReadAsync(new MemoryStream(withBom), "recipe.txt", CancellationToken.None));
+        Assert.Equal("# Oolong", await reader.ReadAsync(new MemoryStream("# Oolong"u8.ToArray()), "RECIPE.MD", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Word_document_is_read_paragraph_by_paragraph_with_table_rows_on_one_line()
+    {
+        var reader = new DocumentTextReader();
+
+        var text = await reader.ReadAsync(new MemoryStream(Docx(
+            "<w:p><w:r><w:t>Oolong milk tea</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t xml:space=\"preserve\">1. Brew 18 g </w:t></w:r><w:r><w:t>oolong leaf.</w:t></w:r></w:p>" +
+            "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Milk tea base</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>120 ml</w:t></w:r></w:p></w:tc></w:tr></w:tbl>")),
+            "recipe.docx", CancellationToken.None);
+
+        Assert.Equal(["Oolong milk tea", "1. Brew 18 g oolong leaf.", "Milk tea base | 120 ml"],
+            text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd('\r')));
+    }
+
+    [Theory]
+    [InlineData("recipe.pdf", "text")]
+    [InlineData("recipe", "text")]
+    [InlineData("recipe.txt", "")]
+    [InlineData("recipe.docx", "this is not a zip archive")]
+    public async Task File_that_is_not_a_document_that_can_be_read_is_refused(string fileName, string content)
+    {
+        var refusal = await Assert.ThrowsAsync<DomainException>(() =>
+            new DocumentTextReader().ReadAsync(new MemoryStream(Encoding.UTF8.GetBytes(content)), fileName, CancellationToken.None));
+
+        Assert.Equal(ErrorKind.Validation, refusal.Kind);
+        Assert.Contains(refusal.Details, detail => detail.Field == "file");
+    }
+
+    [Fact]
+    public async Task File_that_is_not_text_or_is_too_large_is_refused()
+    {
+        var reader = new DocumentTextReader();
+        byte[] notText = [0xFF, 0xFE, 0x00, 0xD8, 0x41];
+
+        await Assert.ThrowsAsync<DomainException>(() => reader.ReadAsync(new MemoryStream(notText), "recipe.txt", CancellationToken.None));
+        await Assert.ThrowsAsync<DomainException>(() =>
+            reader.ReadAsync(new MemoryStream(new byte[DocumentTextReader.MaxBytes + 1]), "recipe.txt", CancellationToken.None));
+    }
+
     // ---------------------------------------------------------------- helpers
 
     /// <summary>A Word document with the given body, as small as one can be.</summary>
