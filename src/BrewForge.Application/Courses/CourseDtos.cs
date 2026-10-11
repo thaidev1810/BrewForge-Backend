@@ -31,7 +31,20 @@ public sealed record CourseModuleDto(long Id, long CourseId, ModuleType ModuleTy
 /// time the lesson is read and is never stored with the lesson (BR-22).
 /// </summary>
 public sealed record LessonDto(long Id, int LessonOrder, string Title, long? RecipeStepId, string? Content,
-    string? MediaUrl, bool Generated, object? Reference);
+    string? MediaUrl, bool Generated, object? Reference,
+    IReadOnlyList<LessonMediaDto>? Media = null);
+
+/// <summary>A picture of a lesson. <c>Url</c> is where its content is served, relative to the API.</summary>
+public sealed record LessonMediaDto(long Id, long LessonId, int SortOrder, string FileName, string ContentType,
+    long SizeBytes, string Url, DateTimeOffset UploadedAt)
+{
+    public static LessonMediaDto From(Domain.Courses.LessonMedia media) =>
+        new(media.Id, media.LessonId, media.SortOrder, media.FileName, media.ContentType, media.SizeBytes,
+            $"/api/v1/lesson-media/{media.Id}", media.UploadedAt);
+}
+
+/// <summary>A picture as it is served: its content and what the response says about it.</summary>
+public sealed record LessonMediaContent(Stream Content, string ContentType, string FileName);
 
 public sealed record QuizDto(long Id, long CourseId, string Title, int PassScore, int QuestionCount);
 

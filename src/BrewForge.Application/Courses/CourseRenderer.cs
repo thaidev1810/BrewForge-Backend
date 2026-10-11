@@ -66,7 +66,8 @@ public sealed class CourseRenderer(IBrewForgeDbContext db)
     {
         var generated = module.Source == ModuleSource.Generated || lesson.RecipeStepId is not null;
         return new LessonDto(lesson.Id, lesson.LessonOrder, lesson.Title, lesson.RecipeStepId, lesson.Content,
-            lesson.MediaUrl, generated, generated && source is not null ? Reference(module, lesson, source) : null);
+            lesson.MediaUrl, generated, generated && source is not null ? Reference(module, lesson, source) : null,
+            [.. lesson.OrderedMedia().Select(LessonMediaDto.From)]);
     }
 
     public static QuizDto ToDto(Quiz quiz) => new(quiz.Id, quiz.CourseId, quiz.Title, quiz.PassScore, quiz.QuestionCount);

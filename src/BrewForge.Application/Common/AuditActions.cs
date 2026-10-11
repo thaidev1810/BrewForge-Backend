@@ -42,6 +42,8 @@ public static class AuditActions
     public const string UpdateQuiz = "UPDATE_QUIZ";
     public const string AddQuestion = "ADD_QUESTION";
     public const string UpdateChecklist = "UPDATE_CHECKLIST";
+    public const string AddLessonMedia = "ADD_LESSON_MEDIA";
+    public const string RemoveLessonMedia = "REMOVE_LESSON_MEDIA";
     public const string Approve = "APPROVE";
     public const string Return = "RETURN";
     public const string Rebuild = "REBUILD";
