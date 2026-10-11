@@ -70,7 +70,9 @@ public sealed class CourseRenderer(IBrewForgeDbContext db)
             [.. lesson.OrderedMedia().Select(LessonMediaDto.From)]);
     }
 
-    public static QuizDto ToDto(Quiz quiz) => new(quiz.Id, quiz.CourseId, quiz.Title, quiz.PassScore, quiz.QuestionCount);
+    public static QuizDto ToDto(Quiz quiz) =>
+        new(quiz.Id, quiz.CourseId, quiz.Title, quiz.PassScore, quiz.QuestionCount, quiz.DrawPerModule,
+            quiz.QuestionsPerAttempt());
 
     /// <summary>
     /// The practical checklist: the gate items of the TECHNIQUE module, with

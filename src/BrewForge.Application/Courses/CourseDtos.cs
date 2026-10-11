@@ -46,7 +46,12 @@ public sealed record LessonMediaDto(long Id, long LessonId, int SortOrder, strin
 /// <summary>A picture as it is served: its content and what the response says about it.</summary>
 public sealed record LessonMediaContent(Stream Content, string ContentType, string FileName);
 
-public sealed record QuizDto(long Id, long CourseId, string Title, int PassScore, int QuestionCount);
+/// <summary>
+/// <c>DrawPerModule</c> is how many questions of each module an attempt is given; null asks them all.
+/// <c>QuestionsPerAttempt</c> is what that comes to with the questions there are now.
+/// </summary>
+public sealed record QuizDto(long Id, long CourseId, string Title, int PassScore, int QuestionCount,
+    int? DrawPerModule = null, int QuestionsPerAttempt = 0);
 
 public sealed record QuizQuestionDto(long Id, long CourseModuleId, ModuleType ModuleType, string QuestionText,
     IReadOnlyList<QuizOption> Options, string CorrectOption);
@@ -90,7 +95,8 @@ public sealed record UpdateModuleRequest(int? DurationMinutes);
 
 public sealed record LessonRequest(string? Title, string? Content, string? MediaUrl);
 
-public sealed record QuizRequest(string? Title, int? PassScore);
+/// <summary><c>DrawPerModule</c>: leave out to keep it, 0 to ask every question, a number to draw that many from each module.</summary>
+public sealed record QuizRequest(string? Title, int? PassScore, int? DrawPerModule = null);
 
 public sealed record QuizQuestionRequest(long? CourseModuleId, string? QuestionText,
     IReadOnlyList<QuizOptionRequest>? Options, string? CorrectOption);

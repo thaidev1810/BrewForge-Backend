@@ -268,10 +268,10 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
     {
         var course = await FindAsync(courseId, cancellationToken);
 
-        course.UpdateQuiz(request.Title, request.PassScore);
+        course.UpdateQuiz(request.Title, request.PassScore, request.DrawPerModule);
 
         db.Audit(AuditEntities.Course, () => course.Id, AuditActions.UpdateQuiz,
-            new { course.Quiz.Title, course.Quiz.PassScore });
+            new { course.Quiz.Title, course.Quiz.PassScore, course.Quiz.DrawPerModule });
         await db.SaveChangesAsync(cancellationToken);
         return CourseRenderer.ToDto(course.Quiz);
     }
