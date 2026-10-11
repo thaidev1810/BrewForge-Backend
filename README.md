@@ -24,6 +24,8 @@ rejected.
 | 7 | Sales capture, POS import and aggregation | done |
 | 8 | Pilot programs, the launch gate, the rollout decision | done |
 | 9 | Impact analysis, change propagation, audit trail | done |
+| 10 | Categories, branch quality audits, corrective actions | done (not in the developer pack: see migration 004) |
+| 11 | Products, question bank, direct assignment, practical schedule, skill passport, settings, audit evidence | done (see migration 005) |
 
 This repository is the backend only. The slice prompts also describe a React
 frontend; it is not part of this repository.
@@ -161,12 +163,59 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | A regulation change spares enrolments in flight | `TrainingRegulation.Resolve`, `EnsureNotRetroactive` | `TrainingTests.Enrolment_keeps_the_rule_*`, `TrainingApiTests.Regulation_change_*` |
 | A course built from no recipe is certified through a checklist of its TECHNIQUE lessons | `Course.PracticalChecklist`, `Enrollment.EvaluatePractical` | `CourseWithoutRecipeApiTests` |
 | A notification is queued with the change and delivered by e-mail and Web Push, each channel once | `NotificationExtensions.Notify`, `Notification.RecordAttempt`, `NotificationService.DispatchPendingAsync`, `WebPushEncryption` | `NotificationApiTests`, `WebPushTests` |
+| BR-37 a branch audit is never changed or deleted; a corrective action goes OPEN, IN_PROGRESS, CLOSED and a closed one is final | `BranchAudit` has no mutators; `CorrectiveAction.Start`, `Close`; `INeverDeleted` guard; no PUT or DELETE route | `BranchAuditApiTests` |
+| BR-38 a branch is audited against a released version only; score and verdict are computed, not sent | `QualityAuditService.CreateAsync`, `BranchAudit.Record` | `BranchAuditApiTests` |
+| BR-39 a practical is scheduled after the quiz is passed, one open appointment per enrolment, in the future | `PracticalSchedule.Create`, `Reschedule`; index `ux_practical_schedule_open` | `SupportApiTests.Practical_is_scheduled_*` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
 `AuthorizationMatrixTests` fails when an endpoint exists that is not in
 `AuthorizationMatrix.cs`, so an endpoint cannot be added without deciding who
 may reach it.
+
+## Beyond the role analysis of the developer pack
+
+`GET/POST/PUT /categories` (+ `/{id}/deactivate`) keep the four lists the
+Administrator maintains: DRINK, INGREDIENT, TRAINING, EQUIPMENT; unique per
+kind and code, deactivated and never deleted, readable by every role. They are
+reference data only: recipes and ingredients still use their own fixed columns.
+
+`POST /branch-audits` (QUALITY_AUDITOR) records a visit to a branch against
+the released version of a drink, with a checklist of items (`criterion`,
+`expected`, `actual`, `passed`, `critical`, `comment`, `evidenceUrl`). The
+score is the share of passed items; the audit PASSES at 90 or more with no
+failed critical item, otherwise FAILS. A failed audit raises one corrective
+action in the same call (`retrainingRequired`, `employeeIds` of active staff of
+that branch, `dueDate`) and notifies the branch managers and the named staff.
+`GET /branch-audits/summary` is the auditor dashboard (audits, passed, failed,
+open actions, lowest compliance branch). Corrective actions are started by the
+branch manager or the auditor and closed by the auditor. A branch manager sees
+only the audits and actions of their own branch.
+
+### Slice 11 (migration 005)
+
+- `/products` (R&D specialist writes, everyone reads): a drink as sold, in an active DRINK category, pointing at a
+  recipe. Its current recipe and its current SOP are the same thing here - the released version of that recipe
+  (`currentVersionId`, `currentVersionNo`). Deactivated, never deleted.
+- `/question-bank` (trainer): SINGLE_CHOICE, MULTIPLE_CHOICE and TRUE_FALSE questions kept apart from any quiz;
+  filter by course or by SOP version. `POST /question-bank/{id}/add-to-course/{courseId}` copies one into the quiz
+  on the module it tests (BR-35). A quiz grades one right answer, so a MULTIPLE_CHOICE question cannot be copied
+  (409). Deleting a bank question leaves the copies already in quizzes.
+- `POST /assignments` (trainer, training manager): `{ courseId, branchId, employeeIds | allTrainees, deadline, reason }`
+  creates ordinary enrolments outside any class; those who already hold an open enrolment are listed in
+  `alreadyEnrolled`. `GET /assignments` derives ASSIGNED, IN_PROGRESS, THEORY_COMPLETED, QUIZ_PASSED,
+  PRACTICAL_PENDING (a practical is booked or was failed), COMPLETED (a certificate stands) and OVERDUE (past the
+  deadline), plus LOCKED and CLOSED. A person holding a certificate has a PASSED enrolment, which the unique index
+  `ux_enrollment_active` keeps: retraining such a person needs a course of another type (RECERTIFICATION).
+- `/enrollments/{id}/practical-schedules`, `/practical-schedules` (trainer's agenda): when and where a practical
+  takes place. The trainee is notified and reads their own.
+- `GET /me/skills` (Skill Passport: CERTIFIED, NEEDS_RECERT, TRAINING, NOT_CERTIFIED per published product course)
+  and `GET /dashboards/employees` (certified out of required, in training, overdue, READY/TRAINING/NOT_READY).
+- `GET /settings`, `PUT /settings/{key}` (admin): `company.name` and `audit.pass_mark`; the audit pass mark is read
+  from here. The keys are fixed by migration; there is no create or delete.
+- `POST /branch-audits/evidence` (auditor, JPG/PNG/WEBP up to 5 MB) returns the URL for an item's `evidenceUrl`;
+  `GET /branch-audits/evidence/{key}` serves it. `POST /corrective-actions/{id}/assign-retraining` enrols the staff
+  named on the action on the course given.
 
 ## Decisions the developer pack left open
 

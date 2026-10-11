@@ -6,6 +6,7 @@ using BrewForge.Application.Impact;
 using BrewForge.Application.Launch;
 using BrewForge.Application.MasterData;
 using BrewForge.Application.Notifications;
+using BrewForge.Application.Quality;
 using BrewForge.Application.Recipes;
 using BrewForge.Application.Recipes.Drafting;
 using BrewForge.Application.Sales;
@@ -24,6 +25,16 @@ public static class DependencyInjection
         services.AddScoped<BranchService>();
         services.AddScoped<IngredientService>();
         services.AddScoped<EquipmentClassService>();
+        services.AddScoped<CategoryService>();
+        services.AddScoped<ProductService>();
+        services.AddScoped<SettingsService>();
+        services.AddScoped<QuestionBankService>();
+        services.AddScoped<PracticalScheduleService>();
+        services.AddScoped<AssignmentService>();
+        services.AddScoped<SkillService>();
+        services.AddScoped<EvidenceService>();
+        services.AddScoped<QualityAuditService>();
+        services.AddScoped<CorrectiveActionService>();
 
         services.AddScoped<RecipeService>();
         services.AddScoped<RecipeValidationService>();

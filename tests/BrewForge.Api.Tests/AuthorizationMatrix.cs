@@ -24,6 +24,9 @@ public static class AuthorizationMatrix
 
     private static readonly RoleName[] TrainerOnly = [RoleName.Trainer];
 
+    private static readonly RoleName[] AuditReaders =
+        [RoleName.QualityAuditor, RoleName.RdManager, RoleName.Admin, RoleName.BranchManager];
+
     private static readonly RoleName[] Learners = [RoleName.Trainee, RoleName.Trainer];
 
     /// <summary>"All head-office roles" in the contract: every role not confined to a branch.</summary>
@@ -55,6 +58,53 @@ public static class AuthorizationMatrix
         new("GET", "/users/{id}", AdminOnly),
         new("PUT", "/users/{id}", AdminOnly),
         new("POST", "/users/{id}/deactivate", AdminOnly),
+
+        // Categories: reads for everyone, writes for the administrator.
+        new("GET", "/categories", Everyone),
+        new("GET", "/categories/{id}", Everyone),
+        new("POST", "/categories", AdminOnly),
+        new("PUT", "/categories/{id}", AdminOnly),
+        new("POST", "/categories/{id}/deactivate", AdminOnly),
+
+        // Products, question bank, assignments, practical schedule, skills, settings: see
+        // CatalogAndTrainingSupportControllers.
+        new("GET", "/products", Everyone),
+        new("GET", "/products/{id}", Everyone),
+        new("POST", "/products", Specialist),
+        new("PUT", "/products/{id}", Specialist),
+        new("POST", "/products/{id}/deactivate", Specialist),
+        new("GET", "/question-bank", TrainerOnly),
+        new("GET", "/question-bank/{id}", TrainerOnly),
+        new("POST", "/question-bank", TrainerOnly),
+        new("PUT", "/question-bank/{id}", TrainerOnly),
+        new("DELETE", "/question-bank/{id}", TrainerOnly),
+        new("POST", "/question-bank/{id}/add-to-course/{courseId}", TrainerOnly),
+        new("GET", "/assignments", [RoleName.Trainer, RoleName.TrainingManager, RoleName.BranchManager]),
+        new("POST", "/assignments", [RoleName.Trainer, RoleName.TrainingManager]),
+        new("GET", "/practical-schedules", TrainerOnly),
+        new("GET", "/enrollments/{id}/practical-schedules", Learners),
+        new("POST", "/enrollments/{id}/practical-schedules", TrainerOnly),
+        new("PUT", "/practical-schedules/{id}", TrainerOnly),
+        new("POST", "/practical-schedules/{id}/cancel", TrainerOnly),
+        new("POST", "/practical-schedules/{id}/complete", TrainerOnly),
+        new("GET", "/me/skills", Learners),
+        new("GET", "/dashboards/employees",
+            [RoleName.BranchManager, RoleName.Trainer, RoleName.TrainingManager, RoleName.Admin]),
+        new("GET", "/settings", AdminOnly),
+        new("PUT", "/settings/{key}", AdminOnly),
+        new("POST", "/branch-audits/evidence", [RoleName.QualityAuditor]),
+        new("GET", "/branch-audits/evidence/{key}", AuditReaders),
+        new("POST", "/corrective-actions/{id}/assign-retraining", [RoleName.QualityAuditor]),
+
+        // Branch audits and corrective actions: see QualityController.
+        new("GET", "/branch-audits", AuditReaders),
+        new("GET", "/branch-audits/summary", [RoleName.QualityAuditor, RoleName.RdManager, RoleName.Admin]),
+        new("GET", "/branch-audits/{id}", AuditReaders),
+        new("POST", "/branch-audits", [RoleName.QualityAuditor]),
+        new("GET", "/corrective-actions", AuditReaders),
+        new("GET", "/corrective-actions/{id}", AuditReaders),
+        new("POST", "/corrective-actions/{id}/start", [RoleName.QualityAuditor, RoleName.BranchManager]),
+        new("POST", "/corrective-actions/{id}/close", [RoleName.QualityAuditor]),
 
         // Reads are wider than the contract's "ADMIN": see BranchesController.
         new("GET", "/branches", Everyone),

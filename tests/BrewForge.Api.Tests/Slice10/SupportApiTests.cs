@@ -1,0 +1,267 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using BrewForge.Api.Tests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
+
+namespace BrewForge.Api.Tests.Slice10;
+
+/// <summary>Products, question bank, direct assignment, practical schedule, skills and settings.</summary>
+[Collection(ApiCollection.Name)]
+public sealed class SupportApiTests(BrewForgeApiFactory factory)
+{
+    private static string Unique() => $"T{Guid.NewGuid():N}"[..12].ToUpperInvariant();
+
+    // ---------------------------------------------------------------- products
+
+    [Fact]
+    public async Task Product_shows_the_released_version_of_its_recipe()
+    {
+        var recipeId = await factory.WithDbAsync(db => db.Recipes.Where(r => r.RecipeCode == "R05").Select(r => r.Id).SingleAsync());
+        var drink = await factory.WithDbAsync(db => db.Categories.Where(c => c.Kind == BrewForge.Domain.MasterData.CategoryKind.Drink)
+            .Select(c => c.Id).FirstAsync());
+        using var specialist = await factory.ClientForAsync(TestUsers.RdSpecialist);
+
+        var created = await (await specialist.PostAsJsonAsync("/api/v1/products", new
+        {
+            productCode = Unique(), name = "Espresso", categoryId = drink, recipeId,
+        })).ShouldBeAsync(HttpStatusCode.Created);
+
+        Assert.Equal("ACTIVE", created.GetProperty("status").GetString());
+        Assert.True(created.GetProperty("currentVersionId").GetInt64() > 0);
+        Assert.Equal("R05", created.GetProperty("recipeCode").GetString());
+    }
+
+    [Fact]
+    public async Task Product_category_must_be_an_active_drink_category()
+    {
+        var ingredientCategory = await factory.WithDbAsync(db => db.Categories
+            .Where(c => c.Kind == BrewForge.Domain.MasterData.CategoryKind.Ingredient).Select(c => c.Id).FirstAsync());
+        using var specialist = await factory.ClientForAsync(TestUsers.RdSpecialist);
+
+        var response = await specialist.PostAsJsonAsync("/api/v1/products", new
+        {
+            productCode = Unique(), name = "Wrong", categoryId = ingredientCategory,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    // ---------------------------------------------------------------- question bank
+
+    [Fact]
+    public async Task Question_bank_validates_types_and_the_answers()
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        var trueFalse = await (await trainer.PostAsJsonAsync("/api/v1/question-bank", new
+        {
+            questionType = "TRUE_FALSE", questionText = "Shake for 10 seconds?", correctOptions = new[] { "TRUE" },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        Assert.Equal(2, trueFalse.GetProperty("options").GetArrayLength());
+
+        var twoAnswers = await trainer.PostAsJsonAsync("/api/v1/question-bank", new
+        {
+            questionType = "SINGLE_CHOICE", questionText = "Preset for 15ml?",
+            options = new[] { new { key = "A", text = "S10" }, new { key = "B", text = "S15" } },
+            correctOptions = new[] { "A", "B" },
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, twoAnswers.StatusCode);
+
+        var multiple = await (await trainer.PostAsJsonAsync("/api/v1/question-bank", new
+        {
+            questionType = "MULTIPLE_CHOICE", questionText = "Which are sweet?",
+            options = new[] { new { key = "A", text = "Syrup" }, new { key = "B", text = "Ice" }, new { key = "C", text = "Sugar" } },
+            correctOptions = new[] { "A", "C" },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+
+        var id = multiple.GetProperty("id").GetInt64();
+        Assert.Equal(2, multiple.GetProperty("correctOptions").GetArrayLength());
+        Assert.Equal(HttpStatusCode.NoContent, (await trainer.DeleteAsync($"/api/v1/question-bank/{id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await trainer.GetAsync($"/api/v1/question-bank/{id}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_multiple_choice_question_cannot_be_copied_into_a_quiz()
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var question = await (await trainer.PostAsJsonAsync("/api/v1/question-bank", new
+        {
+            questionType = "MULTIPLE_CHOICE", questionText = "Pick two", moduleType = "SOP",
+            options = new[] { new { key = "A", text = "x" }, new { key = "B", text = "y" } }, correctOptions = new[] { "A", "B" },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+
+        var response = await trainer.PostAsync($"/api/v1/question-bank/{question.GetProperty("id").GetInt64()}/add-to-course/1", null);
+
+        await response.ShouldBeErrorAsync(HttpStatusCode.Conflict);
+    }
+
+    // ---------------------------------------------------------------- assignments, schedule, skills
+
+    [Fact]
+    public async Task Trainer_assigns_a_published_course_with_a_deadline_and_a_reason()
+    {
+        var course = await factory.NewPublishedCourseAsync();
+        var branch = await factory.BranchIdAsync("B01");
+        var trainee = await factory.UserIdAsync(TestUsers.Trainee);
+        var deadline = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(10);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        var result = await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+        {
+            courseId = course.Id(), branchId = branch, employeeIds = new[] { trainee }, deadline, reason = "New SOP version",
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        Assert.Single(result.GetProperty("enrollmentIds").EnumerateArray());
+
+        var list = await (await trainer.GetAsync($"/api/v1/assignments?courseId={course.Id()}")).ShouldBeAsync(HttpStatusCode.OK);
+        var row = Assert.Single(list.GetProperty("items").EnumerateArray());
+        Assert.Equal("ASSIGNED", row.GetProperty("status").GetString());
+        Assert.Equal(deadline.ToString("yyyy-MM-dd"), row.GetProperty("dueDate").GetString());
+
+        var again = await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+        {
+            courseId = course.Id(), branchId = branch, employeeIds = new[] { trainee },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        Assert.Empty(again.GetProperty("enrollmentIds").EnumerateArray());
+        Assert.Single(again.GetProperty("alreadyEnrolled").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task Assignment_deadline_cannot_be_in_the_past_and_staff_must_belong_to_the_branch()
+    {
+        var course = await factory.NewPublishedCourseAsync();
+        var b01 = await factory.BranchIdAsync("B01");
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        var past = await trainer.PostAsJsonAsync("/api/v1/assignments", new
+        {
+            courseId = course.Id(), branchId = b01, allTrainees = true, deadline = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-1),
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, past.StatusCode);
+
+        var foreign = await trainer.PostAsJsonAsync("/api/v1/assignments", new
+        {
+            courseId = course.Id(), branchId = b01, employeeIds = new[] { await factory.UserIdAsync("trainee3") },
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, foreign.StatusCode);
+    }
+
+    [Fact]
+    public async Task Practical_is_scheduled_only_after_the_quiz_and_the_trainee_can_read_it()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var at = DateTimeOffset.UtcNow.AddDays(2);
+        var url = $"/api/v1/enrollments/{learner.EnrollmentId}/practical-schedules";
+
+        await (await trainer.PostAsJsonAsync(url, new { scheduledAt = at, location = "B01 counter" }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "BR-39");
+
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        var created = await (await trainer.PostAsJsonAsync(url, new { scheduledAt = at, location = "B01 counter" }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        Assert.Equal("SCHEDULED", created.GetProperty("status").GetString());
+
+        await (await trainer.PostAsJsonAsync(url, new { scheduledAt = at, location = "B01 counter" }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "BR-39");
+
+        using var trainee = await factory.ClientForAsync(learner.Username);
+        var seen = await (await trainee.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal("B01 counter", Assert.Single(seen.EnumerateArray()).GetProperty("location").GetString());
+
+        var id = created.GetProperty("id").GetInt64();
+        await (await trainer.PostAsync($"/api/v1/practical-schedules/{id}/cancel", null)).ShouldBeAsync(HttpStatusCode.OK);
+        await (await trainer.PostAsync($"/api/v1/practical-schedules/{id}/cancel", null))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "BR-39");
+    }
+
+    [Fact]
+    public async Task Schedule_must_be_in_the_future()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        var response = await trainer.PostAsJsonAsync($"/api/v1/enrollments/{learner.EnrollmentId}/practical-schedules",
+            new { scheduledAt = DateTimeOffset.UtcNow.AddHours(-1), location = "B01" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Skill_passport_lists_every_published_product_course()
+    {
+        using var trainee = await factory.ClientForAsync(TestUsers.Trainee);
+
+        var skills = await (await trainee.GetAsync("/api/v1/me/skills")).ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.All(skills.EnumerateArray(), s => Assert.Contains(s.GetProperty("status").GetString(),
+            new[] { "CERTIFIED", "NEEDS_RECERT", "TRAINING", "NOT_CERTIFIED" }));
+    }
+
+    [Fact]
+    public async Task Branch_manager_sees_employees_of_their_own_branch_only()
+    {
+        using var manager = await factory.ClientForAsync(TestUsers.BranchManager);
+        var own = await factory.BranchIdAsync("B01");
+
+        var rows = await (await manager.GetAsync("/api/v1/dashboards/employees")).ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.NotEmpty(rows.EnumerateArray());
+        Assert.All(rows.EnumerateArray(), r => Assert.Equal(own, r.GetProperty("branchId").GetInt64()));
+    }
+
+    // ---------------------------------------------------------------- settings and evidence
+
+    [Fact]
+    public async Task Audit_pass_mark_is_a_setting_the_administrator_changes_and_validates()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await admin.PutAsJsonAsync("/api/v1/settings/audit.pass_mark", new { value = "150" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound,
+            (await admin.PutAsJsonAsync("/api/v1/settings/no.such.key", new { value = "1" })).StatusCode);
+
+        var changed = await (await admin.PutAsJsonAsync("/api/v1/settings/audit.pass_mark", new { value = "50" }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal("50", changed.GetProperty("value").GetString());
+        try
+        {
+            var version = await factory.WithDbAsync(db => (from v in db.RecipeVersions
+                                                           join r in db.Recipes on v.RecipeId equals r.Id
+                                                           where r.RecipeCode == "R05" && v.State == BrewForge.Domain.Recipes.VersionState.Released
+                                                           select v.Id).SingleAsync());
+            using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+            var audit = await (await auditor.PostAsJsonAsync("/api/v1/branch-audits", new
+            {
+                branchId = await factory.BranchIdAsync("B01"), recipeVersionId = version,
+                items = new[] { new { criterion = "a", passed = true }, new { criterion = "b", passed = false } },
+            })).ShouldBeAsync(HttpStatusCode.Created);
+            Assert.Equal(50, audit.GetProperty("score").GetInt32());
+            Assert.Equal("PASSED", audit.GetProperty("result").GetString());
+        }
+        finally
+        {
+            await admin.PutAsJsonAsync("/api/v1/settings/audit.pass_mark", new { value = "90" });
+        }
+    }
+
+    [Fact]
+    public async Task Evidence_photo_is_uploaded_and_read_back_and_other_files_are_refused()
+    {
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4 };
+
+        using var good = new MultipartFormDataContent { { new ByteArrayContent(png), "file", "sugar.png" } };
+        var stored = await (await auditor.PostAsync("/api/v1/branch-audits/evidence", good)).ShouldBeAsync(HttpStatusCode.Created);
+
+        var back = await auditor.GetAsync(stored.GetProperty("url").GetString());
+        Assert.Equal(HttpStatusCode.OK, back.StatusCode);
+        Assert.Equal(png, await back.Content.ReadAsByteArrayAsync());
+
+        using var bad = new MultipartFormDataContent { { new ByteArrayContent(png), "file", "script.exe" } };
+        Assert.Equal(HttpStatusCode.BadRequest, (await auditor.PostAsync("/api/v1/branch-audits/evidence", bad)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await auditor.GetAsync("/api/v1/branch-audits/evidence/../../etc/passwd")).StatusCode);
+    }
+}

@@ -192,7 +192,7 @@ public sealed class Enrollment
     /// seven complete" can be checked row by row (BR-32).
     /// </summary>
     public static Enrollment Assign(Course course, long userId, long? trainingClassId, TrainingRules rules,
-        DateTimeOffset now)
+        DateTimeOffset now, DateOnly? dueDate = null)
     {
         if (course.State != CourseState.Published)
         {
@@ -206,7 +206,7 @@ public sealed class Enrollment
             UserId = userId,
             TrainingClassId = trainingClassId,
             EnrolledAt = now,
-            DueDate = DateOnly.FromDateTime(now.UtcDateTime).AddDays(rules.DueDays),
+            DueDate = dueDate ?? DateOnly.FromDateTime(now.UtcDateTime).AddDays(rules.DueDays),
         };
         enrollment._modules.AddRange(course.OrderedModules().Select(module => new ModuleProgress(module.Id)));
         return enrollment;

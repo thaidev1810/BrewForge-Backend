@@ -9,6 +9,7 @@ using BrewForge.Domain.Impact;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Notifications;
+using BrewForge.Domain.Quality;
 using BrewForge.Domain.Recipes;
 using BrewForge.Domain.Sales;
 using BrewForge.Domain.Training;
@@ -36,6 +37,11 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<StandardEquipment> StandardEquipment => Set<StandardEquipment>();
     public DbSet<Ingredient> Ingredients => Set<Ingredient>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<Category> Categories => Set<Category>();
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
+    public DbSet<QuestionBankItem> QuestionBank => Set<QuestionBankItem>();
+    public DbSet<PracticalSchedule> PracticalSchedules => Set<PracticalSchedule>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
     public DbSet<RecipeVersion> RecipeVersions => Set<RecipeVersion>();
     public DbSet<ValidationResult> ValidationResults => Set<ValidationResult>();
@@ -53,6 +59,8 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<ChangeImpact> ChangeImpacts => Set<ChangeImpact>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
+    public DbSet<BranchAudit> BranchAudits => Set<BranchAudit>();
+    public DbSet<CorrectiveAction> CorrectiveActions => Set<CorrectiveAction>();
 
     /// <summary>
     /// Read by the query filters below. A member of the context, not a
@@ -102,6 +110,32 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         modelBuilder.Entity<AuditLog>(audit =>
         {
             audit.Property(a => a.PayloadJson).HasColumnType("jsonb");
+        });
+
+        modelBuilder.Entity<QuestionBankItem>(question =>
+        {
+            question.Property(q => q.OptionsJson).HasColumnType("jsonb");
+        });
+
+        modelBuilder.Entity<PracticalSchedule>(schedule =>
+        {
+            // The same reach as the enrolment it belongs to.
+            schedule.HasQueryFilter(s => BranchScope == null
+                || Enrollments.Any(e => e.Id == s.EnrollmentId && e.User.BranchId == BranchScope));
+        });
+
+        modelBuilder.Entity<BranchAudit>(audit =>
+        {
+            audit.HasMany(a => a.Items).WithOne().HasForeignKey(i => i.BranchAuditId).OnDelete(DeleteBehavior.Cascade);
+            audit.Navigation(a => a.Items).UsePropertyAccessMode(PropertyAccessMode.Field);
+            // A store-level caller sees only the audits of its own branch.
+            audit.HasQueryFilter(a => BranchScope == null || a.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<CorrectiveAction>(action =>
+        {
+            action.Property(a => a.EmployeeIds).HasColumnType("bigint[]");
+            action.HasQueryFilter(a => BranchScope == null || a.BranchId == BranchScope);
         });
 
         ConfigureRecipes(modelBuilder);

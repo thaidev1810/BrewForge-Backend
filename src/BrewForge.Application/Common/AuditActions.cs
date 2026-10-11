@@ -107,6 +107,13 @@ public static class AuditEntities
     public const string BranchLaunchStatus = "BranchLaunchStatus";
     public const string PilotProgram = "PilotProgram";
     public const string SalesRecord = "SalesRecord";
+    public const string Category = "Category";
+    public const string BranchAudit = "BranchAudit";
+    public const string CorrectiveAction = "CorrectiveAction";
+    public const string Product = "Product";
+    public const string QuestionBank = "QuestionBankItem";
+    public const string PracticalSchedule = "PracticalSchedule";
+    public const string SystemSetting = "SystemSetting";
 
     /// <summary>
     /// One POS import, identified by its job number. The schema has no table

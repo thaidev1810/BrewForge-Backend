@@ -5,6 +5,7 @@ using BrewForge.Domain.Impact;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Notifications;
+using BrewForge.Domain.Quality;
 using BrewForge.Domain.Recipes;
 using BrewForge.Domain.Sales;
 using BrewForge.Domain.Training;
@@ -25,6 +26,11 @@ public interface IBrewForgeDbContext
     DbSet<StandardEquipment> StandardEquipment { get; }
     DbSet<Ingredient> Ingredients { get; }
     DbSet<AuditLog> AuditLogs { get; }
+    DbSet<Category> Categories { get; }
+    DbSet<Product> Products { get; }
+    DbSet<SystemSetting> SystemSettings { get; }
+    DbSet<QuestionBankItem> QuestionBank { get; }
+    DbSet<PracticalSchedule> PracticalSchedules { get; }
 
     DbSet<Recipe> Recipes { get; }
 
@@ -54,6 +60,10 @@ public interface IBrewForgeDbContext
     DbSet<ChangeImpact> ChangeImpacts { get; }
     DbSet<Notification> Notifications { get; }
     DbSet<PushSubscription> PushSubscriptions { get; }
+
+    /// <summary>The aggregate root. Checklist items are reached through it.</summary>
+    DbSet<BranchAudit> BranchAudits { get; }
+    DbSet<CorrectiveAction> CorrectiveActions { get; }
 
     /// <summary>
     /// Queues an audit entry that is written in the same transaction as the
