@@ -41,6 +41,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<ValidationResult> ValidationResults => Set<ValidationResult>();
     public DbSet<AiDraftLog> AiDraftLogs => Set<AiDraftLog>();
     public DbSet<Course> Courses => Set<Course>();
+    public DbSet<RecipeFeedback> RecipeFeedback => Set<RecipeFeedback>();
     public DbSet<LessonMedia> LessonMedia => Set<LessonMedia>();
     public DbSet<TrainingRegulation> TrainingRegulations => Set<TrainingRegulation>();
     public DbSet<TrainingClass> TrainingClasses => Set<TrainingClass>();
@@ -121,6 +122,9 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
                 .OnDelete(DeleteBehavior.Cascade);
             lesson.Navigation(l => l.Media).UsePropertyAccessMode(PropertyAccessMode.Field);
         });
+
+        // Read by who may see it, which depends on the role and not only on the branch: see RecipeFeedbackService.Visible.
+        modelBuilder.Entity<RecipeFeedback>();
 
         modelBuilder.Entity<LessonMedia>(media =>
         {

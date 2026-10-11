@@ -33,6 +33,9 @@ public interface IBrewForgeDbContext
     DbSet<ValidationResult> ValidationResults { get; }
     DbSet<AiDraftLog> AiDraftLogs { get; }
 
+    /// <summary>What staff and customers said about a version of a drink, and what R&amp;D made of it.</summary>
+    DbSet<RecipeFeedback> RecipeFeedback { get; }
+
     /// <summary>The aggregate root. Modules, lessons and the quiz are reached through it.</summary>
     DbSet<Course> Courses { get; }
     DbSet<LessonMedia> LessonMedia { get; }

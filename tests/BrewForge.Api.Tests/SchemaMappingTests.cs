@@ -27,8 +27,8 @@ public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
         // foreign keys (002); notifications and push subscriptions with one each (003); the variants of a
         // version and their ingredients with three between them (005), frozen by two triggers of their own;
         // the pictures of a lesson with two (006).
-        Assert.Equal(40, tables);
-        Assert.Equal(72, foreignKeys);
+        Assert.Equal(41, tables);
+        Assert.Equal(79, foreignKeys);
         Assert.Equal(5, triggers);
     }
 
