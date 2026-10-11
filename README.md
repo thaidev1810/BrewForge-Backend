@@ -103,7 +103,7 @@ dotnet test
 
 ```
 db/migrations/        The schema. Authoritative; EF Core never creates or alters tables. 001 is the developer pack's, the later scripts are ours.
-docs/reference/       The fixed JSON schema of the LLM call. The rest of the developer pack is not published here.
+docs/reference/       The JSON schema of the LLM call: the developer pack's, with the temperature and the pressure of a step added. The rest of the pack is not published here.
 samples/              Demonstration files that are also test fixtures.
 src/BrewForge.Domain          Entities, state machines, validators. No dependencies.
 src/BrewForge.Application     Use cases, DTOs, ports (persistence, tokens, language model).
@@ -124,8 +124,8 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-07 non-conforming answer retried once, then rejected | `RecipeDraftParser`, `RecipeDraftingService` | `RecipeDraftParserTests`, `AiDraftingTests` |
 | BR-08 a partial pass is a failure | `ValidationReport.Passed`, `RecipeVersion.Submit` | `RecipeValidatorTests` |
 | BR-09 dependency graph is acyclic | `StepDependencyGraph`, `OrderingCheck` | `StepDependencyGraphTests`, `OrderingCheckTests` |
-| BR-10 dose within the equipment range | `EquipmentCheck`, `UnitConverter` | `EquipmentCheckTests`, `UnitConverterTests` |
-| BR-11 ingredient within its shelf life | `IngredientCheck` | `IngredientCheckTests` |
+| BR-10 dose within the equipment range, a temperature and a pressure included | `EquipmentCheck`, `UnitConverter` | `EquipmentCheckTests`, `UnitConverterTests`, `BrewingParameterTests.BR_10_*`, `BrewingParameterApiTests.BR_10_*` |
+| BR-11 ingredient within its shelf life, and a leaf within the window it is brewed in | `IngredientCheck`, `Ingredient.SetBrewingWindow` | `IngredientCheckTests`, `BrewingParameterTests.BR_11_*`, `BrewingParameterApiTests.BR_11_*` |
 | BR-12 approver is not the author | `RecipeVersion.EnsureReleasable`; DB check | `RecipeReleaseTests.BR_12_*`, `ReleaseTests.BR_12_*` |
 | BR-16 master data is never deleted | no DELETE route; `INeverDeleted` guard in the DbContext | `MasterDataIsNeverDeletedTests`, `MasterDataTests` (domain) |
 | BR-18 a course is bound to one version | `Course.RebuildOn` is the only way a binding moves; index `ux_course_one_per_version` | `CourseTests.BR_18_*`, `CourseApiTests.BR_18_*` |
@@ -193,9 +193,10 @@ entries of the version, which cannot be reset because the log is append-only.
 **The equipment check and units.** A step is range-checked on the quantities
 whose unit has the dimension of the machine's dosing unit. Water in millilitres
 on a brewer dosed in grams of leaf is not a dose of that machine. A class dosed
-in `sec` checks the step's duration. A class dosed in `degC` or `bar` has no
-numeric field to compare against in the schema, so only its catalogue
-membership is checked. There is no density table: grams never become
+in `sec` checks the step's duration. A class dosed in `degC` or `bar`
+checks the temperature or the pressure the step states, which the pack's schema
+had no column for and migration 004 added; see "Brewing parameters" under
+"Beyond the developer pack". There is no density table: grams never become
 millilitres.
 
 **Shelf life.** The window of an ingredient runs from the start of the first
@@ -528,6 +529,35 @@ notification.
 - Without the settings above, both channels are skipped and everything else
   works, as with the language model.
 - Two instances of the API would both send: run the dispatcher in one.
+
+**Brewing parameters** (`004_brewing_parameters.sql`: `recipe_step.temperature_c`
+and `pressure_bar`, `ingredient.brew_temp_min_c` and `brew_temp_max_c`). In the
+pack a temperature exists only as the free text of a technique gate ("Water at
+90 C"), which a trainer reads and no check can. For a tea chain that figure is
+the recipe.
+
+- A step may state `temperatureC` (0 to 100, one decimal) and `pressureBar`
+  (above 0, at most 20). Most steps state neither. The released versions that
+  were there before keep NULL, and their content hash is unchanged: the two
+  figures enter the hash only where a step states one.
+- **BR-10, completed.** A step on an equipment class dosed in `degC` must state
+  its temperature, and one on a class dosed in `bar` its pressure, within the
+  range of the class. Untold, it is a violation: a kettle that is not told its
+  setting is not left unchecked.
+- **BR-11, extended.** An ingredient may have a brewing window, the range of
+  water temperature the leaf is brewed at (`brewTempMinC`, `brewTempMaxC` on
+  the ingredient; both or neither). A step that uses the leaf and states its
+  temperature is held to the window. A step that states none is not, so the
+  recipes written before are not made invalid by a leaf gaining a window.
+- The language model is told the window of each leaf and may answer with both
+  figures: `recipe-draft.schema.json` gained `temperatureC` and `pressureBar`,
+  both optional. This is the one file of the pack that was changed. The schema
+  of an extraction is derived from it and gained them with it.
+- A changed temperature or pressure is a changed step in the comparison of two
+  versions, and so reaches a recertification course.
+- Seeded: the brewing windows of the four tea leaves (oolong 85-95, black tea
+  90-100, jasmine 75-85, matcha 70-80), set also on a database seeded earlier,
+  and the water temperature of the three brewed teas of the reference recipes.
 
 **Digitising an existing recipe.** UC-26 in the pack is a person typing the
 chain's document into the structure. Here the model does the typing, and is
