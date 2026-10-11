@@ -166,6 +166,7 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | A recertification course teaches what changed, to staff certified before, and its certificate replaces the flagged one | `Course.WhatToRelearn`, `CourseModuleGenerator.Generate`, `TrainingClassService.OnlyCertifiedBeforeAsync`, `Enrollment.TryCertify` | `RecertificationCourseTests`, `AssessmentTests.Certificate_on_a_newer_version_*`, `RecertificationApiTests` |
 | A course is not assigned to somebody who has not passed its prerequisite | `LearningPathService.OnlyWithPrerequisiteAsync`, `MissingPrerequisiteAsync` | `LearningPathApiTests.Course_is_not_opened_*` |
 | New staff are put on their path, moved on when they pass a stage, and reminded of due dates | `LearningPathService.AssignOpenStagesAsync`, `RemindAsync`; `TrainingReminderScheduler` | `LearningPathApiTests` |
+| A document of an existing drink is transcribed, each step held to the passage it quotes | `RecipeExtractSchema`, `SourceGrounding`, `RecipeExtractionParser`, `RecipeDraftingService.ExtractAsync` | `DocumentExtractionUnitTests`, `DocumentExtractionApiTests` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -527,6 +528,38 @@ notification.
 - Without the settings above, both channels are skipped and everything else
   works, as with the language model.
 - Two instances of the API would both send: run the dispatcher in one.
+
+**Digitising an existing recipe.** UC-26 in the pack is a person typing the
+chain's document into the structure. Here the model does the typing, and is
+held to the document, without a schema change.
+
+- `POST /recipe-versions/{id}/extract-document` takes the document of a drink
+  of origin EXISTING, as `{ documentText, fileName? }` or as an uploaded .txt,
+  .md or .docx (field `file`, at most 2 MB; a Word document is read without a
+  document library, text only), and makes it the content of the draft. A
+  drink that is new is drafted from a description instead
+  (`409 EXTRACT_EXISTING_ONLY`).
+- The model is asked to transcribe, not to write. Its answer must satisfy the
+  schema of an extraction, which is made from the pack's draft schema at
+  start-up so the two cannot drift: the same fields, plus `sourceQuote` on
+  every step (the passage the step was taken from) and `unmapped` (what the
+  document says that no field can hold).
+- Every `sourceQuote` is looked for in the document; case, spacing and
+  typographic punctuation aside, it has to be there. A step whose passage is
+  not in the document is kept and flagged for the reviewer. An answer of which
+  no step is in the document is not a transcription of it at all, and is
+  treated as any non-conforming answer: retried once, then rejected unseen
+  (BR-07).
+- `GET /recipe-versions/{id}/extraction` is the report of the last extraction
+  into a version: the document, each step with its passage and whether it was
+  found, and the unmapped passages. It is the payload of the `AI_EXTRACT`
+  audit entry, so it stays with the version after release, and it describes
+  the draft as extracted, not as edited since. Every call is in `ai_draft_log`
+  as for a generated draft (BR-06).
+- From there the draft goes the way of any other: validated at once, repaired
+  if need be, submitted, reviewed and released by somebody else (BR-05,
+  BR-12), and on release the drink is on sale at the branches without a pilot
+  (BR-36).
 
 **Comparing versions and re-certification.** The pack stops at flagging: a
 superseded version leaves its course OUT_OF_DATE and its certificates
