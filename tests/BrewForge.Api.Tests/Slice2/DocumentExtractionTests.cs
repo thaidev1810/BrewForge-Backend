@@ -103,6 +103,27 @@ public sealed class DocumentExtractionUnitTests
         Assert.DoesNotContain("sourceQuote", RecipeDraftSchema.Text);
     }
 
+    // ---------------------------------------------------------------- grounding
+
+    [Theory]
+    [InlineData("Add 120 ml milk tea base.", true)]
+    [InlineData("add 120 ML   milk\ttea base.", true)]
+    [InlineData("Brew 18 g oolong leaf with 300 ml water in the tea brewer for 8 minutes. Water at 90 C.", true)]
+    [InlineData("Add 100 ml milk tea base.", false)]
+    [InlineData("Shake with ice for ten seconds.", false)]
+    [InlineData("   ", false)]
+    public void Quote_is_grounded_when_the_document_says_it_whatever_the_case_and_spacing(string quote, bool grounded) =>
+        Assert.Equal(grounded, SourceGrounding.IsQuoteOf(quote, ExistingDocument.Text));
+
+    [Fact]
+    public void Typographic_quotes_and_dashes_are_not_held_against_a_quote()
+    {
+        const string document = "Stir “gently” for 10–15 seconds — don’t whisk.";
+
+        Assert.True(SourceGrounding.IsQuoteOf("Stir \"gently\" for 10-15 seconds - don't whisk.", document));
+        Assert.False(SourceGrounding.IsQuoteOf("Stir \"firmly\" for 10-15 seconds", document));
+    }
+
     // ---------------------------------------------------------------- helpers
 
     /// <summary>A Word document with the given body, as small as one can be.</summary>

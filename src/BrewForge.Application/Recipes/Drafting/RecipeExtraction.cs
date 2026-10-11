@@ -57,3 +57,44 @@ public static class RecipeExtractSchema
 
     internal static JsonSchema Schema => Compiled.Value;
 }
+
+/// <summary>
+/// Whether a passage a model quotes is a passage of the document. A model
+/// asked to transcribe may instead write the recipe it knows; a quote that
+/// cannot be found in the document is how that shows. Case, spacing and the
+/// difference between straight and typographic punctuation are not held
+/// against a quote: a model rarely reproduces those exactly, and they do not
+/// change what was said.
+/// </summary>
+public static class SourceGrounding
+{
+    public static bool IsQuoteOf(string quote, string document)
+    {
+        var needle = Normalize(quote);
+        return needle.Length > 0 && Normalize(document).Contains(needle, StringComparison.Ordinal);
+    }
+
+    internal static string Normalize(string text)
+    {
+        var normalized = new StringBuilder(text.Length);
+        var pendingSpace = false;
+        foreach (var character in text.Normalize(NormalizationForm.FormKC))
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                pendingSpace = normalized.Length > 0;
+                continue;
+            }
+            if (pendingSpace) normalized.Append(' ');
+            pendingSpace = false;
+            normalized.Append(character switch
+            {
+                '‘' or '’' or '‚' or '′' => '\'',
+                '“' or '”' or '„' or '″' => '"',
+                '‐' or '‑' or '‒' or '–' or '—' or '−' => '-',
+                _ => char.ToLowerInvariant(character),
+            });
+        }
+        return normalized.ToString();
+    }
+}
