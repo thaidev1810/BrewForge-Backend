@@ -124,6 +124,47 @@ public sealed class DocumentExtractionUnitTests
         Assert.False(SourceGrounding.IsQuoteOf("Stir \"firmly\" for 10-15 seconds", document));
     }
 
+    // ---------------------------------------------------------------- the parser
+
+    [Fact]
+    public void Faithful_answer_is_an_extraction_with_every_step_grounded()
+    {
+        var (result, extraction) = RecipeExtractionParser.Parse(ExistingDocument.Faithful(), ExistingDocument.Text, Ingredients, Equipment);
+
+        Assert.True(result.Conforms, string.Join("; ", result.Problems));
+        Assert.Equal(3, result.Draft!.Steps.Count);
+        Assert.Equal((3, 3), (extraction!.Steps.Count, extraction.GroundedSteps));
+        Assert.Equal(["Serve with a smile."], extraction.Unmapped);
+    }
+
+    [Fact]
+    public void Step_the_document_does_not_contain_is_kept_and_marked()
+    {
+        var answer = ExistingDocument.Answer([ExistingDocument.Brew(), ExistingDocument.Milk("Shake hard with ice.")]);
+
+        var (result, extraction) = RecipeExtractionParser.Parse(answer, ExistingDocument.Text, Ingredients, Equipment);
+
+        Assert.True(result.Conforms);
+        Assert.Equal([(1, true), (2, false)], extraction!.Steps.Select(step => (step.StepOrder, step.Grounded)));
+    }
+
+    [Fact]
+    public void Answer_is_not_an_extraction_when_no_step_is_in_the_document_or_the_quotes_are_missing()
+    {
+        var invented = ExistingDocument.Answer([ExistingDocument.Brew("Steep the leaves until fragrant."), ExistingDocument.Milk("Top with foam.")]);
+        var aDraft = ValidModelDraft(); // conforms as a draft, and says nothing of where it came from
+        var unknownCode = ExistingDocument.Answer(
+            [ExistingDocument.Step(1, "Brew the oolong", "Brew 18 g oolong leaf", uses: [("ING-INVENTED", 18m, "g")])]);
+
+        Assert.All(new[] { invented, aDraft, unknownCode, "not json", "" }, answer =>
+        {
+            var (result, extraction) = RecipeExtractionParser.Parse(answer, ExistingDocument.Text, Ingredients, Equipment);
+            Assert.False(result.Conforms);
+            Assert.Null(extraction);
+            Assert.NotEmpty(result.Problems);
+        });
+    }
+
     // ---------------------------------------------------------------- helpers
 
     /// <summary>A Word document with the given body, as small as one can be.</summary>

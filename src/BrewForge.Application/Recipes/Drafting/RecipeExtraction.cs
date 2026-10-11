@@ -58,6 +58,16 @@ public static class RecipeExtractSchema
     internal static JsonSchema Schema => Compiled.Value;
 }
 
+/// <summary>One step of an extraction and whether the passage it claims is really in the document.</summary>
+public sealed record ExtractedStep(int StepOrder, string SourceQuote, bool Grounded);
+
+/// <summary>A conforming extraction: the draft, and where it says it came from.</summary>
+public sealed record ParsedExtraction(ParsedDraft Draft, IReadOnlyList<ExtractedStep> Steps,
+    IReadOnlyList<string> Unmapped)
+{
+    public int GroundedSteps => Steps.Count(step => step.Grounded);
+}
+
 /// <summary>
 /// Whether a passage a model quotes is a passage of the document. A model
 /// asked to transcribe may instead write the recipe it knows; a quote that
@@ -97,4 +107,72 @@ public static class SourceGrounding
         }
         return normalized.ToString();
     }
+}
+
+public static class RecipeExtractionParser
+{
+    private static readonly EvaluationOptions Options = new() { OutputFormat = OutputFormat.List };
+
+    /// <summary>
+    /// Decides whether a model response is an acceptable extraction of the
+    /// document (BR-07). It has to conform as a draft does, in the schema of
+    /// an extraction, and at least one of its steps has to quote the
+    /// document: an answer of which no step can be found there is not a
+    /// transcription of this document at all. A step that cannot be found is
+    /// otherwise kept and reported, for a person to judge.
+    /// </summary>
+    public static (DraftParseResult Result, ParsedExtraction? Extraction) Parse(string? rawResponse, string document,
+        IEnumerable<Ingredient> ingredients, IEnumerable<StandardEquipment> equipment)
+    {
+        if (string.IsNullOrWhiteSpace(rawResponse)) return Failure("the response is empty");
+
+        JsonDocument json;
+        try
+        {
+            json = JsonDocument.Parse(rawResponse);
+        }
+        catch (JsonException exception)
+        {
+            return Failure($"the response is not valid JSON: {exception.Message}");
+        }
+
+        using (json)
+        {
+            var evaluation = RecipeExtractSchema.Schema.Evaluate(json.RootElement, Options);
+            if (!evaluation.IsValid)
+            {
+                var problems = (evaluation.Details ?? [])
+                    .Where(detail => detail.Errors is { Count: > 0 })
+                    .SelectMany(detail => detail.Errors!.Select(error =>
+                        $"{(detail.InstanceLocation.ToString() is { Length: > 0 } at ? at : "/")}: {error.Value}"))
+                    .Distinct()
+                    .ToList();
+                return (new DraftParseResult(null, problems.Count > 0 ? problems : ["the response does not satisfy the schema"]), null);
+            }
+
+            // The same reading as any draft: codes and classes of the catalogue, its own steps.
+            var draft = RecipeDraftParser.Map(json.RootElement, ingredients, equipment);
+            if (!draft.Conforms) return (draft, null);
+
+            var steps = json.RootElement.GetProperty("steps").EnumerateArray()
+                .Select(step =>
+                {
+                    var quote = step.GetProperty(RecipeExtractSchema.SourceQuote).GetString()!;
+                    return new ExtractedStep(step.GetProperty("stepOrder").GetInt32(), quote,
+                        SourceGrounding.IsQuoteOf(quote, document));
+                })
+                .OrderBy(step => step.StepOrder).ToList();
+            if (steps.TrueForAll(step => !step.Grounded))
+            {
+                return Failure("/steps: no step quotes a passage that is in the document");
+            }
+
+            var unmapped = json.RootElement.GetProperty(RecipeExtractSchema.Unmapped).EnumerateArray()
+                .Select(item => item.GetString()!).ToList();
+            return (draft, new ParsedExtraction(draft.Draft!, steps, unmapped));
+        }
+    }
+
+    private static (DraftParseResult, ParsedExtraction?) Failure(string problem) =>
+        (new DraftParseResult(null, [problem]), null);
 }

@@ -81,7 +81,7 @@ public static class RecipeDraftParser
         }
     }
 
-    private static DraftParseResult Map(JsonElement root, IEnumerable<Ingredient> ingredients,
+    internal static DraftParseResult Map(JsonElement root, IEnumerable<Ingredient> ingredients,
         IEnumerable<StandardEquipment> equipment)
     {
         var ingredientIds = ingredients.ToDictionary(i => i.IngredientCode, i => i.Id, StringComparer.Ordinal);
