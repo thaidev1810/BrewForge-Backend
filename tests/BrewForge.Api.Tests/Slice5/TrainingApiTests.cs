@@ -535,4 +535,31 @@ public sealed class TrainingApiTests(BrewForgeApiFactory factory)
         Assert.Equal(14, need.GetProperty("dueDays").GetInt32());
         Assert.Equal(JsonValueKind.Null, need.GetProperty("enrollmentState").ValueKind);
     }
+
+    [Fact]
+    public async Task Training_needs_survive_a_product_and_a_recertification_course_on_one_version()
+    {
+        // A released version the seed sells at every branch with coverage not met: a branch shortfall.
+        var versionId = await factory.WithDbAsync(db => (from v in db.RecipeVersions
+            join r in db.Recipes on v.RecipeId equals r.Id
+            where r.RecipeCode == "R05" && v.State == BrewForge.Domain.Recipes.VersionState.Released
+            select v.Id).SingleAsync());
+        var trainerId = await factory.UserIdAsync(TestUsers.Trainer);
+
+        // Two published courses on the same version: a PRODUCT and a RECERTIFICATION. The schema
+        // allows this because ux_course_one_per_version is unique for PRODUCT courses only.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlRawAsync(
+            "INSERT INTO course (recipe_version_id, course_type, title, created_by, state, published_at) VALUES " +
+            "({0}, 'PRODUCT', 'R05 product', {1}, 'PUBLISHED', now()), " +
+            "({0}, 'RECERTIFICATION', 'R05 recert', {1}, 'PUBLISHED', now())", versionId, trainerId));
+
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        // Before the fix the shared version made a dictionary throw and the endpoint answered 500.
+        var needs = await (await trainer.GetAsync("/api/v1/training-needs")).ShouldBeAsync(HttpStatusCode.OK);
+
+        // The shortfall for that version is reported against its PRODUCT course, not the recertification one.
+        Assert.Contains(needs.EnumerateArray(), n =>
+            n.GetProperty("reason").GetString() == "BRANCH_SHORTFALL"
+            && n.GetProperty("courseType").GetString() == "PRODUCT");
+    }
 }

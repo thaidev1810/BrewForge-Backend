@@ -110,8 +110,13 @@ public sealed class TrainingRegulationService(IBrewForgeDbContext db, ICurrentUs
         if (shortOf.Count == 0) return [];
 
         var versionIds = shortOf.Select(s => s.VersionId).Distinct().ToList();
+        // The branch shortfall is about certifying staff on the drink's SOP, which is the PRODUCT
+        // course of the version. A RECERTIFICATION course may be published on the same version, so
+        // without this filter two courses would share a key and the dictionary would throw (G-25).
+        // ux_course_one_per_version keeps a version's published PRODUCT course unique.
         var courses = (await db.Courses.AsNoTracking()
-                .Where(c => c.State == CourseState.Published && c.RecipeVersionId != null
+                .Where(c => c.State == CourseState.Published && c.CourseType == CourseType.Product
+                            && c.RecipeVersionId != null
                             && versionIds.Contains(c.RecipeVersionId.Value) && (courseId == null || c.Id == courseId))
                 .ToListAsync(cancellationToken))
             .ToDictionary(c => c.RecipeVersionId!.Value);
