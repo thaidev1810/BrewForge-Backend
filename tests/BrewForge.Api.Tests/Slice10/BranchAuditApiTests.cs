@@ -178,4 +178,30 @@ public sealed class BranchAuditApiTests(BrewForgeApiFactory factory)
         Assert.True(summary.GetProperty("openCorrectiveActions").GetInt32() >= 1);
         Assert.Equal(JsonValueKind.Object, summary.GetProperty("lowestCompliance").ValueKind);
     }
+
+    [Fact]
+    public async Task Evidence_is_readable_only_within_the_branch_of_its_audit()
+    {
+        var version = await ReleasedVersionAsync();
+        var b02 = await factory.BranchIdAsync("B02");
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+
+        // Upload a photo and attach it to an audit of B02.
+        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4 };
+        using var form = new MultipartFormDataContent { { new ByteArrayContent(png), "file", "sugar.png" } };
+        var stored = await (await auditor.PostAsync($"{Audits}/evidence", form)).ShouldBeAsync(HttpStatusCode.Created);
+        var url = stored.GetProperty("url").GetString()!;
+        await (await auditor.PostAsJsonAsync(Audits, new
+        {
+            branchId = b02, recipeVersionId = version,
+            items = new[] { new { criterion = "Sugar quantity", passed = false, evidenceUrl = url } },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+
+        // Head office and the B02 manager may read it; the B01 manager may not.
+        Assert.Equal(HttpStatusCode.OK, (await auditor.GetAsync(url)).StatusCode);
+        using var b02Manager = await factory.ClientForAsync(TestUsers.BranchManagerB02);
+        Assert.Equal(HttpStatusCode.OK, (await b02Manager.GetAsync(url)).StatusCode);
+        using var b01Manager = await factory.ClientForAsync(TestUsers.BranchManager);
+        Assert.Equal(HttpStatusCode.NotFound, (await b01Manager.GetAsync(url)).StatusCode);
+    }
 }

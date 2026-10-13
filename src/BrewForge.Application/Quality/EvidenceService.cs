@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using BrewForge.Application.Abstractions;
 using BrewForge.Domain.Common;
+using Microsoft.EntityFrameworkCore;
 
 namespace BrewForge.Application.Quality;
 
@@ -12,7 +13,8 @@ public sealed record EvidenceContent(Stream Content, string ContentType);
 /// Photos an auditor attaches to a checklist item. Stored beside the practical recordings, under a key the
 /// storage chooses; the item keeps the returned URL.
 /// </summary>
-public sealed partial class EvidenceService(IPracticalVideoStorage storage)
+public sealed partial class EvidenceService(IPracticalVideoStorage storage, IBrewForgeDbContext db,
+    ICurrentUser currentUser)
 {
     public const long MaxBytes = 5 * 1024 * 1024;
 
@@ -35,14 +37,31 @@ public sealed partial class EvidenceService(IPracticalVideoStorage storage)
         return new EvidenceDto(stored.Key, $"/api/v1/branch-audits/evidence/{stored.Key}", stored.SizeBytes);
     }
 
-    public EvidenceContent Open(string key)
+    public async Task<EvidenceContent> OpenAsync(string key, CancellationToken cancellationToken)
     {
         // Only keys the storage itself produced: yyyy/MM/<guid>.<image extension>.
         var extension = Path.GetExtension(key ?? "").ToLowerInvariant();
-        if (!KeyShape().IsMatch(key ?? "") || !Types.TryGetValue(extension, out var contentType)
-            || storage.OpenRead(key!) is not { } stream)
+        if (!KeyShape().IsMatch(key ?? "") || !Types.TryGetValue(extension, out var contentType))
         {
             throw DomainException.NotFound("Evidence", key ?? "");
+        }
+
+        // A branch-scoped caller (a branch manager) may read only evidence attached to an audit of
+        // their own branch; the branch_audit query filter confines the lookup to that branch. Head
+        // office (auditor, R&D manager, admin) may read any image, including one just uploaded and
+        // not yet attached to an audit.
+        if (currentUser.RestrictedToBranchId is not null)
+        {
+            var url = $"/api/v1/branch-audits/evidence/{key}";
+            if (!await db.BranchAudits.AnyAsync(a => a.Items.Any(i => i.EvidenceUrl == url), cancellationToken))
+            {
+                throw DomainException.NotFound("Evidence", key!);
+            }
+        }
+
+        if (storage.OpenRead(key!) is not { } stream)
+        {
+            throw DomainException.NotFound("Evidence", key!);
         }
         return new EvidenceContent(stream, contentType);
     }
