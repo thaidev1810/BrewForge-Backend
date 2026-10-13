@@ -128,6 +128,9 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         {
             audit.HasMany(a => a.Items).WithOne().HasForeignKey(i => i.BranchAuditId).OnDelete(DeleteBehavior.Cascade);
             audit.Navigation(a => a.Items).UsePropertyAccessMode(PropertyAccessMode.Field);
+            // Deviations is a computed view over Items, not a second relationship: without this
+            // EF treats it as a navigation and adds a stray "branch_audit_id1" foreign key.
+            audit.Ignore(a => a.Deviations);
             // A store-level caller sees only the audits of its own branch.
             audit.HasQueryFilter(a => BranchScope == null || a.BranchId == BranchScope);
         });
