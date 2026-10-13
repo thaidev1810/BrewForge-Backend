@@ -189,6 +189,46 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task A_trainer_cannot_touch_another_trainers_appointment()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+
+        using var owner = await factory.ClientForAsync(TestUsers.Trainer);
+        var url = $"/api/v1/enrollments/{learner.EnrollmentId}/practical-schedules";
+        var at = DateTimeOffset.UtcNow.AddDays(2);
+        var created = await (await owner.PostAsJsonAsync(url, new { scheduledAt = at, location = "B01 counter" }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        var id = created.GetProperty("id").GetInt64();
+
+        // A second trainer who does not hold this appointment.
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var otherName = $"t{Guid.NewGuid():N}"[..12];
+        const string password = "Another-Test-Passw0rd";
+        await (await admin.PostAsJsonAsync("/api/v1/users", new
+        {
+            username = otherName, email = $"{otherName}@brewforge.local", password, fullName = "Other Trainer",
+            role = "TRAINER", branchId = (long?)null,
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        using var other = factory.CreateClient();
+        other.DefaultRequestHeaders.Authorization =
+            new("Bearer", (await factory.LoginAsync(otherName, password)).AccessToken);
+
+        // The other trainer may call the endpoints (same role) but cannot reach this appointment.
+        await (await other.PostAsync($"/api/v1/practical-schedules/{id}/cancel", null))
+            .ShouldBeAsync(HttpStatusCode.NotFound);
+        await (await other.PutAsJsonAsync($"/api/v1/practical-schedules/{id}", new { scheduledAt = at, location = "elsewhere" }))
+            .ShouldBeAsync(HttpStatusCode.NotFound);
+        await (await other.PostAsync($"/api/v1/practical-schedules/{id}/complete", null))
+            .ShouldBeAsync(HttpStatusCode.NotFound);
+
+        // The appointment is untouched, and its owner still holds it as SCHEDULED.
+        var status = await factory.WithDbAsync(db =>
+            db.PracticalSchedules.Where(s => s.Id == id).Select(s => s.Status).SingleAsync());
+        Assert.Equal(BrewForge.Domain.Training.ScheduleStatus.Scheduled, status);
+    }
+
+    [Fact]
     public async Task Skill_passport_lists_every_published_product_course()
     {
         using var trainee = await factory.ClientForAsync(TestUsers.Trainee);
