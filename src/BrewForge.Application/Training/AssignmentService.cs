@@ -66,13 +66,15 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
                 page.Total);
         }
 
-        // The status is derived, so the filter is applied after deriving it.
-        var all = await ToDtosAsync(await query.OrderBy(e => e.Id).ToListAsync(cancellationToken), cancellationToken);
-        var matching = all.Where(a => a.Status == statusFilter).ToList();
+        // The status is derived from the enrolment, so it cannot be filtered in the database.
+        // The caller's sort and page bounds are still honoured: validate and order exactly as the
+        // unfiltered branch does, then derive, filter and page the rows in memory.
         new FieldErrors()
             .Check(paging.Page >= 1, "page", "must be 1 or greater")
             .Check(paging.Size is >= 1 and <= PageQuery.MaxSize, "size", $"must be between 1 and {PageQuery.MaxSize}")
             .ThrowIfAny();
+        var ordered = await Sorting.Apply(query, paging.Sort).ToListAsync(cancellationToken);
+        var matching = (await ToDtosAsync(ordered, cancellationToken)).Where(a => a.Status == statusFilter).ToList();
         return new PagedResult<AssignmentDto>(
             [.. matching.Skip((paging.Page - 1) * paging.Size).Take(paging.Size)], paging.Page, paging.Size, matching.Count);
     }

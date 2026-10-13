@@ -147,6 +147,51 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Assignments_filtered_by_status_still_honour_the_requested_sort()
+    {
+        var course = await factory.NewPublishedCourseAsync();
+        var b01 = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        // Two fresh B01 trainees, assigned the same course with different deadlines, both ASSIGNED.
+        var near = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5);
+        var far = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(15);
+        var t1 = await NewTraineeAsync(admin, b01);
+        var t2 = await NewTraineeAsync(admin, b01);
+        await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+            { courseId = course.Id(), branchId = b01, employeeIds = new[] { t1 }, deadline = near }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+            { courseId = course.Id(), branchId = b01, employeeIds = new[] { t2 }, deadline = far }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+
+        var baseUrl = $"/api/v1/assignments?courseId={course.Id()}&status=ASSIGNED";
+        var asc = await DueDatesAsync(trainer, $"{baseUrl}&sort=dueDate,asc");
+        var desc = await DueDatesAsync(trainer, $"{baseUrl}&sort=dueDate,desc");
+
+        Assert.Equal(new[] { near.ToString("yyyy-MM-dd"), far.ToString("yyyy-MM-dd") }, asc);
+        Assert.Equal(new[] { far.ToString("yyyy-MM-dd"), near.ToString("yyyy-MM-dd") }, desc);
+    }
+
+    private async Task<long> NewTraineeAsync(HttpClient admin, long branchId)
+    {
+        var name = $"t{Guid.NewGuid():N}"[..12];
+        var created = await (await admin.PostAsJsonAsync("/api/v1/users", new
+        {
+            username = name, email = $"{name}@brewforge.local", password = "Another-Test-Passw0rd",
+            fullName = "List Trainee", role = "TRAINEE", branchId,
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        return created.GetProperty("id").GetInt64();
+    }
+
+    private static async Task<string[]> DueDatesAsync(HttpClient client, string url)
+    {
+        var list = await (await client.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
+        return [.. list.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("dueDate").GetString()!)];
+    }
+
+    [Fact]
     public async Task Practical_is_scheduled_only_after_the_quiz_and_the_trainee_can_read_it()
     {
         var learner = await factory.NewEligibleLearnerAsync();
