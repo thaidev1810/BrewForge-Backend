@@ -1,6 +1,7 @@
 using BrewForge.Api.Auth;
 using BrewForge.Api.Errors;
 using BrewForge.Api.Json;
+using BrewForge.Api.OpenApi;
 using BrewForge.Api.Scheduling;
 using BrewForge.Application;
 using BrewForge.Application.Abstractions;
@@ -62,7 +63,7 @@ builder.Services.AddCors(cors => cors.AddPolicy(frontendCors, policy =>
     policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod();
 }));
 
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(options => options.AddDocumentTransformer<BearerSecuritySchemeTransformer>());
 
 var app = builder.Build();
 
@@ -78,13 +79,25 @@ app.UseStatusCodePages(statusCode => ErrorEnvelope.WriteAsync(statusCode.HttpCon
     ErrorEnvelope.ForStatusCode(statusCode.HttpContext, statusCode.HttpContext.Response.StatusCode)));
 
 app.UseCors(frontendCors);
+
+// Expose the OpenAPI document and Swagger UI in Development, or anywhere the
+// "OpenApi:Enabled" flag is turned on (e.g. a staging deployment). Production stays
+// off by default so the full API surface is not published unintentionally.
+// Registered before authentication so the Swagger UI assets are not caught by the
+// fallback "require authenticated user" policy (see Policies.Configure).
+if (app.Environment.IsDevelopment() || app.Configuration.GetValue("OpenApi:Enabled", false))
+{
+    app.MapOpenApi().AllowAnonymous();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/openapi/v1.json", "BrewForge API v1");
+        options.RoutePrefix = "swagger";
+    });
+}
+
 app.UseAuthentication();
 app.UseAuthorization();
 
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi().AllowAnonymous();
-}
 app.MapControllers();
 
 await app.RunAsync();
