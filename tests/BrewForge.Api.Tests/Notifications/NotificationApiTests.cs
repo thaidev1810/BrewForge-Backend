@@ -122,6 +122,41 @@ public sealed class NotificationApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task One_dispatch_round_drains_the_backlog_and_attempts_each_notification_once()
+    {
+        await StartCleanAsync();
+        factory.Email.Down = true;   // the mail server stays down for the whole round
+        var traineeId = await factory.UserIdAsync(TestUsers.Trainee);
+
+        // More than one batch of waiting notifications, and no browser subscribed, so only e-mail is tried.
+        const int count = 55;
+        await factory.WithDbAsync(async db =>
+        {
+            for (var i = 0; i < count; i++)
+            {
+                db.Notifications.Add(new Notification(traineeId, "Heads up", $"Message {i}", DateTimeOffset.UtcNow));
+            }
+            await db.SaveChangesAsync();
+        });
+
+        var round = await Dispatcher.RunOnceAsync(CancellationToken.None);
+
+        // The whole backlog is drained past the batch size, and each notification is tried exactly once
+        // this round: a channel that is down is not burned through its five attempts in a single dispatch.
+        Assert.True(round.Processed >= count);
+        var attempts = await factory.WithDbAsync(db => db.Notifications
+            .Where(n => n.UserId == traineeId && n.Subject == "Heads up").Select(n => n.Attempts).ToListAsync());
+        Assert.Equal(count, attempts.Count);
+        Assert.All(attempts, a => Assert.Equal(1, a));
+
+        // The next run is the retry's backoff: only now are they on their second attempt.
+        await Dispatcher.RunOnceAsync(CancellationToken.None);
+        var next = await factory.WithDbAsync(db => db.Notifications
+            .Where(n => n.UserId == traineeId && n.Subject == "Heads up").Select(n => n.Attempts).ToListAsync());
+        Assert.All(next, a => Assert.Equal(2, a));
+    }
+
+    [Fact]
     public async Task Email_that_failed_once_is_sent_when_the_mail_server_is_back()
     {
         await StartCleanAsync();

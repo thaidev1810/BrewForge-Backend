@@ -112,39 +112,52 @@ public sealed class NotificationService(IBrewForgeDbContext db, IEmailSender ema
     /// </summary>
     public async Task<DispatchResult> DispatchPendingAsync(CancellationToken cancellationToken)
     {
-        var pending = await db.Notifications.Where(n => n.ProcessedAt == null).OrderBy(n => n.Id).Take(BatchSize)
-            .ToListAsync(cancellationToken);
-        if (pending.Count == 0) return new DispatchResult(0, 0, 0);
+        var (processed, emails, pushes) = (0, 0, 0);
 
-        var userIds = pending.Select(n => n.UserId).Distinct().ToList();
-        var users = await db.Users.IgnoreQueryFilters().AsNoTracking().Where(u => userIds.Contains(u.Id))
-            .ToDictionaryAsync(u => u.Id, cancellationToken);
-        var browsers = (await db.PushSubscriptions.Where(s => userIds.Contains(s.UserId)).ToListAsync(cancellationToken))
-            .ToLookup(s => s.UserId);
-        var gone = new HashSet<PushSubscription>();
-
-        var (emails, pushes) = (0, 0);
-        foreach (var notification in pending)
+        // Drain the whole backlog, but touch each notification at most once in this round: the cursor
+        // moves past what was handled, so a channel that fails here (the row stays PENDING) is not
+        // picked up again until the next run. That gives the retry a gap and keeps one failing channel
+        // from burning through all of its attempts in a single round, or blocking the ones behind it.
+        long afterId = 0;
+        while (true)
         {
-            var user = users.GetValueOrDefault(notification.UserId);
-            var reachable = user is { Status: UserStatus.Active };
+            var pending = await db.Notifications.Where(n => n.ProcessedAt == null && n.Id > afterId)
+                .OrderBy(n => n.Id).Take(BatchSize).ToListAsync(cancellationToken);
+            if (pending.Count == 0) break;
+            afterId = pending[^1].Id;
 
-            var byEmail = notification.EmailStatus != DeliveryStatus.Pending ? DeliveryOutcome.Untouched
-                : !reachable || !email.IsConfigured ? DeliveryOutcome.Skipped
-                : await SendEmailAsync(user!, notification, cancellationToken);
-            var byPush = notification.PushStatus != DeliveryStatus.Pending ? DeliveryOutcome.Untouched
-                : !reachable || !push.IsConfigured ? DeliveryOutcome.Skipped
-                : await SendPushAsync(browsers[notification.UserId].Where(b => !gone.Contains(b)).ToList(), notification,
-                    gone, cancellationToken);
+            var userIds = pending.Select(n => n.UserId).Distinct().ToList();
+            var users = await db.Users.IgnoreQueryFilters().AsNoTracking().Where(u => userIds.Contains(u.Id))
+                .ToDictionaryAsync(u => u.Id, cancellationToken);
+            var browsers = (await db.PushSubscriptions.Where(s => userIds.Contains(s.UserId)).ToListAsync(cancellationToken))
+                .ToLookup(s => s.UserId);
+            var gone = new HashSet<PushSubscription>();
 
-            notification.RecordAttempt(byEmail, byPush, clock.GetUtcNow());
-            if (byEmail.Status == DeliveryStatus.Sent) emails++;
-            if (byPush.Status == DeliveryStatus.Sent) pushes++;
+            foreach (var notification in pending)
+            {
+                var user = users.GetValueOrDefault(notification.UserId);
+                var reachable = user is { Status: UserStatus.Active };
+
+                var byEmail = notification.EmailStatus != DeliveryStatus.Pending ? DeliveryOutcome.Untouched
+                    : !reachable || !email.IsConfigured ? DeliveryOutcome.Skipped
+                    : await SendEmailAsync(user!, notification, cancellationToken);
+                var byPush = notification.PushStatus != DeliveryStatus.Pending ? DeliveryOutcome.Untouched
+                    : !reachable || !push.IsConfigured ? DeliveryOutcome.Skipped
+                    : await SendPushAsync(browsers[notification.UserId].Where(b => !gone.Contains(b)).ToList(), notification,
+                        gone, cancellationToken);
+
+                notification.RecordAttempt(byEmail, byPush, clock.GetUtcNow());
+                if (byEmail.Status == DeliveryStatus.Sent) emails++;
+                if (byPush.Status == DeliveryStatus.Sent) pushes++;
+            }
+
+            db.PushSubscriptions.RemoveRange(gone);
+            await db.SaveChangesAsync(cancellationToken);
+            processed += pending.Count;
+            if (pending.Count < BatchSize) break;
         }
 
-        db.PushSubscriptions.RemoveRange(gone);
-        await db.SaveChangesAsync(cancellationToken);
-        return new DispatchResult(pending.Count, emails, pushes);
+        return new DispatchResult(processed, emails, pushes);
     }
 
     private async Task<DeliveryOutcome> SendEmailAsync(AppUser user, Notification notification,

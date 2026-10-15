@@ -23,10 +23,9 @@ public sealed class NotificationDispatcher(IServiceScopeFactory scopes, IOptions
         {
             try
             {
-                // Keep going while there is a full batch waiting.
-                while ((await RunOnceAsync(stoppingToken)).Processed > 0 && !stoppingToken.IsCancellationRequested)
-                {
-                }
+                // One run drains the whole backlog, attempting each notification once; a channel that
+                // fails waits for the next tick, which is the retry's backoff.
+                await RunOnceAsync(stoppingToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
