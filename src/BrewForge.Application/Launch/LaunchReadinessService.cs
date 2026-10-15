@@ -1,6 +1,7 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Domain.Common;
+using BrewForge.Domain.Identity;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
@@ -57,15 +58,32 @@ public sealed class LaunchReadinessService(IBrewForgeDbContext db, LaunchHistory
         }
     }
 
-    /// <summary>How many staff of the branch hold a VALID certificate on the version.</summary>
+    /// <summary>How many ACTIVE staff of the branch hold a VALID certificate on the version.</summary>
     public async Task<int> CertifiedCountAsync(long branchId, long? recipeVersionId, CancellationToken cancellationToken)
     {
         if (recipeVersionId is null) return 0;
         return await db.Certificates
             .Where(c => c.RecipeVersionId == recipeVersionId && c.Status == CertificateStatus.Valid)
-            .Join(db.Users.IgnoreQueryFilters(), c => c.UserId, u => u.Id, (c, u) => new { c.UserId, u.BranchId })
-            .Where(x => x.BranchId == branchId)
+            .Join(db.Users.IgnoreQueryFilters(), c => c.UserId, u => u.Id, (c, u) => new { c.UserId, u.BranchId, u.Status })
+            .Where(x => x.BranchId == branchId && x.Status == UserStatus.Active)
             .Select(x => x.UserId).Distinct().CountAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Recomputes a branch's coverage for every recipe the user holds a valid certificate on. Call
+    /// after a user is deactivated, reactivated or moved between branches, so a branch stops counting
+    /// someone who has left and a new branch starts counting someone who has arrived.
+    /// </summary>
+    public async Task RecomputeForUserBranchAsync(long userId, long branchId, CancellationToken cancellationToken)
+    {
+        var recipeIds = await db.Certificates.IgnoreQueryFilters()
+            .Where(c => c.UserId == userId && c.Status == CertificateStatus.Valid && c.RecipeVersionId != null)
+            .Join(db.RecipeVersions, c => c.RecipeVersionId, v => v.Id, (c, v) => v.RecipeId)
+            .Distinct().ToListAsync(cancellationToken);
+        foreach (var recipeId in recipeIds)
+        {
+            await RecomputeAsync(branchId, recipeId, cancellationToken);
+        }
     }
 
     /// <summary>

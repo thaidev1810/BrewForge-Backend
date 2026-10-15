@@ -176,4 +176,47 @@ public sealed class UserManagementTests(BrewForgeApiFactory factory)
             Assert.False(user.TryGetProperty("passwordHash", out _));
         });
     }
+
+    [Fact]
+    public async Task Coverage_is_recounted_when_a_certified_user_is_deactivated_or_moved()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var b01 = await factory.BranchIdAsync("B01");
+        var b02 = await factory.BranchIdAsync("B02");
+
+        // A released existing drink the seed already sells at every branch, with coverage not met.
+        var version = await factory.WithDbAsync(db => (from v in db.RecipeVersions
+            join r in db.Recipes on v.RecipeId equals r.Id
+            where r.RecipeCode == "R05" && v.State == BrewForge.Domain.Recipes.VersionState.Released
+            select v.Id).SingleAsync());
+        var course = (await factory.NewPublishedCourseAsync(version)).GetProperty("id").GetInt64();
+
+        async Task<long> NewB01TraineeAsync()
+        {
+            var created = await (await admin.PostAsJsonAsync(Users, NewUser(UniqueName(), "TRAINEE", b01)))
+                .ShouldBeAsync(HttpStatusCode.Created);
+            return created.GetProperty("id").GetInt64();
+        }
+        Task<int> CoverageAsync(long branchId) => factory.WithDbAsync(db => db.BranchLaunchStatuses
+            .IgnoreQueryFilters().Where(l => l.BranchId == branchId && l.RecipeVersionId == version)
+            .Select(l => l.CertifiedCount).SingleAsync());
+
+        var t1 = await NewB01TraineeAsync();
+        var t2 = await NewB01TraineeAsync();
+        await factory.CertifyAsync(t1, course, version);
+        await factory.CertifyAsync(t2, course, version);
+
+        // Deactivating one certified trainee recounts B01 to the one who is left: not two (the other
+        // certificate is still valid) and not the stale zero (nothing had recounted before).
+        await (await admin.PostAsync($"{Users}/{t1}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(1, await CoverageAsync(b01));
+
+        // Reactivating and moving t1 to B02 carries their certified head there: B01 stays 1, B02 becomes 1.
+        await (await admin.PutAsJsonAsync($"{Users}/{t1}", new
+        {
+            email = $"u{t1}@brewforge.local", fullName = "Moved Trainee", role = "TRAINEE", branchId = b02, status = "ACTIVE",
+        })).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(1, await CoverageAsync(b01));
+        Assert.Equal(1, await CoverageAsync(b02));
+    }
 }
