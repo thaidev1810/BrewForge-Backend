@@ -54,8 +54,12 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
         ImpactTrigger.TryParseKind(request.EntityType, out var kind);
 
         var (trigger, affected) = await ComputeAsync(kind, request.EntityId!.Value, tracking: false, cancellationToken);
-        var run = ImpactRun.WhatIf(Guid.NewGuid(), trigger, affected, clock.GetUtcNow());
+        var now = clock.GetUtcNow();
+        var run = ImpactRun.WhatIf(Guid.NewGuid(), trigger, affected, now);
 
+        // The header is stored even when nothing is affected, so the run can be read back and
+        // committed; the rows (if any) carry the affected set.
+        db.ImpactRuns.Add(new ImpactRunHeader(run.RunId, trigger, committed: false, now));
         db.ChangeImpacts.AddRange(run.NewRows);
         await db.SaveChangesAsync(cancellationToken);
         return await ToDtoAsync(run.RunId, trigger, affected, committed: false, cancellationToken);
@@ -64,8 +68,9 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
     /// <summary>A run as it was computed: the entities its rows name, whatever has happened to them since.</summary>
     public async Task<ImpactAnalysisDto> GetAsync(string runId, CancellationToken cancellationToken)
     {
-        var rows = await RowsAsync(runId, tracking: false, cancellationToken);
-        var trigger = await TriggerOfAsync(rows[0], cancellationToken);
+        var header = await HeaderAsync(runId, tracking: false, cancellationToken);
+        var trigger = await TriggerOfAsync(header.TriggerEntity, header.TriggerId, cancellationToken);
+        var rows = await RowsAsync(header.RunId, tracking: false, cancellationToken);
         var versions = DependencyGraph.VersionsDependingOn(trigger, await CandidateVersionsAsync(trigger, cancellationToken));
 
         IEnumerable<long> Ids(string entity) => rows.Where(row => row.AffectedEntity == entity).Select(row => row.AffectedId);
@@ -77,7 +82,7 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
             await db.Certificates.AsNoTracking().Where(c => certificateIds.Contains(c.Id)).OrderBy(c => c.Id).ToListAsync(cancellationToken),
             await db.BranchLaunchStatuses.AsNoTracking().Where(l => launchIds.Contains(l.Id)).OrderBy(l => l.Id).ToListAsync(cancellationToken));
 
-        return await ToDtoAsync(rows[0].AnalysisRunId, trigger, affected, rows.All(row => row.Committed), cancellationToken);
+        return await ToDtoAsync(header.RunId, trigger, affected, header.Committed, cancellationToken);
     }
 
     /// <summary>
@@ -87,12 +92,20 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
     /// </summary>
     public async Task<ImpactAnalysisDto> CommitAsync(string runId, CancellationToken cancellationToken)
     {
-        var rows = await RowsAsync(runId, tracking: true, cancellationToken);
-        var stored = await TriggerOfAsync(rows[0], cancellationToken);
+        var header = await HeaderAsync(runId, tracking: true, cancellationToken);
+        // The header is the authority on "committed once": an empty run has no rows to carry it.
+        if (header.Committed)
+        {
+            throw DomainException.RuleViolation("IMPACT_ALREADY_COMMITTED", "This impact analysis has already been committed.");
+        }
+
+        var rows = await RowsAsync(header.RunId, tracking: true, cancellationToken);
+        var stored = await TriggerOfAsync(header.TriggerEntity, header.TriggerId, cancellationToken);
         var (trigger, affected) = await ComputeAsync(stored.Kind, stored.EntityId, tracking: true, cancellationToken);
 
-        var run = ImpactRun.Resume(rows[0].AnalysisRunId, trigger, affected, rows, clock.GetUtcNow());
+        var run = ImpactRun.Resume(header.RunId, trigger, affected, rows, clock.GetUtcNow());
         run.Commit(rows);
+        header.MarkCommitted();
         await ApplyAsync(run, cancellationToken);
         return await ToDtoAsync(run.RunId, trigger, affected, committed: true, cancellationToken);
     }
@@ -108,8 +121,10 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
             cancellationToken);
         if (affected.IsEmpty) return;
 
-        var run = ImpactRun.WhatIf(Guid.NewGuid(), trigger, affected, clock.GetUtcNow());
+        var now = clock.GetUtcNow();
+        var run = ImpactRun.WhatIf(Guid.NewGuid(), trigger, affected, now);
         run.Commit([]);
+        db.ImpactRuns.Add(new ImpactRunHeader(run.RunId, trigger, committed: true, now));
         await ApplyAsync(run, cancellationToken);
     }
 
@@ -209,20 +224,28 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
         return exists ? new ImpactTrigger(kind, entityId) : throw DomainException.NotFound(kind.ToString(), entityId);
     }
 
-    private async Task<ImpactTrigger> TriggerOfAsync(ChangeImpact row, CancellationToken cancellationToken)
+    private async Task<ImpactTrigger> TriggerOfAsync(string triggerEntity, long triggerId, CancellationToken cancellationToken)
     {
-        ImpactTrigger.TryParseKind(row.TriggerEntity, out var kind);
-        return await ResolveTriggerAsync(kind, row.TriggerId, cancellationToken);
+        ImpactTrigger.TryParseKind(triggerEntity, out var kind);
+        return await ResolveTriggerAsync(kind, triggerId, cancellationToken);
     }
 
-    private async Task<List<ChangeImpact>> RowsAsync(string runId, bool tracking, CancellationToken cancellationToken)
+    /// <summary>The run header; the only thing that says a run exists. A run that affects nothing has one and no rows.</summary>
+    private async Task<ImpactRunHeader> HeaderAsync(string runId, bool tracking, CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(runId, out var id)) throw DomainException.NotFound("Impact analysis", runId);
-        var query = db.ChangeImpacts.Where(row => row.AnalysisRunId == id);
+        var query = db.ImpactRuns.AsQueryable();
         if (!tracking) query = query.AsNoTracking();
+        return await query.SingleOrDefaultAsync(h => h.RunId == id, cancellationToken)
+               ?? throw DomainException.NotFound("Impact analysis", runId);
+    }
 
-        var rows = await query.OrderBy(row => row.Id).ToListAsync(cancellationToken);
-        return rows.Count > 0 ? rows : throw DomainException.NotFound("Impact analysis", runId);
+    /// <summary>The affected rows of a run, which may be empty; existence is the header's concern.</summary>
+    private async Task<List<ChangeImpact>> RowsAsync(Guid runId, bool tracking, CancellationToken cancellationToken)
+    {
+        var query = db.ChangeImpacts.Where(row => row.AnalysisRunId == runId);
+        if (!tracking) query = query.AsNoTracking();
+        return await query.OrderBy(row => row.Id).ToListAsync(cancellationToken);
     }
 
     private async Task<ImpactAnalysisDto> ToDtoAsync(Guid runId, ImpactTrigger trigger, ImpactSet affected, bool committed,

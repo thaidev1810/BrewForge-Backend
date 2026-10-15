@@ -57,6 +57,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<SalesRecord> SalesRecords => Set<SalesRecord>();
     public DbSet<PilotProgram> PilotPrograms => Set<PilotProgram>();
     public DbSet<ChangeImpact> ChangeImpacts => Set<ChangeImpact>();
+    public DbSet<ImpactRunHeader> ImpactRuns => Set<ImpactRunHeader>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
     public DbSet<BranchAudit> BranchAudits => Set<BranchAudit>();
@@ -330,6 +331,8 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         });
 
         modelBuilder.Entity<ChangeImpact>();
+        // The run header is keyed by its run id, not an identity column.
+        modelBuilder.Entity<ImpactRunHeader>().HasKey(h => h.RunId);
 
         modelBuilder.Entity<Notification>();
         modelBuilder.Entity<PushSubscription>(subscription =>

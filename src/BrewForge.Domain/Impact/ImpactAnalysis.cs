@@ -73,6 +73,33 @@ public sealed class ChangeImpact
     internal void MarkCommitted() => Committed = true;
 }
 
+/// <summary>
+/// The header of an impact run, stored apart from its <c>change_impact</c> rows so that a run which
+/// affects nothing still exists (a header, no rows) and can be read back and committed. It also
+/// records the trigger and whether the run is committed, which an empty run could not otherwise keep.
+/// </summary>
+public sealed class ImpactRunHeader
+{
+    private ImpactRunHeader() { }
+
+    public ImpactRunHeader(Guid runId, ImpactTrigger trigger, bool committed, DateTimeOffset createdAt)
+    {
+        RunId = runId;
+        TriggerEntity = trigger.EntityType;
+        TriggerId = trigger.EntityId;
+        Committed = committed;
+        CreatedAt = createdAt;
+    }
+
+    public Guid RunId { get; private set; }
+    public string TriggerEntity { get; private set; } = null!;
+    public long TriggerId { get; private set; }
+    public bool Committed { get; private set; }
+    public DateTimeOffset CreatedAt { get; private set; }
+
+    public void MarkCommitted() => Committed = true;
+}
+
 /// <summary>What a change reaches: the versions that depend on the trigger, and what depends on them.</summary>
 public sealed record ImpactSet(IReadOnlyList<long> RecipeVersionIds, IReadOnlyList<Course> Courses,
     IReadOnlyList<Certificate> Certificates, IReadOnlyList<BranchLaunchStatus> LiveBranches)
