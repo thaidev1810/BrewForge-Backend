@@ -54,6 +54,8 @@ public static class AuthorizationMatrix
 
         // 3. Master data
         new("GET", "/users", AdminOnly),
+        new("GET", "/users/lookup",
+            [RoleName.Admin, RoleName.Trainer, RoleName.TrainingManager, RoleName.QualityAuditor, RoleName.BranchManager]),
         new("POST", "/users", AdminOnly),
         new("GET", "/users/{id}", AdminOnly),
         new("PUT", "/users/{id}", AdminOnly),

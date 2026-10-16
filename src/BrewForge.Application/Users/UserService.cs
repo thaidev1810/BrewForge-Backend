@@ -15,6 +15,13 @@ public sealed record UserDto(long Id, string Username, string Email, string Full
             user.Status, user.CreatedAt);
 }
 
+/// <summary>
+/// The minimum a non-administrator needs to pick a person from a list: no e-mail, no audit fields,
+/// no password hash. The caller only ever sees the users their branch scope allows.
+/// </summary>
+public sealed record UserLookupDto(long Id, string Username, string FullName, RoleName Role, long? BranchId,
+    string? BranchName, bool Active);
+
 public sealed record CreateUserRequest(string? Username, string? Email, string? Password, string? FullName,
     RoleName? Role, long? BranchId);
 
@@ -63,6 +70,36 @@ public sealed class UserService(IBrewForgeDbContext db, IPasswordHasher hasher, 
 
     public async Task<UserDto> GetAsync(long id, CancellationToken cancellationToken) =>
         UserDto.From(await FindAsync(id, tracking: false, cancellationToken));
+
+    /// <summary>
+    /// A directory lookup for choosing people (assignment, retraining, a session's trainer). Returns the
+    /// minimum fields, active users only unless asked otherwise, and never more than the caller's branch
+    /// scope allows: a branch-level caller sees only their own branch through the persistence filter.
+    /// </summary>
+    public async Task<PagedResult<UserLookupDto>> LookupAsync(PageQuery paging, string? keyword, string? role,
+        long? branchId, bool includeInactive, CancellationToken cancellationToken)
+    {
+        var roleFilter = PagingExtensions.ParseFilter<RoleName>(role, "role");
+
+        var query = db.Users.AsNoTracking().Include(u => u.Role).AsQueryable();
+        if (!includeInactive) query = query.Where(u => u.Status == UserStatus.Active);
+        if (roleFilter is not null) query = query.Where(u => u.Role.RoleName == roleFilter);
+        if (branchId is not null) query = query.Where(u => u.BranchId == branchId);
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            var term = keyword.Trim().ToLower();
+            query = query.Where(u => u.Username.ToLower().Contains(term) || u.FullName.ToLower().Contains(term));
+        }
+
+        var page = await query.ToPagedAsync(paging, Sorting, u => u, cancellationToken);
+        var branchIds = page.Items.Where(u => u.BranchId is not null).Select(u => u.BranchId!.Value).Distinct().ToList();
+        var branchNames = await db.Branches.IgnoreQueryFilters().AsNoTracking().Where(b => branchIds.Contains(b.Id))
+            .ToDictionaryAsync(b => b.Id, b => b.Name, cancellationToken);
+
+        var items = page.Items.Select(u => new UserLookupDto(u.Id, u.Username, u.FullName, u.Role.RoleName, u.BranchId,
+            u.BranchId is { } b ? branchNames.GetValueOrDefault(b) : null, u.Status == UserStatus.Active)).ToList();
+        return new PagedResult<UserLookupDto>(items, page.Page, page.Size, page.Total);
+    }
 
     public async Task<UserDto> CreateAsync(CreateUserRequest request, CancellationToken cancellationToken)
     {

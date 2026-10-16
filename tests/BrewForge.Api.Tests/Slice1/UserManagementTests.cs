@@ -178,6 +178,39 @@ public sealed class UserManagementTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Lookup_is_minimal_filtered_and_scoped_to_the_callers_branch()
+    {
+        var b01 = await factory.BranchIdAsync("B01");
+        var b02 = await factory.BranchIdAsync("B02");
+
+        // A trainer (head office) looks up trainees of B01; the result carries only the minimum.
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var page = await (await trainer.GetAsync($"/api/v1/users/lookup?role=TRAINEE&branchId={b01}&size=100"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        var items = page.GetProperty("items").EnumerateArray().ToList();
+        Assert.NotEmpty(items);
+        Assert.All(items, u =>
+        {
+            Assert.Equal("TRAINEE", u.GetProperty("role").GetString());
+            Assert.Equal(b01, u.GetProperty("branchId").GetInt64());
+            Assert.True(u.GetProperty("active").GetBoolean());
+            Assert.True(u.TryGetProperty("branchName", out _));
+            Assert.False(u.TryGetProperty("email", out _));          // minimal: no e-mail
+            Assert.False(u.TryGetProperty("passwordHash", out _));   // and never the hash
+        });
+
+        // A branch manager of B01 cannot reach B02's people even by asking for branchId=B02.
+        using var manager = await factory.ClientForAsync(TestUsers.BranchManager);
+        var crossBranch = await (await manager.GetAsync($"/api/v1/users/lookup?branchId={b02}&size=100"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Empty(crossBranch.GetProperty("items").EnumerateArray());
+
+        var ownBranch = await (await manager.GetAsync("/api/v1/users/lookup?size=100")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.NotEmpty(ownBranch.GetProperty("items").EnumerateArray());
+        Assert.All(ownBranch.GetProperty("items").EnumerateArray(), u => Assert.Equal(b01, u.GetProperty("branchId").GetInt64()));
+    }
+
+    [Fact]
     public async Task Coverage_is_recounted_when_a_certified_user_is_deactivated_or_moved()
     {
         using var admin = await factory.ClientForAsync(TestUsers.Admin);
