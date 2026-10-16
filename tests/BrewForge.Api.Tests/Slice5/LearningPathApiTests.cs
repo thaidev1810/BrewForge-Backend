@@ -270,4 +270,31 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
         await (await manager.PostAsync($"{Courses}/{course.Id()}/approve", null)).ShouldBeAsync(HttpStatusCode.OK);
         return course.Id();
     }
+
+    [Fact]
+    public async Task Seeded_trainee_finds_the_product_course_of_R07_on_their_path_and_studies_its_sop()
+    {
+        using var trainee = await factory.ClientForAsync(TestUsers.Trainee);
+        var courseId = await factory.WithDbAsync(db => db.Courses
+            .Where(c => c.State == Domain.Courses.CourseState.Published && c.CourseType == Domain.Courses.CourseType.Product
+                        && db.RecipeVersions.Any(v => v.Id == c.RecipeVersionId
+                                                      && db.Recipes.Any(r => r.Id == v.RecipeId && r.RecipeCode == BrewForge.Infrastructure.Persistence.Seed.SeedData.ProductCourseRecipe)))
+            .Select(c => c.Id).SingleAsync());
+
+        // Induction passed, R07 on the menu of B01: the course is the next stage of the path, and assigned.
+        var path = await (await trainee.GetAsync("/api/v1/me/learning-path")).ShouldBeAsync(HttpStatusCode.OK);
+        var stage = path.GetProperty("stages").EnumerateArray().Single(s => s.GetProperty("courseType").GetString() == "PRODUCT");
+        Assert.False(stage.GetProperty("blocked").GetBoolean());
+        Assert.Contains(stage.GetProperty("courses").EnumerateArray(), c => c.GetProperty("courseId").GetInt64() == courseId);
+        var enrollment = (await (await trainee.GetAsync("/api/v1/me/enrollments")).ShouldBeAsync(HttpStatusCode.OK)).EnumerateArray()
+            .Single(e => e.GetProperty("courseId").GetInt64() == courseId);
+        Assert.Equal(("Cà phê sữa đá", "PRODUCT"), (enrollment.GetProperty("courseTitle").GetString(), enrollment.GetProperty("courseType").GetString()));
+
+        // Its SOP is the recipe, step by step, read from the released version.
+        var modules = await (await trainee.GetAsync($"{Enrollments}/{enrollment.Id()}/modules")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(7, modules.GetArrayLength());
+        var sop = modules.EnumerateArray().Select(m => m.GetProperty("module")).Single(m => m.GetProperty("moduleType").GetString() == "SOP");
+        Assert.Equal(["Add the condensed milk to the glass", "Brew through the phin", "Stir and pour over ice"],
+            sop.GetProperty("lessons").EnumerateArray().Select(l => l.GetProperty("reference").GetProperty("actionText").GetString()));
+    }
 }

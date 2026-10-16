@@ -1,5 +1,6 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Application.Training;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
@@ -31,7 +32,7 @@ public sealed class SeedOptions
 
 /// <summary>Inserts what is missing and never touches what is already there.</summary>
 public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IOptions<SeedOptions> options,
-    TimeProvider clock, ILogger<DataSeeder> logger)
+    LearningPathService learningPath, TimeProvider clock, ILogger<DataSeeder> logger)
 {
     public async Task SeedAsync(CancellationToken cancellationToken = default)
     {
@@ -52,6 +53,67 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
         await SeedLaunchStatusesAsync(branches, cancellationToken);
         await SeedRegulationsAsync(cancellationToken);
         await SeedInductionAsync(cancellationToken);
+        await SeedProductCourseAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// A PRODUCT course on the released version of R07, written, approved and
+    /// published, and assigned to the seeded trainees through their learning
+    /// path: R07 is on the menu of every branch and they have passed induction,
+    /// so it is the next stage of their path. Without it a seeded trainee has
+    /// nothing to study.
+    /// </summary>
+    private async Task SeedProductCourseAsync(CancellationToken cancellationToken)
+    {
+        var version = await db.RecipeVersions
+            .Include(v => v.Steps).ThenInclude(s => s.Ingredients)
+            .Include(v => v.Steps).ThenInclude(s => s.Dependencies)
+            .Where(v => v.State == VersionState.Released
+                        && db.Recipes.Any(r => r.Id == v.RecipeId && r.RecipeCode == SeedData.ProductCourseRecipe))
+            .SingleOrDefaultAsync(cancellationToken);
+        if (version is null) return;
+
+        if (!await db.Courses.AnyAsync(c => c.RecipeVersionId == version.Id, cancellationToken))
+        {
+            var trainer = await FirstUserOfAsync(RoleName.Trainer, cancellationToken);
+            var manager = await FirstUserOfAsync(RoleName.TrainingManager, cancellationToken);
+            var name = await db.Recipes.Where(r => r.Id == version.RecipeId).Select(r => r.Name).SingleAsync(cancellationToken);
+
+            var course = Course.Create(CourseType.Product, name, version, trainer);
+            db.Courses.Add(course);
+            await db.SaveChangesAsync(cancellationToken);
+
+            var technique = course.Modules.Single(m => m.ModuleType == ModuleType.Technique);
+            foreach (var (gate, prose) in technique.Lessons.OrderBy(l => l.LessonOrder).ToList().Zip(SeedData.ProductCourseTechnique))
+            {
+                course.UpdateLesson(technique, gate, null, prose, null);
+            }
+            course.SetModuleDuration(technique, 20);
+            foreach (var (type, lessons) in SeedData.ProductCourseLessons)
+            {
+                var module = course.Modules.Single(m => m.ModuleType == type);
+                foreach (var (title, content) in lessons) course.AddLesson(module, title, content, null);
+                course.SetModuleDuration(module, 10);
+            }
+            await db.SaveChangesAsync(cancellationToken);
+            foreach (var module in course.OrderedModules())
+            {
+                var (question, right, wrong1, wrong2) = SeedData.ProductCourseQuiz[module.ModuleType];
+                course.AddQuizQuestion(module.Id, question, [new("A", right), new("B", wrong1), new("C", wrong2)], "A");
+            }
+            course.Submit();
+            course.Approve(manager, clock.GetUtcNow());
+            db.Audit(AuditEntities.Course, () => course.Id, AuditActions.Create,
+                new { course.Title, courseType = course.CourseType.Code(), seeded = true }, actorUserId: trainer);
+            await db.SaveChangesAsync(cancellationToken);
+            logger.LogInformation("Seeded the PRODUCT course of {Recipe}", SeedData.ProductCourseRecipe);
+        }
+
+        var trainees = await db.Users.IgnoreQueryFilters()
+            .Where(u => u.Role.RoleName == RoleName.Trainee && u.Status == UserStatus.Active)
+            .Select(u => u.Id).ToListAsync(cancellationToken);
+        foreach (var trainee in trainees) await learningPath.AssignOpenStagesAsync(trainee, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     public const string InductionTitle = "Welcome to the chain";

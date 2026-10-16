@@ -67,7 +67,9 @@ duty can be demonstrated. They all share the password in
 | `trainee`, `trainee2` / `trainee3`, `trainee4` | TRAINEE | B01 / B02 |
 
 Also seeded: the induction course, with the seeded trainees and trainer
-certified on it; three branches, sixteen ingredients, seven equipment classes and
+certified on it; a published PRODUCT course on `R07` (Cà phê sữa đá), the next
+stage of every seeded trainee's learning path and already assigned to them, so
+signing in as `trainee` shows a course to study; three branches, sixteen ingredients, seven equipment classes and
 eleven recipes — nine released (`R01`–`R08`, `R10`), one validated and waiting
 for review (`R09`), and one draft that deliberately fails all three validator
 checks (`R99`) so the validation and repair screens have something to show.

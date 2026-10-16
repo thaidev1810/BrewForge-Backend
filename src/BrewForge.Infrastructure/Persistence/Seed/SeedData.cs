@@ -143,4 +143,47 @@ public static class SeedData
         new("EQ-SHK-01", "SHAKER", 10.000m, 500.000m, DosingUnit.Millilitre),
         new("EQ-BLD-01", "BLENDER", 10.000m, 600.000m, DosingUnit.Millilitre),
     ];
+
+    /// <summary>The recipe the seeded PRODUCT course teaches: a drink every branch already sells.</summary>
+    public const string ProductCourseRecipe = "R07";
+
+    /// <summary>
+    /// What the trainer writes for the PRODUCT course of R07. The first four
+    /// modules are generated from the recipe and need nothing here; the
+    /// technique module gets prose for each of its gates.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<ModuleType, (string Title, string Content)[]> ProductCourseLessons =
+        new Dictionary<ModuleType, (string, string)[]>
+        {
+            [ModuleType.CommonMistakes] =
+            [
+                ("Coffee that is too thin or too bitter", "Too little coffee in the phin, or water off the boil, gives a thin cup; pressing the filter down hard gives a bitter one. Weigh the 22 g and let the water do the work."),
+                ("Undissolved condensed milk", "Pouring over ice before stirring leaves the milk at the bottom of the glass. Stir in the glass until it is one colour, then pour over the ice."),
+            ],
+            [ModuleType.ExceptionHandling] =
+            [
+                ("The phin drips too fast or stops", "Too fast: the grind is coarse or the press too light; tell the shift lead and brew again. Stopped: the grind is too fine; do not shake the phin, start again with a new dose."),
+                ("A guest asks for less sweet", "Offer the menu option with less condensed milk; do not change the dose by eye."),
+            ],
+        };
+
+    /// <summary>The technique gate lessons of the R07 course, in step order.</summary>
+    public static readonly IReadOnlyList<string> ProductCourseTechnique =
+    [
+        "Pour 20 ml of water first and wait 30 seconds while the coffee blooms. Then fill the phin and close the lid; it should drip for about four to five minutes.",
+        "Stir in the glass until no streak of condensed milk is left, then pour over the ice in one movement.",
+    ];
+
+    /// <summary>One question per module of the R07 course; the correct answer is always "A".</summary>
+    public static readonly IReadOnlyDictionary<ModuleType, (string Question, string Right, string Wrong1, string Wrong2)> ProductCourseQuiz =
+        new Dictionary<ModuleType, (string, string, string, string)>
+        {
+            [ModuleType.ProductOverview] = ("What is Cà phê sữa đá?", "Phin coffee with condensed milk, served over ice", "Espresso with steamed milk", "Cold brew with fresh milk"),
+            [ModuleType.Ingredients] = ("How much condensed milk goes into one cup?", "30 ml", "15 ml", "60 ml"),
+            [ModuleType.Equipment] = ("Which equipment brews the coffee?", "The phin filter", "The espresso machine", "The tea brewer"),
+            [ModuleType.Sop] = ("What comes first in the glass?", "The condensed milk", "The ice", "The coffee"),
+            [ModuleType.Technique] = ("How long does the coffee bloom?", "30 seconds, with 20 ml of water", "No bloom: fill the phin at once", "5 minutes, with all the water"),
+            [ModuleType.CommonMistakes] = ("Why is condensed milk left at the bottom of the glass?", "It was poured over ice before being stirred", "There was too much coffee", "The phin dripped too slowly"),
+            [ModuleType.ExceptionHandling] = ("The phin has stopped dripping. What do you do?", "Start again with a new dose", "Shake the phin until it drips", "Serve what has dripped"),
+        };
 }
