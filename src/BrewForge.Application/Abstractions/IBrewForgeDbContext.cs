@@ -58,6 +58,7 @@ public interface IBrewForgeDbContext
     /// <summary>The aggregate root. Pilot branches and the launch decision are reached through it.</summary>
     DbSet<PilotProgram> PilotPrograms { get; }
     DbSet<ChangeImpact> ChangeImpacts { get; }
+    DbSet<ImpactRunHeader> ImpactRuns { get; }
     DbSet<Notification> Notifications { get; }
     DbSet<PushSubscription> PushSubscriptions { get; }
 

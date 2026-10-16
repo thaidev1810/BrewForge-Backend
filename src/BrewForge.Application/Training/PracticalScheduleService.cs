@@ -109,9 +109,15 @@ public sealed class PracticalScheduleService(IBrewForgeDbContext db, LearningSer
         return (await ToDtosAsync([schedule], cancellationToken))[0];
     }
 
-    private async Task<PracticalSchedule> FindAsync(long id, CancellationToken cancellationToken) =>
-        await db.PracticalSchedules.SingleOrDefaultAsync(s => s.Id == id, cancellationToken)
-        ?? throw DomainException.NotFound("PracticalSchedule", id);
+    // A trainer may only reschedule, cancel or complete an appointment they hold, the same
+    // reach the listing has (TrainerId == me). An appointment held by another trainer is
+    // reported as not found so its existence is not revealed to someone who cannot touch it.
+    private async Task<PracticalSchedule> FindAsync(long id, CancellationToken cancellationToken)
+    {
+        var me = currentUser.RequireUserId();
+        return await db.PracticalSchedules.SingleOrDefaultAsync(s => s.Id == id && s.TrainerId == me, cancellationToken)
+            ?? throw DomainException.NotFound("PracticalSchedule", id);
+    }
 
     private async Task<IReadOnlyList<PracticalScheduleDto>> ToDtosAsync(IReadOnlyList<PracticalSchedule> rows,
         CancellationToken cancellationToken)

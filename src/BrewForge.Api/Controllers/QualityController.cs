@@ -52,9 +52,10 @@ public sealed class BranchAuditsController(QualityAuditService audits) : Control
     }
 
     [HttpGet("evidence/{**key}")]
-    public IActionResult Evidence(string key, [FromServices] EvidenceService evidence)
+    public async Task<IActionResult> Evidence(string key, [FromServices] EvidenceService evidence,
+        CancellationToken cancellationToken)
     {
-        var photo = evidence.Open(key);
+        var photo = await evidence.OpenAsync(key, cancellationToken);
         return File(photo.Content, photo.ContentType);
     }
 

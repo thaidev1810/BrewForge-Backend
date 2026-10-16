@@ -1,5 +1,6 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Application.Launch;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -26,7 +27,7 @@ public sealed record UpdateUserRequest(string? Username, string? Email, string? 
 
 /// <summary>UC-01: user and role management (SCR-03).</summary>
 public sealed class UserService(IBrewForgeDbContext db, IPasswordHasher hasher, ICurrentUser currentUser,
-    TimeProvider clock)
+    LaunchReadinessService readiness, TimeProvider clock)
 {
     public const int MinPasswordLength = 8;
     public const int MaxPasswordLength = 128;
@@ -87,6 +88,7 @@ public sealed class UserService(IBrewForgeDbContext db, IPasswordHasher hasher, 
     public async Task<UserDto> UpdateAsync(long id, UpdateUserRequest request, CancellationToken cancellationToken)
     {
         var user = await FindAsync(id, tracking: true, cancellationToken);
+        var previousBranchId = user.BranchId;
 
         new FieldErrors()
             .Check(request.Username is null || request.Username.Trim() == user.Username, "username",
@@ -109,6 +111,13 @@ public sealed class UserService(IBrewForgeDbContext db, IPasswordHasher hasher, 
         db.Audit(AuditEntities.User, () => user.Id, AuditActions.Update,
             new { user = Snapshot(user), passwordReset = request.Password is not null });
         await db.SaveChangesAsync(cancellationToken);
+
+        // Coverage counts a branch's active certified staff, so it changes when a certified user
+        // moves branch or is deactivated or reactivated. Recompute the branches left and joined.
+        if (previousBranchId != user.BranchId || request.Status is not null)
+        {
+            await RecomputeCoverageForBranchesAsync(user.Id, cancellationToken, previousBranchId, user.BranchId);
+        }
         return UserDto.From(user);
     }
 
@@ -121,7 +130,23 @@ public sealed class UserService(IBrewForgeDbContext db, IPasswordHasher hasher, 
         user.Deactivate();
         db.Audit(AuditEntities.User, () => user.Id, AuditActions.Deactivate);
         await db.SaveChangesAsync(cancellationToken);
+
+        // The branch no longer has this certified head; its coverage must be recounted.
+        await RecomputeCoverageForBranchesAsync(user.Id, cancellationToken, user.BranchId);
         return UserDto.From(user);
+    }
+
+    /// <summary>Recomputes each distinct branch's coverage for the recipes this user is certified on.</summary>
+    private async Task RecomputeCoverageForBranchesAsync(long userId, CancellationToken cancellationToken,
+        params long?[] branches)
+    {
+        var distinct = branches.Where(b => b is not null).Select(b => b!.Value).Distinct().ToList();
+        if (distinct.Count == 0) return;
+        foreach (var branch in distinct)
+        {
+            await readiness.RecomputeForUserBranchAsync(userId, branch, cancellationToken);
+        }
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     private static bool IsAcceptablePassword(string? password) =>

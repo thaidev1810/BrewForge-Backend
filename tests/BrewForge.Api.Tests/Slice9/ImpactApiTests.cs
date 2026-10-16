@@ -27,10 +27,14 @@ public sealed class ImpactApiTests(BrewForgeApiFactory factory)
         var result = await factory.AnalyzeAsync("Ingredient", drink.IngredientId);
 
         var after = await factory.RowCountsAsync();
-        // One row for the course, two for the certificates, one for the live branch: and nothing else, anywhere.
+        // One row for the course, two for the certificates, one for the live branch; one run header
+        // so the run can be read back; and nothing else, anywhere.
         Assert.Equal(before["change_impact"] + 4, after["change_impact"]);
-        Assert.Equal(before.Where(table => table.Key != "change_impact"), after.Where(table => table.Key != "change_impact"));
-        Assert.Equal(37, after.Count);
+        Assert.Equal(before["impact_run_header"] + 1, after["impact_run_header"]);
+        Assert.Equal(
+            before.Where(table => table.Key is not ("change_impact" or "impact_run_header")),
+            after.Where(table => table.Key is not ("change_impact" or "impact_run_header")));
+        Assert.Equal(46, after.Count);
 
         var runId = Guid.Parse(result.GetProperty("runId").GetString()!);
         var rows = await factory.WithDbAsync(db => db.ChangeImpacts.AsNoTracking().Where(r => r.AnalysisRunId == runId).ToListAsync());
@@ -111,6 +115,34 @@ public sealed class ImpactApiTests(BrewForgeApiFactory factory)
         await (await manager.GetAsync($"{Impact}/{Guid.NewGuid():N}")).ShouldBeErrorAsync(HttpStatusCode.NotFound);
         await (await manager.GetAsync($"{Impact}/not-a-run")).ShouldBeErrorAsync(HttpStatusCode.NotFound);
         await (await manager.PostAsync($"{Impact}/{Guid.NewGuid():N}/commit", null)).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task A_what_if_that_affects_nothing_can_still_be_read_back_and_committed()
+    {
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
+        // A freshly released version nobody has built a course on: the analysis affects nothing.
+        var (_, versionId) = await factory.NewReleasedRecipeAsync();
+
+        var analysis = await factory.AnalyzeAsync("RecipeVersion", versionId);
+        var runId = analysis.GetProperty("runId").GetString()!;
+        Assert.Empty(analysis.GetProperty("affected").GetProperty("courses").EnumerateArray());
+
+        // The run has a header, so it reads back as an empty analysis rather than a 404.
+        var reread = await (await manager.GetAsync($"{Impact}/{runId}")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(runId, reread.GetProperty("runId").GetString());
+        Assert.Empty(reread.GetProperty("affected").GetProperty("courses").EnumerateArray());
+        Assert.Empty(reread.GetProperty("affected").GetProperty("certificates").EnumerateArray());
+        Assert.False(reread.GetProperty("committed").GetBoolean());
+
+        // It commits (there is nothing to flag), and committing a second time is refused.
+        var committed = await (await manager.PostAsync($"{Impact}/{runId}/commit", null)).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.True(committed.GetProperty("committed").GetBoolean());
+        await (await manager.PostAsync($"{Impact}/{runId}/commit", null))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IMPACT_ALREADY_COMMITTED");
+
+        // A run that was never created is still a 404.
+        await (await manager.GetAsync($"{Impact}/{Guid.NewGuid():N}")).ShouldBeErrorAsync(HttpStatusCode.NotFound);
     }
 
     // ---------------------------------------------------------------- BR-15: the commit

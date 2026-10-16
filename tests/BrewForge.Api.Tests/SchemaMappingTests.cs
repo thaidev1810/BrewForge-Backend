@@ -16,7 +16,7 @@ namespace BrewForge.Api.Tests;
 public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
 {
     [Fact]
-    public async Task Migrations_create_the_37_tables_67_foreign_keys_and_3_triggers()
+    public async Task Migrations_create_the_46_tables_82_foreign_keys_and_3_triggers()
     {
         var (tables, foreignKeys, triggers) = await factory.WithDbAsync(async db => (
             await ScalarAsync(db, """SELECT count(*)::int AS "Value" FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"""),
@@ -24,9 +24,11 @@ public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
             await ScalarAsync(db, """SELECT count(DISTINCT trigger_name)::int AS "Value" FROM information_schema.triggers WHERE trigger_schema = 'public'""")));
 
         // The 34 tables and 62 foreign keys of the developer pack; the practical video with its three
-        // foreign keys (002); notifications and push subscriptions with one each (003).
-        Assert.Equal(37, tables);
-        Assert.Equal(67, foreignKeys);
+        // foreign keys (002); notifications and push subscriptions with one each (003); categories and
+        // branch audits (004: 4 tables, 7 foreign keys); products, question bank, practical schedule and
+        // settings (005: 4 tables, 8 foreign keys); the impact run header (006: 1 table, no foreign key).
+        Assert.Equal(46, tables);
+        Assert.Equal(82, foreignKeys);
         Assert.Equal(3, triggers);
     }
 

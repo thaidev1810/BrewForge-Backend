@@ -147,6 +147,51 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Assignments_filtered_by_status_still_honour_the_requested_sort()
+    {
+        var course = await factory.NewPublishedCourseAsync();
+        var b01 = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        // Two fresh B01 trainees, assigned the same course with different deadlines, both ASSIGNED.
+        var near = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5);
+        var far = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(15);
+        var t1 = await NewTraineeAsync(admin, b01);
+        var t2 = await NewTraineeAsync(admin, b01);
+        await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+            { courseId = course.Id(), branchId = b01, employeeIds = new[] { t1 }, deadline = near }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+            { courseId = course.Id(), branchId = b01, employeeIds = new[] { t2 }, deadline = far }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+
+        var baseUrl = $"/api/v1/assignments?courseId={course.Id()}&status=ASSIGNED";
+        var asc = await DueDatesAsync(trainer, $"{baseUrl}&sort=dueDate,asc");
+        var desc = await DueDatesAsync(trainer, $"{baseUrl}&sort=dueDate,desc");
+
+        Assert.Equal(new[] { near.ToString("yyyy-MM-dd"), far.ToString("yyyy-MM-dd") }, asc);
+        Assert.Equal(new[] { far.ToString("yyyy-MM-dd"), near.ToString("yyyy-MM-dd") }, desc);
+    }
+
+    private async Task<long> NewTraineeAsync(HttpClient admin, long branchId)
+    {
+        var name = $"t{Guid.NewGuid():N}"[..12];
+        var created = await (await admin.PostAsJsonAsync("/api/v1/users", new
+        {
+            username = name, email = $"{name}@brewforge.local", password = "Another-Test-Passw0rd",
+            fullName = "List Trainee", role = "TRAINEE", branchId,
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        return created.GetProperty("id").GetInt64();
+    }
+
+    private static async Task<string[]> DueDatesAsync(HttpClient client, string url)
+    {
+        var list = await (await client.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
+        return [.. list.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("dueDate").GetString()!)];
+    }
+
+    [Fact]
     public async Task Practical_is_scheduled_only_after_the_quiz_and_the_trainee_can_read_it()
     {
         var learner = await factory.NewEligibleLearnerAsync();
@@ -186,6 +231,46 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
             new { scheduledAt = DateTimeOffset.UtcNow.AddHours(-1), location = "B01" });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_trainer_cannot_touch_another_trainers_appointment()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+
+        using var owner = await factory.ClientForAsync(TestUsers.Trainer);
+        var url = $"/api/v1/enrollments/{learner.EnrollmentId}/practical-schedules";
+        var at = DateTimeOffset.UtcNow.AddDays(2);
+        var created = await (await owner.PostAsJsonAsync(url, new { scheduledAt = at, location = "B01 counter" }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        var id = created.GetProperty("id").GetInt64();
+
+        // A second trainer who does not hold this appointment.
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var otherName = $"t{Guid.NewGuid():N}"[..12];
+        const string password = "Another-Test-Passw0rd";
+        await (await admin.PostAsJsonAsync("/api/v1/users", new
+        {
+            username = otherName, email = $"{otherName}@brewforge.local", password, fullName = "Other Trainer",
+            role = "TRAINER", branchId = (long?)null,
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        using var other = factory.CreateClient();
+        other.DefaultRequestHeaders.Authorization =
+            new("Bearer", (await factory.LoginAsync(otherName, password)).AccessToken);
+
+        // The other trainer may call the endpoints (same role) but cannot reach this appointment.
+        await (await other.PostAsync($"/api/v1/practical-schedules/{id}/cancel", null))
+            .ShouldBeAsync(HttpStatusCode.NotFound);
+        await (await other.PutAsJsonAsync($"/api/v1/practical-schedules/{id}", new { scheduledAt = at, location = "elsewhere" }))
+            .ShouldBeAsync(HttpStatusCode.NotFound);
+        await (await other.PostAsync($"/api/v1/practical-schedules/{id}/complete", null))
+            .ShouldBeAsync(HttpStatusCode.NotFound);
+
+        // The appointment is untouched, and its owner still holds it as SCHEDULED.
+        var status = await factory.WithDbAsync(db =>
+            db.PracticalSchedules.Where(s => s.Id == id).Select(s => s.Status).SingleAsync());
+        Assert.Equal(BrewForge.Domain.Training.ScheduleStatus.Scheduled, status);
     }
 
     [Fact]

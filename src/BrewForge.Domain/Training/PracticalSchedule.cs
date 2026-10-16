@@ -32,10 +32,16 @@ public sealed class PracticalSchedule
     public static PracticalSchedule Create(Enrollment enrollment, long trainerId, DateTimeOffset? at, string? location,
         string? note, DateTimeOffset now)
     {
-        if (enrollment.State != EnrollmentState.Passed)
+        // The practical is booked once the quiz is passed, while the enrolment is still
+        // ELIGIBLE (the state in which the practical evaluation is open). PASSED means the
+        // whole course, practical included, is already certified, so gating on it would
+        // make a practical impossible to schedule before it has been sat.
+        if (enrollment.State != EnrollmentState.Eligible || !enrollment.HasPassedQuiz)
         {
             throw DomainException.RuleViolation(Rule,
-                $"A practical is scheduled after the quiz is passed; this enrolment is {enrollment.State.Code()}.");
+                "A practical is scheduled after the quiz is passed, while the enrolment is ELIGIBLE; " +
+                $"this enrolment is {enrollment.State.Code()}" +
+                (enrollment.State == EnrollmentState.Eligible ? " and its quiz is not passed yet." : "."));
         }
 
         var schedule = new PracticalSchedule { EnrollmentId = enrollment.Id, TrainerId = trainerId, CreatedAt = now };
