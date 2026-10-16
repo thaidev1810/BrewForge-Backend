@@ -149,6 +149,7 @@ public static class AuthorizationMatrix
         new("POST", "/courses", TrainerOnly),
         new("GET", "/courses/{id}", [RoleName.Trainer, RoleName.TrainingManager]),
         new("GET", "/courses/{id}/modules", [RoleName.Trainer, RoleName.TrainingManager]),
+        new("GET", "/courses/{id}/eligible-trainers", [RoleName.Trainer, RoleName.TrainingManager]),
         new("PUT", "/course-modules/{id}", TrainerOnly),
         new("POST", "/course-modules/{id}/regenerate", TrainerOnly),
         new("GET", "/course-modules/{id}/lessons", TrainerOnly),

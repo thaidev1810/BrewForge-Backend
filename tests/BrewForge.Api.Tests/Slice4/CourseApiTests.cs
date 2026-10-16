@@ -490,4 +490,28 @@ public sealed class CourseApiTests(BrewForgeApiFactory factory)
             module => Assert.Equal("AUTHORED", module.GetProperty("source").GetString()));
         Assert.Empty(course.GetProperty("practicalChecklist").EnumerateArray());
     }
+
+    [Fact]
+    public async Task Eligible_trainers_reflect_certification_on_the_courses_version()
+    {
+        var course = await factory.NewPublishedCourseAsync();
+        var courseId = course.Id();
+        var versionId = course.GetProperty("recipeVersionId").GetInt64();
+        var trainerId = await factory.UserIdAsync(TestUsers.Trainer);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var url = $"/api/v1/courses/{courseId}/eligible-trainers";
+
+        // Not certified on this fresh version yet: the trainer is listed but not eligible, with a reason.
+        var before = await (await trainer.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
+        var meBefore = before.EnumerateArray().Single(t => t.GetProperty("id").GetInt64() == trainerId);
+        Assert.False(meBefore.GetProperty("eligible").GetBoolean());
+        Assert.Equal(JsonValueKind.String, meBefore.GetProperty("reason").ValueKind);
+
+        // Certified on the version: now eligible, no reason given.
+        await factory.CertifyAsync(trainerId, courseId, versionId);
+        var after = await (await trainer.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
+        var meAfter = after.EnumerateArray().Single(t => t.GetProperty("id").GetInt64() == trainerId);
+        Assert.True(meAfter.GetProperty("eligible").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, meAfter.GetProperty("reason").ValueKind);
+    }
 }

@@ -3,10 +3,15 @@ using BrewForge.Application.Common;
 using BrewForge.Application.Recipes;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
+using BrewForge.Domain.Identity;
 using BrewForge.Domain.Recipes;
+using BrewForge.Domain.Training;
 using Microsoft.EntityFrameworkCore;
 
 namespace BrewForge.Application.Courses;
+
+/// <summary>A trainer as a choice for teaching a session, with whether they may teach this course (BR-34).</summary>
+public sealed record TrainerOptionDto(long Id, string FullName, long? BranchId, bool Eligible, string? Reason);
 
 /// <summary>UC-11 to UC-13 and UC-28: course authoring and approval (SCR-13 to SCR-16, SCR-30).</summary>
 public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer renderer, ICurrentUser currentUser,
@@ -58,6 +63,41 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
 
     public async Task<CourseDetailDto> GetAsync(long id, CancellationToken cancellationToken) =>
         await renderer.RenderAsync(await FindAsync(id, cancellationToken), cancellationToken);
+
+    /// <summary>
+    /// The active trainers, with whether each may teach a session of this course (BR-34): a trainer
+    /// must hold a VALID certificate on the recipe version the course is bound to. A course built from
+    /// no recipe has no version to be certified on, so every active trainer is eligible. Being a TRAINER
+    /// is not enough on its own; the reason says why one is not eligible.
+    /// </summary>
+    public async Task<IReadOnlyList<TrainerOptionDto>> EligibleTrainersAsync(long courseId,
+        CancellationToken cancellationToken)
+    {
+        var versionId = await db.Courses.AsNoTracking().Where(c => c.Id == courseId)
+            .Select(c => c.RecipeVersionId).FirstOrDefaultAsync(cancellationToken);
+        if (!await db.Courses.AnyAsync(c => c.Id == courseId, cancellationToken))
+        {
+            throw DomainException.NotFound("Course", courseId);
+        }
+
+        var trainers = await db.Users.AsNoTracking().Include(u => u.Role)
+            .Where(u => u.Role.RoleName == RoleName.Trainer && u.Status == UserStatus.Active)
+            .OrderBy(u => u.FullName).ThenBy(u => u.Id)
+            .Select(u => new { u.Id, u.FullName, u.BranchId }).ToListAsync(cancellationToken);
+
+        var certified = versionId is { } version
+            ? (await db.Certificates.AsNoTracking()
+                .Where(c => c.Status == CertificateStatus.Valid && c.RecipeVersionId == version)
+                .Select(c => c.UserId).ToListAsync(cancellationToken)).ToHashSet()
+            : [];
+
+        return [.. trainers.Select(t =>
+        {
+            var eligible = versionId is null || certified.Contains(t.Id);
+            return new TrainerOptionDto(t.Id, t.FullName, t.BranchId, eligible,
+                eligible ? null : $"not certified on recipe version {versionId}");
+        })];
+    }
 
     public async Task<IReadOnlyList<CourseModuleDto>> GetModulesAsync(long id, CancellationToken cancellationToken)
     {
