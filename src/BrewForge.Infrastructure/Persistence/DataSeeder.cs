@@ -1,5 +1,7 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
+using BrewForge.Application.Training;
+using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.Launch;
@@ -30,7 +32,7 @@ public sealed class SeedOptions
 
 /// <summary>Inserts what is missing and never touches what is already there.</summary>
 public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IOptions<SeedOptions> options,
-    TimeProvider clock, ILogger<DataSeeder> logger)
+    LearningPathService learningPath, TimeProvider clock, ILogger<DataSeeder> logger)
 {
     public async Task SeedAsync(CancellationToken cancellationToken = default)
     {
@@ -50,6 +52,122 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
         await SeedRecipesAsync(cancellationToken);
         await SeedLaunchStatusesAsync(branches, cancellationToken);
         await SeedRegulationsAsync(cancellationToken);
+        await SeedInductionAsync(cancellationToken);
+        await SeedProductCourseAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// A PRODUCT course on the released version of R07, written, approved and
+    /// published, and assigned to the seeded trainees through their learning
+    /// path: R07 is on the menu of every branch and they have passed induction,
+    /// so it is the next stage of their path. Without it a seeded trainee has
+    /// nothing to study.
+    /// </summary>
+    private async Task SeedProductCourseAsync(CancellationToken cancellationToken)
+    {
+        var version = await db.RecipeVersions
+            .Include(v => v.Steps).ThenInclude(s => s.Ingredients)
+            .Include(v => v.Steps).ThenInclude(s => s.Dependencies)
+            .Where(v => v.State == VersionState.Released
+                        && db.Recipes.Any(r => r.Id == v.RecipeId && r.RecipeCode == SeedData.ProductCourseRecipe))
+            .SingleOrDefaultAsync(cancellationToken);
+        if (version is null) return;
+
+        if (!await db.Courses.AnyAsync(c => c.RecipeVersionId == version.Id, cancellationToken))
+        {
+            var trainer = await FirstUserOfAsync(RoleName.Trainer, cancellationToken);
+            var manager = await FirstUserOfAsync(RoleName.TrainingManager, cancellationToken);
+            var name = await db.Recipes.Where(r => r.Id == version.RecipeId).Select(r => r.Name).SingleAsync(cancellationToken);
+
+            var course = Course.Create(CourseType.Product, name, version, trainer);
+            db.Courses.Add(course);
+            await db.SaveChangesAsync(cancellationToken);
+
+            var technique = course.Modules.Single(m => m.ModuleType == ModuleType.Technique);
+            foreach (var (gate, prose) in technique.Lessons.OrderBy(l => l.LessonOrder).ToList().Zip(SeedData.ProductCourseTechnique))
+            {
+                course.UpdateLesson(technique, gate, null, prose, null);
+            }
+            course.SetModuleDuration(technique, 20);
+            foreach (var (type, lessons) in SeedData.ProductCourseLessons)
+            {
+                var module = course.Modules.Single(m => m.ModuleType == type);
+                foreach (var (title, content) in lessons) course.AddLesson(module, title, content, null);
+                course.SetModuleDuration(module, 10);
+            }
+            await db.SaveChangesAsync(cancellationToken);
+            foreach (var module in course.OrderedModules())
+            {
+                var (question, right, wrong1, wrong2) = SeedData.ProductCourseQuiz[module.ModuleType];
+                course.AddQuizQuestion(module.Id, question, [new("A", right), new("B", wrong1), new("C", wrong2)], "A");
+            }
+            course.Submit();
+            course.Approve(manager, clock.GetUtcNow());
+            db.Audit(AuditEntities.Course, () => course.Id, AuditActions.Create,
+                new { course.Title, courseType = course.CourseType.Code(), seeded = true }, actorUserId: trainer);
+            await db.SaveChangesAsync(cancellationToken);
+            logger.LogInformation("Seeded the PRODUCT course of {Recipe}", SeedData.ProductCourseRecipe);
+        }
+
+        var trainees = await db.Users.IgnoreQueryFilters()
+            .Where(u => u.Role.RoleName == RoleName.Trainee && u.Status == UserStatus.Active)
+            .Select(u => u.Id).ToListAsync(cancellationToken);
+        foreach (var trainee in trainees) await learningPath.AssignOpenStagesAsync(trainee, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public const string InductionTitle = "Welcome to the chain";
+
+    /// <summary>
+    /// The induction course, published, and the seeded store staff and
+    /// trainer certified on it: they joined the chain before this system
+    /// existed and were inducted then. Without it nobody could be enrolled on
+    /// a PRODUCT course, which the seeded regulation puts after induction.
+    /// The certificates are written as rows, the way history is; the
+    /// application itself issues one only through a passed enrolment.
+    /// </summary>
+    private async Task SeedInductionAsync(CancellationToken cancellationToken)
+    {
+        if (!await db.Courses.AnyAsync(c => c.CourseType == CourseType.Induction, cancellationToken))
+        {
+            var trainer = await FirstUserOfAsync(RoleName.Trainer, cancellationToken);
+            var manager = await FirstUserOfAsync(RoleName.TrainingManager, cancellationToken);
+
+            var course = Course.Create(CourseType.Induction, InductionTitle, version: null, trainer);
+            db.Courses.Add(course);
+            await db.SaveChangesAsync(cancellationToken);
+
+            QuizOption[] options = [new("A", "Yes, every time"), new("B", "Only when it is busy"), new("C", "Never")];
+            foreach (var module in course.OrderedModules())
+            {
+                foreach (var (title, content) in SeedData.InductionLessons[module.ModuleType])
+                {
+                    course.AddLesson(module, title, content, null);
+                }
+                course.SetModuleDuration(module, 10);
+                course.AddQuizQuestion(module.Id, $"Does what the module '{module.ModuleType.Code()}' teaches apply on every shift?",
+                    options, "A");
+            }
+            course.Submit();
+            course.Approve(manager, clock.GetUtcNow());
+            db.Audit(AuditEntities.Course, () => course.Id, AuditActions.Create,
+                new { course.Title, courseType = course.CourseType.Code(), seeded = true }, actorUserId: trainer);
+            await db.SaveChangesAsync(cancellationToken);
+            logger.LogInformation("Seeded the induction course");
+        }
+
+        var usernames = SeedData.Users.Where(u => u.Role is RoleName.Trainee or RoleName.Trainer)
+            .Select(u => u.Username).ToArray();
+        await db.Database.ExecuteSqlAsync($"""
+            INSERT INTO certificate (user_id, course_id)
+            SELECT u.id, c.id
+            FROM app_user u
+            CROSS JOIN (SELECT id FROM course WHERE course_type = 'INDUCTION' AND title = {InductionTitle} ORDER BY id LIMIT 1) c
+            WHERE u.username = ANY({usernames})
+              AND NOT EXISTS (
+                  SELECT 1 FROM certificate held JOIN course passed ON passed.id = held.course_id
+                  WHERE held.user_id = u.id AND passed.course_type = 'INDUCTION')
+            """, cancellationToken);
     }
 
     /// <summary>The day the seeded drinks of origin EXISTING have been on sale since.</summary>
@@ -139,7 +257,8 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
                 .. seed.Steps.Select((step, index) => new StepSpec(index + 1, step.Action, step.Equipment, step.Gate,
                     step.Seconds,
                     [.. step.Uses.Select(use => new IngredientSpec(ingredientIds[use.Code], use.Quantity, use.Unit))],
-                    [.. step.After.Select(after => new DependencySpec(after.Step, after.Type))])),
+                    [.. step.After.Select(after => new DependencySpec(after.Step, after.Type))],
+                    step.TemperatureC)),
             ], author);
             db.RecipeVersions.Add(version);
             await db.SaveChangesAsync(cancellationToken);
@@ -244,7 +363,19 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
                 seed.StorageRule));
         }
         await db.SaveChangesAsync(cancellationToken);
+
+        // The brewing windows came later than the catalogue: a seeded leaf that has none yet is given its own.
+        var leaves = await db.Ingredients
+            .Where(i => SeedData.BrewingWindows.Keys.Contains(i.IngredientCode) && i.BrewTempMinC == null)
+            .ToListAsync(cancellationToken);
+        foreach (var leaf in leaves)
+        {
+            var (minC, maxC) = SeedData.BrewingWindows[leaf.IngredientCode];
+            leaf.SetBrewingWindow(minC, maxC);
+        }
+        await db.SaveChangesAsync(cancellationToken);
     }
+
 
     private async Task SeedEquipmentAsync(CancellationToken cancellationToken)
     {

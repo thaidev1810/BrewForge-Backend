@@ -1,8 +1,14 @@
 namespace BrewForge.Domain.Recipes;
 
-/// <summary>What a caller supplies to describe one step of a draft.</summary>
+/// <summary>
+/// What a caller supplies to describe one step of a draft. The temperature
+/// and the pressure are those the step is done at, where the recipe states
+/// them; most steps state neither.
+/// </summary>
 public sealed record StepSpec(int StepOrder, string? ActionText, string? EquipmentClass, string? TechniqueGate,
-    int? DurationSeconds, IReadOnlyList<IngredientSpec> Ingredients, IReadOnlyList<DependencySpec> DependsOn);
+    int? DurationSeconds, IReadOnlyList<IngredientSpec> Ingredients, IReadOnlyList<DependencySpec> DependsOn,
+    decimal? TemperatureC = null, decimal? PressureBar = null);
+
 
 public sealed record IngredientSpec(long IngredientId, decimal Quantity, string? Unit);
 
@@ -24,6 +30,8 @@ public sealed class RecipeStep
         EquipmentClass = string.IsNullOrWhiteSpace(spec.EquipmentClass) ? null : spec.EquipmentClass.Trim();
         TechniqueGate = string.IsNullOrWhiteSpace(spec.TechniqueGate) ? null : spec.TechniqueGate.Trim();
         DurationSeconds = spec.DurationSeconds;
+        TemperatureC = spec.TemperatureC;
+        PressureBar = spec.PressureBar;
         _ingredients.AddRange(spec.Ingredients.Select(i => new StepIngredient(i.IngredientId, i.Quantity, i.Unit!.Trim())));
     }
 
@@ -40,6 +48,13 @@ public sealed class RecipeStep
     /// <summary>The manual technique a trainer confirms by observation (BR-17).</summary>
     public string? TechniqueGate { get; private set; }
     public int? DurationSeconds { get; private set; }
+
+    /// <summary>The temperature the step is done at, in degrees Celsius: the water of a brew, the milk of a steaming.</summary>
+    public decimal? TemperatureC { get; private set; }
+
+    /// <summary>The pressure the step is done under, in bar: an extraction.</summary>
+    public decimal? PressureBar { get; private set; }
+
 
     public IReadOnlyList<StepIngredient> Ingredients => _ingredients;
 

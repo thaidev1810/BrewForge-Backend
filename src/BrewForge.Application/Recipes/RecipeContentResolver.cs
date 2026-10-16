@@ -17,12 +17,26 @@ internal static class RecipeContentResolver
     public static IQueryable<RecipeVersion> WithContent(this IQueryable<RecipeVersion> versions) =>
         versions
             .Include(version => version.Steps).ThenInclude(step => step.Ingredients)
-            .Include(version => version.Steps).ThenInclude(step => step.Dependencies);
+            .Include(version => version.Steps).ThenInclude(step => step.Dependencies)
+            .Include(version => version.Variants).ThenInclude(variant => variant.Ingredients);
 
     public static async Task<RecipeVersion> FindVersionAsync(this IBrewForgeDbContext db, long id,
         CancellationToken cancellationToken) =>
         await db.RecipeVersions.WithContent().SingleOrDefaultAsync(version => version.Id == id, cancellationToken)
         ?? throw DomainException.NotFound("Recipe version", id);
+
+    /// <summary>
+    /// The version of the same recipe that was in production before this one:
+    /// the highest version number below it that was ever released. Null for
+    /// the first version of a recipe.
+    /// </summary>
+    public static async Task<RecipeVersion?> FindPreviousVersionAsync(this IBrewForgeDbContext db,
+        RecipeVersion version, CancellationToken cancellationToken) =>
+        await db.RecipeVersions.WithContent()
+            .Where(v => v.RecipeId == version.RecipeId && v.VersionNo < version.VersionNo
+                        && (v.State == VersionState.Released || v.State == VersionState.Superseded))
+            .OrderByDescending(v => v.VersionNo)
+            .FirstOrDefaultAsync(cancellationToken);
 
     /// <summary>The whole catalogue, inactive entries included, as the validator wants it.</summary>
     public static async Task<(List<StandardEquipment> Equipment, List<Ingredient> Ingredients)> LoadCatalogAsync(
@@ -64,8 +78,20 @@ internal static class RecipeContentResolver
                 [
                     .. step.Dependencies.OrderBy(d => d.DependsOnStep.StepOrder).Select(d =>
                         new StepDependencyDto(d.DependsOnStepId, d.DependsOnStep.StepOrder, d.DependencyType)),
+                ], step.TemperatureC, step.PressureBar)),
+        ],
+        [
+            .. version.Variants.OrderBy(variant => variant.VariantCode, StringComparer.Ordinal).Select(variant =>
+                new VariantDto(variant.Id, variant.VariantCode, variant.Name, variant.Scale,
+                [
+                    .. variant.Ingredients.OrderBy(i => i.IngredientId).Select(i =>
+                    {
+                        var ingredient = ingredients.GetValueOrDefault(i.IngredientId);
+                        return new VariantIngredientDto(i.IngredientId, ingredient?.IngredientCode, ingredient?.Name, i.Scale);
+                    }),
                 ])),
         ]);
+
 
     /// <summary>
     /// Turns the request into step specifications, resolving ingredient codes
@@ -139,7 +165,7 @@ internal static class RecipeContentResolver
             }
 
             specs.Add(new StepSpec(step.StepOrder ?? 0, step.ActionText, equipmentClass, step.TechniqueGate,
-                step.DurationSeconds, ingredientSpecs, dependencySpecs));
+                step.DurationSeconds, ingredientSpecs, dependencySpecs, step.TemperatureC, step.PressureBar));
         }
 
         errors.ThrowIfAny();

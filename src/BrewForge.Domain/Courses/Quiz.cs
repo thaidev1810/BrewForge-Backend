@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using BrewForge.Domain.Common;
 
@@ -59,20 +62,72 @@ public sealed class Quiz
     public int PassScore { get; private set; } = 80;
     public int QuestionCount { get; private set; }
 
+    /// <summary>
+    /// How many questions of each module one attempt is given. Null: every
+    /// question, on every attempt. With a number the questions are a bank,
+    /// and each attempt is a draw from it.
+    /// </summary>
+    public int? DrawPerModule { get; private set; }
+
+    public const int MaxDrawPerModule = 50;
+
+
     public IReadOnlyList<QuizQuestion> Questions => _questions;
 
-    internal void Update(string? title, int? passScore)
+    /// <param name="drawPerModule">Null leaves the draw as it is; 0 turns it off, so that every question is asked.</param>
+    internal void Update(string? title, int? passScore, int? drawPerModule = null)
     {
         title = title?.Trim();
         new FieldErrors()
             .Check(title is null || title.Length > 0, "title", "must not be empty")
             .MaxLength("title", title, 160)
             .Check(passScore is null or (>= 0 and <= 100), "passScore", "must be between 0 and 100")
+            .Check(drawPerModule is null or (>= 0 and <= MaxDrawPerModule), "drawPerModule",
+                $"must be between 0 and {MaxDrawPerModule}; 0 asks every question")
             .ThrowIfAny();
 
         if (title is not null) Title = title;
         if (passScore is not null) PassScore = passScore.Value;
+        if (drawPerModule is not null) DrawPerModule = drawPerModule == 0 ? null : drawPerModule;
     }
+
+    /// <summary>How many questions an attempt is given: from each module, as many as are drawn or as there are.</summary>
+    public int QuestionsPerAttempt() =>
+        DrawPerModule is { } perModule
+            ? _questions.GroupBy(question => question.CourseModuleId).Sum(group => Math.Min(perModule, group.Count()))
+            : _questions.Count;
+
+    /// <summary>
+    /// The questions of one attempt of one enrolment. Without a draw, all of
+    /// them. With one, so many from each module, so that every module the
+    /// quiz tests is still tested (BR-35) and a failed attempt can still say
+    /// which module to study again.
+    ///
+    /// The draw is not stored and not random in the sense of changing from
+    /// one call to the next: it is fixed by the enrolment and the number of
+    /// the attempt. The questions a trainee is shown are therefore the ones
+    /// their answers are marked against, and the next attempt, having another
+    /// number, is another draw.
+    /// </summary>
+    public IReadOnlyList<QuizQuestion> DrawFor(long enrollmentId, int attemptNo)
+    {
+        if (DrawPerModule is not { } perModule) return [.. _questions.OrderBy(question => question.Id)];
+
+        return
+        [
+            .. _questions.GroupBy(question => question.CourseModuleId)
+                .SelectMany(group => group
+                    .OrderBy(question => Rank(enrollmentId, attemptNo, question.Id)).ThenBy(question => question.Id)
+                    .Take(perModule))
+                .OrderBy(question => question.Id),
+        ];
+    }
+
+    /// <summary>A number that depends on all four of its inputs and looks unrelated for neighbouring ones.</summary>
+    private ulong Rank(long enrollmentId, int attemptNo, long questionId) =>
+        BinaryPrimitives.ReadUInt64BigEndian(
+            SHA256.HashData(Encoding.ASCII.GetBytes($"{Id}|{enrollmentId}|{attemptNo}|{questionId}")));
+
 
     /// <param name="module">
     /// The module the question tests. It is required and must be a module of

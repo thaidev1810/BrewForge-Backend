@@ -15,7 +15,14 @@ namespace BrewForge.Domain.Recipes.Validation;
 /// is the sum of the durations of those steps, taken in step order; a step
 /// without a duration contributes nothing. The window may equal the shelf
 /// life but not exceed it.
+///
+/// A leaf may have a brewing window, the range of water temperature it is
+/// brewed at. A step that uses such a leaf and states its temperature is
+/// held to that window. A step that states no temperature is not: the
+/// recipes written before a step could state one are not made invalid by
+/// the leaf gaining a window.
 /// </summary>
+
 public sealed class IngredientCheck : IRecipeCheck
 {
     public const string Rule = "BR-11";
@@ -65,7 +72,16 @@ public sealed class IngredientCheck : IRecipeCheck
                         $"a unit convertible to {ingredientUnit}", used.Unit));
                 }
 
+                if (ingredient.HasBrewingWindow && step.TemperatureC is { } temperature
+                    && (temperature < ingredient.BrewTempMinC || temperature > ingredient.BrewTempMaxC))
+                {
+                    violations.Add(new Violation(step.Id, step.StepOrder, Rule,
+                        $"{ingredient.IngredientCode} is brewed at {Degrees(ingredient.BrewTempMinC!.Value)}-{Degrees(ingredient.BrewTempMaxC!.Value)} C, and the step is done at {Degrees(temperature)} C",
+                        $"{Degrees(ingredient.BrewTempMinC.Value)} - {Degrees(ingredient.BrewTempMaxC.Value)}", Degrees(temperature)));
+                }
+
                 // Only the first use opens the window; later uses are inside it.
+
                 if (!firstUseChecked.Add(ingredient.Id)) continue;
 
                 var windowSeconds = remaining[i];
@@ -81,6 +97,8 @@ public sealed class IngredientCheck : IRecipeCheck
 
         return violations;
     }
+
+    private static string Degrees(decimal value) => value.ToString("0.#", CultureInfo.InvariantCulture);
 
     private static string Hours(long seconds) =>
         (seconds / SecondsPerHour).ToString("0.##", CultureInfo.InvariantCulture);

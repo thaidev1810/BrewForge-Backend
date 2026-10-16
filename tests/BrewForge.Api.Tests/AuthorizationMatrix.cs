@@ -132,6 +132,11 @@ public static class AuthorizationMatrix
         new("GET", "/recipes/{id}/versions", HeadOffice),
         new("POST", "/recipes/{id}/versions", Specialist),
         new("GET", "/recipe-versions/{id}", HeadOffice),
+        new("GET", "/recipe-versions/{id}/diff", HeadOffice),
+        new("PUT", "/recipe-versions/{id}/variants", Specialist),
+        new("GET", "/recipe-versions/{id}/variants/{code}", HeadOffice),
+        new("POST", "/recipe-versions/{id}/extract-document", Specialist),
+        new("GET", "/recipe-versions/{id}/extraction", HeadOffice),
         new("PUT", "/recipe-versions/{id}", Specialist),
         new("POST", "/recipe-versions/{id}/generate-draft", Specialist),
         new("POST", "/recipe-versions/{id}/validate", [RoleName.RdSpecialist, RoleName.RdManager]),
@@ -141,6 +146,16 @@ public static class AuthorizationMatrix
         new("POST", "/recipe-versions/{id}/release", Manager),
         new("POST", "/recipe-versions/{id}/rollback", Manager),
         new("POST", "/recipes/import-existing", Specialist),
+
+        // Feedback on a recipe from the counter. Not in the contract.
+        new("POST", "/recipes/{id}/feedback", [RoleName.Trainee, RoleName.Trainer, RoleName.BranchManager]),
+        new("GET", "/recipes/{id}/feedback-summary", HeadOffice),
+        new("GET", "/recipe-feedback", Everyone),
+        new("GET", "/recipe-feedback/{id}", Everyone),
+        new("POST", "/recipe-feedback/{id}/accept", [RoleName.RdSpecialist, RoleName.RdManager]),
+        new("POST", "/recipe-feedback/{id}/reject", [RoleName.RdSpecialist, RoleName.RdManager]),
+        new("POST", "/recipe-feedback/{id}/address", [RoleName.RdSpecialist, RoleName.RdManager]),
+
 
         // 5. Course authoring
         new("GET", "/courses", [RoleName.Trainer, RoleName.TrainingManager, RoleName.RdManager]),
@@ -153,6 +168,9 @@ public static class AuthorizationMatrix
         new("POST", "/course-modules/{id}/lessons", TrainerOnly),
         new("PUT", "/lessons/{id}", TrainerOnly),
         new("DELETE", "/lessons/{id}", TrainerOnly),
+        new("POST", "/lessons/{id}/media", TrainerOnly),
+        new("GET", "/lesson-media/{id}", Everyone),
+        new("DELETE", "/lesson-media/{id}", TrainerOnly),
         new("GET", "/courses/{id}/quiz", TrainerOnly),
         new("PUT", "/courses/{id}/quiz", TrainerOnly),
         new("GET", "/courses/{id}/quiz/questions", TrainerOnly),
@@ -200,6 +218,11 @@ public static class AuthorizationMatrix
         new("POST", "/enrollments/{id}/practical-evaluation", TrainerOnly),
         new("GET", "/me/certificates", Learners),
         new("GET", "/certificates/{id}", [RoleName.Trainee, RoleName.Trainer, RoleName.QualityAuditor]),
+
+        // The learning path. Not in the contract.
+        new("GET", "/me/learning-path", Learners),
+        new("GET", "/learning-paths/{userId}", [RoleName.Trainer, RoleName.TrainingManager]),
+        new("POST", "/learning-paths/{userId}/assign", [RoleName.Trainer, RoleName.TrainingManager]),
 
         // Web Push for the caller. Not in the contract.
         new("GET", "/push/config", Everyone),

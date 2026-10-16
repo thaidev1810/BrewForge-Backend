@@ -103,6 +103,7 @@ public sealed partial class AuthorizationMatrixTests(BrewForgeApiFactory factory
     private static string Normalize(string rawRoute) =>
         RouteConstraint().Replace(rawRoute["api/v1".Length..], "{$1}");
 
-    [GeneratedRegex(@"\{(\w+)(?::[^}]+)?\}")]
+    // "{id:long}" and the catch-all "{**key}" both come out as "{id}" and "{key}".
+    [GeneratedRegex(@"\{\*{0,2}(\w+)(?::[^}]+)?\}")]
     private static partial Regex RouteConstraint();
 }
