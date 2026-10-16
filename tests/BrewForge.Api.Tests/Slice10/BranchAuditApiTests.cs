@@ -204,4 +204,30 @@ public sealed class BranchAuditApiTests(BrewForgeApiFactory factory)
         using var b01Manager = await factory.ClientForAsync(TestUsers.BranchManager);
         Assert.Equal(HttpStatusCode.NotFound, (await b01Manager.GetAsync(url)).StatusCode);
     }
+
+    [Fact]
+    public async Task Retraining_options_list_the_courses_of_the_audited_sop_and_the_named_staff()
+    {
+        var (branch, version) = await ArrangeAsync();
+        var trainee = await factory.UserIdAsync(TestUsers.Trainee);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+
+        // A failed audit raises a corrective action that requires retraining a named trainee.
+        var audit = await (await auditor.PostAsJsonAsync(Audits, new
+        {
+            branchId = branch, recipeVersionId = version, retrainingRequired = true, employeeIds = new[] { trainee },
+            items = new[] { Item("Sugar quantity", false) },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        var actionId = audit.GetProperty("correctiveActionId").GetInt64();
+
+        // A published course bound to the audited SOP version is an option; the trainee is named.
+        var course = await factory.NewPublishedCourseAsync(version);
+        var options = await (await auditor.GetAsync($"{Actions}/{actionId}/retraining-options"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.Equal(version, options.GetProperty("auditedRecipeVersionId").GetInt64());
+        Assert.Contains(trainee, options.GetProperty("employeeIds").EnumerateArray().Select(e => e.GetInt64()));
+        Assert.Contains(options.GetProperty("courses").EnumerateArray(),
+            c => c.GetProperty("courseId").GetInt64() == course.Id());
+    }
 }

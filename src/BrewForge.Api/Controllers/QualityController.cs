@@ -95,6 +95,11 @@ public sealed class CorrectiveActionsController(CorrectiveActionService actions)
     public Task<CorrectiveActionDto> Start(long id, CancellationToken cancellationToken) =>
         actions.StartAsync(id, cancellationToken);
 
+    /// <summary>The staff the action names and the published courses tied to the audited SOP, for the auditor to pick from.</summary>
+    [HttpGet("{id:long}/retraining-options"), Authorize(Policy = Policies.QualityAuditor)]
+    public Task<RetrainingOptionsDto> RetrainingOptions(long id, CancellationToken cancellationToken) =>
+        actions.RetrainingOptionsAsync(id, cancellationToken);
+
     /// <summary>Enrols the staff named on the action on a course (<c>{ courseId, deadline }</c>) - the retraining assignment.</summary>
     [HttpPost("{id:long}/assign-retraining"), Authorize(Policy = Policies.QualityAuditor)]
     public Task<AssignmentResultDto> AssignRetraining(long id, RetrainingRequest request,

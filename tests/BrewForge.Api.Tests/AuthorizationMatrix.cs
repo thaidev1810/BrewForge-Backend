@@ -96,6 +96,7 @@ public static class AuthorizationMatrix
         new("PUT", "/settings/{key}", AdminOnly),
         new("POST", "/branch-audits/evidence", [RoleName.QualityAuditor]),
         new("GET", "/branch-audits/evidence/{key}", AuditReaders),
+        new("GET", "/corrective-actions/{id}/retraining-options", [RoleName.QualityAuditor]),
         new("POST", "/corrective-actions/{id}/assign-retraining", [RoleName.QualityAuditor]),
 
         // Branch audits and corrective actions: see QualityController.

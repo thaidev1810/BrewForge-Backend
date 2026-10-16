@@ -3,8 +3,10 @@ using BrewForge.Application.Common;
 using BrewForge.Application.Courses;
 using BrewForge.Application.Training;
 using BrewForge.Domain.Common;
+using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.Quality;
+using BrewForge.Domain.Recipes;
 using Microsoft.EntityFrameworkCore;
 
 namespace BrewForge.Application.Quality;
@@ -17,6 +19,18 @@ public sealed record CloseCorrectiveActionRequest(string? Note);
 
 /// <summary>The course to retrain on (a re-certification course, or one the staff do not yet hold) and an optional deadline.</summary>
 public sealed record RetrainingRequest(long? CourseId, DateOnly? Deadline);
+
+/// <summary>A published course tied to the audited SOP, offered as a retraining option.</summary>
+public sealed record RetrainingCourseOption(long CourseId, string Title, CourseType CourseType, long RecipeVersionId,
+    bool CurrentVersion);
+
+/// <summary>
+/// What an auditor needs to assign retraining after a failed audit: the staff the action already names,
+/// and the published courses tied to the SOP of that audit (its recipe version, or the recipe's current
+/// released version if the audited one was superseded). Unrelated courses are not offered.
+/// </summary>
+public sealed record RetrainingOptionsDto(long CorrectiveActionId, long BranchAuditId, long AuditedRecipeVersionId,
+    IReadOnlyList<long> EmployeeIds, IReadOnlyList<RetrainingCourseOption> Courses);
 
 /// <summary>
 /// Follows a failed audit through to its close. A store-level caller sees only
@@ -94,6 +108,38 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
             new { course.Id, enrolled = result.EnrollmentIds, skipped = result.AlreadyEnrolled });
         await db.SaveChangesAsync(cancellationToken);
         return result;
+    }
+
+    /// <summary>
+    /// The courses an auditor may assign for retraining on this action: those published and bound to the
+    /// SOP of the audit (its recipe version, or the recipe's current released version if that one was
+    /// superseded, per G-19), plus the staff the action already names. Nothing unrelated is offered, and
+    /// the staff come from the action, not from a certified-staff history.
+    /// </summary>
+    public async Task<RetrainingOptionsDto> RetrainingOptionsAsync(long id, CancellationToken cancellationToken)
+    {
+        var action = await FindAsync(id, cancellationToken);
+
+        var auditedVersionId = await db.BranchAudits.AsNoTracking().Where(a => a.Id == action.BranchAuditId)
+            .Select(a => a.RecipeVersionId).SingleAsync(cancellationToken);
+        var recipeId = await db.RecipeVersions.AsNoTracking().Where(v => v.Id == auditedVersionId)
+            .Select(v => v.RecipeId).SingleAsync(cancellationToken);
+        var currentVersionId = await db.RecipeVersions.AsNoTracking()
+            .Where(v => v.RecipeId == recipeId && v.State == VersionState.Released)
+            .Select(v => (long?)v.Id).SingleOrDefaultAsync(cancellationToken);
+
+        var versionIds = new List<long> { auditedVersionId };
+        if (currentVersionId is { } current && current != auditedVersionId) versionIds.Add(current);
+
+        var courses = await db.Courses.AsNoTracking()
+            .Where(c => c.State == CourseState.Published && c.RecipeVersionId != null
+                        && versionIds.Contains(c.RecipeVersionId.Value))
+            .OrderBy(c => c.Id)
+            .Select(c => new RetrainingCourseOption(c.Id, c.Title, c.CourseType, c.RecipeVersionId!.Value,
+                c.RecipeVersionId == currentVersionId))
+            .ToListAsync(cancellationToken);
+
+        return new RetrainingOptionsDto(action.Id, action.BranchAuditId, auditedVersionId, action.EmployeeIds, courses);
     }
 
     private async Task<CorrectiveAction> FindAsync(long id, CancellationToken cancellationToken) =>
