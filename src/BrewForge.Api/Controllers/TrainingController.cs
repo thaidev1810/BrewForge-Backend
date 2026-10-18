@@ -149,6 +149,15 @@ public sealed class EnrollmentsController(LearningService learning) : Controller
     public Task<EnrollmentDto> CompleteModule(long id, long moduleId, CancellationToken cancellationToken) =>
         learning.CompleteModuleAsync(id, moduleId, cancellationToken);
 
+    /// <summary>
+    /// UC-14, lesson by lesson. The learner's own action only. The last
+    /// unread lesson of a module completes the module. Not in the contract
+    /// table; the SRS records progress per lesson.
+    /// </summary>
+    [HttpPost("enrollments/{id:long}/lessons/{lessonId:long}/complete"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
+    public Task<LessonCompletionDto> CompleteLesson(long id, long lessonId, CancellationToken cancellationToken) =>
+        learning.CompleteLessonAsync(id, lessonId, cancellationToken);
+
     /// <summary><c>{ eligible, missingModules[], attendancePct, retakesLeft }</c> (BR-32).</summary>
     [HttpGet("enrollments/{id:long}/eligibility"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
     public Task<EligibilityDto> Eligibility(long id, CancellationToken cancellationToken) =>

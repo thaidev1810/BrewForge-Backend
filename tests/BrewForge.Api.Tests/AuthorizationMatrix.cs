@@ -205,6 +205,7 @@ public static class AuthorizationMatrix
         new("GET", "/enrollments/{id}", Learners),
         new("GET", "/enrollments/{id}/modules", Learners),
         new("POST", "/enrollments/{id}/modules/{moduleId}/complete", Learners),
+        new("POST", "/enrollments/{id}/lessons/{lessonId}/complete", Learners),
         new("GET", "/enrollments/{id}/eligibility", Learners),
         new("POST", "/enrollments/{id}/close", [RoleName.TrainingManager]),
         new("POST", "/enrollments/{id}/reset", [RoleName.TrainingManager]),

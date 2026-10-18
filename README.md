@@ -849,6 +849,18 @@ it is also what happens to a new member of staff, without a schema change.
   system existed. Without it nobody seeded could be enrolled on a PRODUCT
   course.
 
+**Progress lesson by lesson** (`012_lesson_progress.sql`: table
+`lesson_progress`). The SRS records progress per lesson (SCR-18).
+- `POST /enrollments/{id}/lessons/{lessonId}/complete`, the learner's own
+  action, marks a lesson read; the last unread lesson of a module completes
+  the module, and the eligibility checker runs as for a module (BR-32).
+- `GET /enrollments/{id}/modules` says per module `lessonsRead`,
+  `lessonsTotal` and `readLessonIds`. Completing a whole module counts its
+  lessons as read.
+- `progressPercent` stays the share of modules complete, as BR-32 counts it.
+- A module failed in the quiz, and a reset enrolment, start their lessons
+  over: studied again means read again.
+
 ## Known gaps
 
 - The React frontend described by the developer pack is not part of this

@@ -39,9 +39,31 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
             .. CourseRenderer.RenderModules(course, source).Select(module =>
             {
                 var done = progress.GetValueOrDefault(module.Id);
-                return new EnrollmentModuleDto(module, done?.IsComplete ?? false, done?.CompletedAt);
+                var read = module.Lessons.Where(l => enrollment.HasRead(module.Id, l.Id)).Select(l => l.Id).ToList();
+                return new EnrollmentModuleDto(module, done?.IsComplete ?? false, done?.CompletedAt,
+                    read.Count, module.Lessons.Count, read);
             }),
         ];
+    }
+
+    /// <summary>
+    /// UC-14, lesson by lesson: the learner marks a lesson read. The last
+    /// unread lesson of a module completes the module, and the eligibility
+    /// checker runs as it does when a module is completed (BR-32).
+    /// </summary>
+    public async Task<LessonCompletionDto> CompleteLessonAsync(long id, long lessonId, CancellationToken cancellationToken)
+    {
+        var enrollment = await FindAsync(id, ownerOnly: true, cancellationToken);
+        var course = await courses.FindAsync(enrollment.CourseId, cancellationToken);
+
+        var moduleCompleted = enrollment.CompleteLesson(course, lessonId, clock.GetUtcNow());
+        var result = await evaluator.EvaluateAsync(enrollment, course.CourseType, cancellationToken);
+        var moduleId = course.Modules.Single(m => m.Lessons.Any(l => l.Id == lessonId)).Id;
+
+        db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.CompleteLesson,
+            new { lessonId, moduleId, moduleCompleted, enrollment.ProgressPercent, state = enrollment.State.Code(), result.Eligible });
+        await db.SaveChangesAsync(cancellationToken);
+        return new LessonCompletionDto((await ToDtosAsync([enrollment], cancellationToken))[0], moduleId, moduleCompleted);
     }
 
     /// <summary>
@@ -115,7 +137,7 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
     internal async Task<Enrollment> FindAsync(long id, bool ownerOnly, CancellationToken cancellationToken)
     {
         var enrollment = await db.Enrollments
-                             .Include(e => e.Modules).Include(e => e.QuizAttempts)
+                             .Include(e => e.Modules).Include(e => e.Lessons).Include(e => e.QuizAttempts)
                              .Include(e => e.PracticalEvaluations).Include(e => e.PracticalVideos)
                              .SingleOrDefaultAsync(e => e.Id == id, cancellationToken)
                          ?? throw DomainException.NotFound("Enrolment", id);
