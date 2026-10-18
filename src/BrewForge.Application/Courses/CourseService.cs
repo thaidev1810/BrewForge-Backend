@@ -1,6 +1,7 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Application.Recipes;
+using BrewForge.Application.Training;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Recipes;
@@ -10,7 +11,7 @@ namespace BrewForge.Application.Courses;
 
 /// <summary>UC-11 to UC-13 and UC-28: course authoring and approval (SCR-13 to SCR-16, SCR-30).</summary>
 public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer renderer, ILessonMediaStorage media,
-    ICurrentUser currentUser, TimeProvider clock)
+    ICurrentUser currentUser, LearningPathService learningPath, TimeProvider clock)
 {
     private static readonly SortMap<Course> Sorting = new SortMap<Course>("title", c => c.Id)
         .Add("id", c => c.Id)
@@ -331,13 +332,22 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
         return await renderer.RenderAsync(course, cancellationToken);
     }
 
-    /// <summary>UC-28. PENDING_APPROVAL to PUBLISHED.</summary>
+    /// <summary>
+    /// UC-28. PENDING_APPROVAL to PUBLISHED. The course is then assigned, in
+    /// the same transaction, to the staff whose learning path it is now on.
+    /// </summary>
     public async Task<CourseDetailDto> ApproveAsync(long courseId, CancellationToken cancellationToken)
     {
         var course = await FindAsync(courseId, cancellationToken);
-        course.Approve(currentUser.RequireUserId(), clock.GetUtcNow());
-        db.Audit(AuditEntities.Course, () => course.Id, AuditActions.Approve, new { course.Title, course.RecipeVersionId });
-        await db.SaveChangesAsync(cancellationToken);
+        await db.InTransactionAsync(async () =>
+        {
+            course.Approve(currentUser.RequireUserId(), clock.GetUtcNow());
+            db.Audit(AuditEntities.Course, () => course.Id, AuditActions.Approve, new { course.Title, course.RecipeVersionId });
+            await db.SaveChangesAsync(cancellationToken);
+
+            await learningPath.AssignPublishedCourseAsync(course, cancellationToken);
+            return await db.SaveChangesAsync(cancellationToken);
+        }, cancellationToken);
         return await renderer.RenderAsync(course, cancellationToken);
     }
 
