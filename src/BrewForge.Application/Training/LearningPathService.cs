@@ -108,8 +108,18 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
     public Task<LearningPathDto> MyPathAsync(CancellationToken cancellationToken) =>
         GetPathAsync(currentUser.RequireUserId(), cancellationToken);
 
-    public async Task<LearningPathDto> GetPathAsync(long userId, CancellationToken cancellationToken) =>
-        ToDto(await LoadAsync(userId, tracking: false, cancellationToken));
+    public async Task<LearningPathDto> GetPathAsync(long userId, CancellationToken cancellationToken)
+    {
+        var path = await LoadAsync(userId, tracking: false, cancellationToken);
+        EnsureVisible(path.User);
+        return ToDto(path);
+    }
+
+    /// <summary>A caller confined to a branch sees the staff of that branch; anybody else does not exist for them.</summary>
+    private void EnsureVisible(AppUser user)
+    {
+        if (currentUser.RestrictedToBranchId is { } own && user.BranchId != own) throw DomainException.NotFound("User", user.Id);
+    }
 
     /// <summary>
     /// Assigns, self-paced, every course of the user's path that is open to
@@ -146,6 +156,8 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
     /// <summary>Runs the assignment for a user on request, for staff who were there before a course was published.</summary>
     public async Task<PathAssignmentDto> AssignAsync(long userId, CancellationToken cancellationToken)
     {
+        EnsureVisible(await db.Users.IgnoreQueryFilters().AsNoTracking().SingleOrDefaultAsync(u => u.Id == userId, cancellationToken)
+                      ?? throw DomainException.NotFound("User", userId));
         var created = await AssignOpenStagesAsync(userId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return new PathAssignmentDto(await GetPathAsync(userId, cancellationToken), [.. created.Select(e => e.Id)]);
