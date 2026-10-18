@@ -62,7 +62,8 @@ duty can be demonstrated. They all share the password in
 | `admin` | ADMIN | — |
 | `rdspec` | RD_SPECIALIST | — |
 | `rdmanager`, `rdmanager2` | RD_MANAGER | — |
-| `trainer` | TRAINER | — |
+| `trainer` | TRAINER | — (the whole chain) |
+| `trainer1` / `trainer2` | TRAINER | B01 / B02 (confined to it) |
 | `auditor` | QUALITY_AUDITOR | — |
 | `trainingmgr` | TRAINING_MANAGER | — |
 | `branchmgr` / `branchmgr2` | BRANCH_MANAGER | B01 / B02 |
@@ -877,6 +878,14 @@ state model gives the Trainer. The enrolments of the class still being
 studied are closed and their learners notified with the reason; a passed or
 locked enrolment stays as it is, and recorded attendance is kept. Not in the
 contract table.
+
+**A trainer who belongs to a branch** (SRS 3.10.2: a trainer sees only staff
+assigned to their own branch). A trainer may be given a branch. Without one
+(`trainer`) they train the whole chain, as before; with one (`trainer1` at
+B01, `trainer2` at B02) they are scoped like the store-level roles: classes,
+enrolments, learners, learning paths and the training-progress dashboard of
+other branches do not exist for them, and a class can be opened at their own
+branch alone. Courses stay chain-wide, since a course follows a recipe.
 
 ## Known gaps
 
