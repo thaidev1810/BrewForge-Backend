@@ -49,6 +49,9 @@ public sealed record SessionRequest(int? SessionNo, DateOnly? ScheduledDate, Tim
 /// </summary>
 public sealed record OpenClassRequest(IReadOnlyList<long>? TraineeIds);
 
+/// <summary>Why a class is cancelled, told to its learners. Optional.</summary>
+public sealed record CancelClassRequest(string? Reason);
+
 public sealed record OpenClassResultDto(TrainingClassDto Class, IReadOnlyList<long> EnrollmentIds,
     IReadOnlyList<long> SkippedUserIds);
 

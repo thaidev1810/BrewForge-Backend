@@ -626,4 +626,56 @@ public sealed class TrainingApiTests(BrewForgeApiFactory factory)
         Assert.Equal(0, await factory.WithDbAsync(db => db.Enrollments.Where(e => e.Id == own || e.Id == someoneElses)
             .SelectMany(e => e.Lessons).CountAsync()));
     }
+
+    // ---------------------------------------------------------------- cancelling a class
+
+    [Fact]
+    public async Task Cancelled_class_closes_the_enrolments_still_being_studied_and_tells_their_learners()
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        using var trainee = await factory.ClientForAsync(TestUsers.Trainee);
+        var setup = await factory.NewClassAsync();
+        await factory.OpenClassAsync(setup.ClassId); // trainee and trainee2
+        var studying = await factory.EnrollmentIdAsync(setup.ClassId, TestUsers.Trainee);
+        var notStarted = await factory.EnrollmentIdAsync(setup.ClassId, "trainee2");
+        await factory.CompleteModulesAsync(TestUsers.Trainee, studying, [setup.ModuleIds[0]]);
+
+        var cancelled = await (await trainer.PostAsJsonAsync($"{Classes}/{setup.ClassId}/cancel", new { reason = "The trainer is ill." }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.Equal("CANCELLED", cancelled.GetProperty("state").GetString());
+        Assert.Equal("CLOSED", (await factory.GetEnrollmentAsync(studying)).GetProperty("state").GetString());
+        Assert.Equal("CLOSED", (await factory.GetEnrollmentAsync(notStarted)).GetProperty("state").GetString());
+        // Nothing more is studied on it.
+        await (await trainee.PostAsync($"{Enrollments}/{studying}/modules/{setup.ModuleIds[1]}/complete", null))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "STATE_TRANSITION");
+
+        var inbox = await (await trainee.GetAsync("/api/v1/me/notifications?size=20")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Contains(inbox.GetProperty("items").EnumerateArray(), n =>
+            n.GetProperty("subject").GetString() == "Class cancelled"
+            && n.GetProperty("message").GetString()!.Contains("The trainer is ill."));
+        Assert.True(await factory.WithDbAsync(db => db.AuditLogs.AnyAsync(a =>
+            a.EntityType == "TrainingClass" && a.EntityId == setup.ClassId && a.Action == "CANCEL")));
+
+        // A class is cancelled once, and a closed class is not cancelled.
+        await (await trainer.PostAsync($"{Classes}/{setup.ClassId}/cancel", null)).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "STATE_TRANSITION");
+        var finished = await factory.NewClassAsync();
+        await factory.OpenClassAsync(finished.ClassId, [await factory.UserIdAsync("trainee2")]);
+        await (await trainer.PostAsync($"{Classes}/{finished.ClassId}/close", null)).ShouldBeAsync(HttpStatusCode.OK);
+        await (await trainer.PostAsync($"{Classes}/{finished.ClassId}/cancel", null)).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "STATE_TRANSITION");
+    }
+
+    [Fact]
+    public async Task Planned_class_is_cancelled_before_anybody_is_enrolled()
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var setup = await factory.NewClassAsync();
+
+        var cancelled = await (await trainer.PostAsync($"{Classes}/{setup.ClassId}/cancel", null)).ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.Equal(("CANCELLED", 0), (cancelled.GetProperty("state").GetString(), cancelled.GetProperty("enrolledCount").GetInt32()));
+        await (await trainer.PostAsJsonAsync($"{Classes}/{setup.ClassId}/open", new { })).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "STATE_TRANSITION");
+        Assert.Contains("reason", (await (await trainer.PostAsJsonAsync($"{Classes}/{(await factory.NewClassAsync()).ClassId}/cancel",
+            new { reason = new string('x', 501) })).ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
+    }
 }

@@ -195,6 +195,7 @@ public static class AuthorizationMatrix
         new("POST", "/training-classes/{id}/sessions", TrainerOnly),
         new("POST", "/training-classes/{id}/open", TrainerOnly),
         new("POST", "/training-classes/{id}/close", TrainerOnly),
+        new("POST", "/training-classes/{id}/cancel", TrainerOnly),
         new("PUT", "/training-sessions/{id}", TrainerOnly),
         new("DELETE", "/training-sessions/{id}", TrainerOnly),
         new("GET", "/training-sessions/{id}/attendance", TrainerOnly),

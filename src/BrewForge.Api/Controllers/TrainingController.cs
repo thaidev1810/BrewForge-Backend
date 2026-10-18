@@ -91,6 +91,16 @@ public sealed class TrainingClassesController(TrainingClassService classes) : Co
     [HttpPost("{id:long}/close")]
     public Task<TrainingClassDto> Close(long id, CancellationToken cancellationToken) =>
         classes.CloseAsync(id, cancellationToken);
+
+    /// <summary>
+    /// PLANNED or RUNNING to CANCELLED, with an optional <c>{ reason }</c>.
+    /// The enrolments still being studied are closed and their learners told.
+    /// Not in the contract table; the state model gives it to the Trainer.
+    /// </summary>
+    [HttpPost("{id:long}/cancel")]
+    public Task<TrainingClassDto> Cancel(long id, [FromBody] CancelClassRequest? request,
+        CancellationToken cancellationToken) =>
+        classes.CancelAsync(id, request, cancellationToken);
 }
 
 /// <summary>UC-29 and UC-30 - API contract section 7.</summary>
