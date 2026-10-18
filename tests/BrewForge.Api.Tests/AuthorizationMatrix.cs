@@ -195,6 +195,7 @@ public static class AuthorizationMatrix
         new("POST", "/training-classes/{id}/sessions", TrainerOnly),
         new("POST", "/training-classes/{id}/open", TrainerOnly),
         new("POST", "/training-classes/{id}/close", TrainerOnly),
+        new("POST", "/training-classes/{id}/cancel", TrainerOnly),
         new("PUT", "/training-sessions/{id}", TrainerOnly),
         new("DELETE", "/training-sessions/{id}", TrainerOnly),
         new("GET", "/training-sessions/{id}/attendance", TrainerOnly),
@@ -205,6 +206,7 @@ public static class AuthorizationMatrix
         new("GET", "/enrollments/{id}", Learners),
         new("GET", "/enrollments/{id}/modules", Learners),
         new("POST", "/enrollments/{id}/modules/{moduleId}/complete", Learners),
+        new("POST", "/enrollments/{id}/lessons/{lessonId}/complete", Learners),
         new("GET", "/enrollments/{id}/eligibility", Learners),
         new("POST", "/enrollments/{id}/close", [RoleName.TrainingManager]),
         new("POST", "/enrollments/{id}/reset", [RoleName.TrainingManager]),
@@ -225,6 +227,10 @@ public static class AuthorizationMatrix
         new("POST", "/learning-paths/{userId}/assign", [RoleName.Trainer, RoleName.TrainingManager]),
 
         // Web Push for the caller. Not in the contract.
+        new("GET", "/me/notifications", Everyone),
+        new("GET", "/me/notifications/unread-count", Everyone),
+        new("POST", "/me/notifications/{id}/read", Everyone),
+        new("POST", "/me/notifications/read-all", Everyone),
         new("GET", "/push/config", Everyone),
         new("GET", "/me/push-subscriptions", Everyone),
         new("POST", "/me/push-subscriptions", Everyone),

@@ -62,7 +62,8 @@ duty can be demonstrated. They all share the password in
 | `admin` | ADMIN | — |
 | `rdspec` | RD_SPECIALIST | — |
 | `rdmanager`, `rdmanager2` | RD_MANAGER | — |
-| `trainer` | TRAINER | — |
+| `trainer` | TRAINER | — (the whole chain) |
+| `trainer1` / `trainer2` | TRAINER | B01 / B02 (confined to it) |
 | `auditor` | QUALITY_AUDITOR | — |
 | `trainingmgr` | TRAINING_MANAGER | — |
 | `branchmgr` / `branchmgr2` | BRANCH_MANAGER | B01 / B02 |
@@ -848,6 +849,43 @@ it is also what happens to a new member of staff, without a schema change.
   and certifies the seeded trainees and trainer on it: they joined before the
   system existed. Without it nobody seeded could be enrolled on a PRODUCT
   course.
+
+**Progress lesson by lesson** (`012_lesson_progress.sql`: table
+`lesson_progress`). The SRS records progress per lesson (SCR-18).
+- `POST /enrollments/{id}/lessons/{lessonId}/complete`, the learner's own
+  action, marks a lesson read; the last unread lesson of a module completes
+  the module, and the eligibility checker runs as for a module (BR-32).
+- `GET /enrollments/{id}/modules` says per module `lessonsRead`,
+  `lessonsTotal` and `readLessonIds`. Completing a whole module counts its
+  lessons as read.
+- `progressPercent` stays the share of modules complete, as BR-32 counts it.
+- A module failed in the quiz, and a reset enrolment, start their lessons
+  over: studied again means read again.
+
+**Notifications in the application** (`013_notification_read.sql`: column
+`notification.read_at`). Every notification is also kept for its user to read
+in the application, whatever became of its e-mail and push.
+- `GET /me/notifications` lists the caller's own, newest first and paged;
+  `?unread=true` keeps those not read. `GET /me/notifications/unread-count`
+  gives `{ count }` for a badge.
+- `POST /me/notifications/{id}/read` marks one read (reading it again keeps
+  the first time); `POST /me/notifications/read-all` marks them all and says
+  how many. Somebody else's notification does not exist for the caller.
+
+**Cancelling a class.** `POST /training-classes/{id}/cancel`, with an
+optional `{ reason }`, takes a PLANNED or RUNNING class to CANCELLED, as the
+state model gives the Trainer. The enrolments of the class still being
+studied are closed and their learners notified with the reason; a passed or
+locked enrolment stays as it is, and recorded attendance is kept. Not in the
+contract table.
+
+**A trainer who belongs to a branch** (SRS 3.10.2: a trainer sees only staff
+assigned to their own branch). A trainer may be given a branch. Without one
+(`trainer`) they train the whole chain, as before; with one (`trainer1` at
+B01, `trainer2` at B02) they are scoped like the store-level roles: classes,
+enrolments, learners, learning paths and the training-progress dashboard of
+other branches do not exist for them, and a class can be opened at their own
+branch alone. Courses stay chain-wide, since a course follows a recipe.
 
 ## Known gaps
 

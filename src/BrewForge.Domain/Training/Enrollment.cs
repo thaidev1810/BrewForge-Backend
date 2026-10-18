@@ -86,6 +86,25 @@ public sealed class ModuleProgress
     internal void Reset() => CompletedAt = null;
 }
 
+/// <summary>A lesson the learner has finished. A module is complete when the last of its lessons is.</summary>
+public sealed class LessonProgress
+{
+    private LessonProgress() { }
+
+    internal LessonProgress(long courseModuleId, long lessonId, DateTimeOffset completedAt)
+    {
+        CourseModuleId = courseModuleId;
+        LessonId = lessonId;
+        CompletedAt = completedAt;
+    }
+
+    public long Id { get; private set; }
+    public long EnrollmentId { get; private set; }
+    public long CourseModuleId { get; private set; }
+    public long LessonId { get; private set; }
+    public DateTimeOffset CompletedAt { get; private set; }
+}
+
 /// <summary>Whether one enrolled trainee attended one session (UC-30).</summary>
 public sealed class Attendance
 {
@@ -154,6 +173,7 @@ public sealed class Enrollment
     ];
 
     private readonly List<ModuleProgress> _modules = [];
+    private readonly List<LessonProgress> _lessons = [];
     private readonly List<QuizAttempt> _quizAttempts = [];
     private readonly List<PracticalEvaluation> _practicalEvaluations = [];
     private readonly List<PracticalVideo> _practicalVideos = [];
@@ -172,6 +192,9 @@ public sealed class Enrollment
     public DateTimeOffset? CompletedAt { get; private set; }
 
     public IReadOnlyList<ModuleProgress> Modules => _modules;
+
+    /// <summary>The lessons finished in the current pass through each module.</summary>
+    public IReadOnlyList<LessonProgress> Lessons => _lessons;
 
     /// <summary>Every quiz attempt ever made on this enrolment, including those before a reset.</summary>
     public IReadOnlyList<QuizAttempt> QuizAttempts => _quizAttempts;
@@ -212,14 +235,37 @@ public sealed class Enrollment
         return enrollment;
     }
 
+    /// <summary>
+    /// UC-14, lesson by lesson. The learner marks a lesson of the course
+    /// read; when it is the last unread lesson of its module, the module is
+    /// complete as well. Safe to repeat. Returns whether the module is now
+    /// complete.
+    /// </summary>
+    public bool CompleteLesson(Course course, long lessonId, DateTimeOffset now)
+    {
+        EnsureStudying("Lessons");
+        if (course.Id != CourseId) throw new ArgumentException("Not the course of this enrolment.", nameof(course));
+        var module = course.Modules.SingleOrDefault(m => m.Lessons.Any(l => l.Id == lessonId))
+                     ?? throw DomainException.NotFound("Lesson", lessonId);
+        if (_modules.All(m => m.CourseModuleId != module.Id)) throw DomainException.NotFound("Lesson", lessonId);
+
+        if (_lessons.All(l => l.LessonId != lessonId)) _lessons.Add(new LessonProgress(module.Id, lessonId, now));
+        if (State == EnrollmentState.Assigned) TransitionTo(EnrollmentState.InProgress);
+
+        var read = _lessons.Where(l => l.CourseModuleId == module.Id).Select(l => l.LessonId).ToHashSet();
+        if (module.Lessons.All(l => read.Contains(l.Id))) CompleteModule(module.Id, now);
+        return _modules.Single(m => m.CourseModuleId == module.Id).IsComplete;
+    }
+
+    /// <summary>Whether the lesson counts as read: it was marked so, or its whole module was completed.</summary>
+    public bool HasRead(long courseModuleId, long lessonId) =>
+        _lessons.Any(l => l.LessonId == lessonId)
+        || _modules.Any(m => m.CourseModuleId == courseModuleId && m.IsComplete);
+
     /// <summary>UC-14. The first completed module moves ASSIGNED to IN_PROGRESS. Safe to repeat.</summary>
     public void CompleteModule(long courseModuleId, DateTimeOffset now)
     {
-        if (State is not (EnrollmentState.Assigned or EnrollmentState.InProgress or EnrollmentState.Eligible))
-        {
-            throw DomainException.RuleViolation(StateRule,
-                $"Modules cannot be completed on an enrolment that is {State.Code()}.");
-        }
+        EnsureStudying("Modules");
         var module = _modules.SingleOrDefault(m => m.CourseModuleId == courseModuleId)
                      ?? throw DomainException.NotFound("Course module", courseModuleId);
 
@@ -290,6 +336,7 @@ public sealed class Enrollment
     {
         TransitionTo(EnrollmentState.Assigned);
         foreach (var module in _modules) module.Reset();
+        _lessons.Clear();
         EnrolledAt = now;
         DueDate = DateOnly.FromDateTime(now.UtcDateTime).AddDays(rules.DueDays);
         CompletedAt = null;
@@ -550,7 +597,18 @@ public sealed class Enrollment
     {
         var ids = courseModuleIds.ToHashSet();
         foreach (var module in _modules.Where(module => ids.Contains(module.CourseModuleId))) module.Reset();
+        // Studied again means read again, lesson by lesson.
+        _lessons.RemoveAll(lesson => ids.Contains(lesson.CourseModuleId));
         RefreshProgress();
+    }
+
+    private void EnsureStudying(string what)
+    {
+        if (State is not (EnrollmentState.Assigned or EnrollmentState.InProgress or EnrollmentState.Eligible))
+        {
+            throw DomainException.RuleViolation(StateRule,
+                $"{what} cannot be completed on an enrolment that is {State.Code()}.");
+        }
     }
 
     private void RefreshProgress() =>

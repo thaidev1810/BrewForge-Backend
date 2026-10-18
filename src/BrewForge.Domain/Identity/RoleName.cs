@@ -24,9 +24,19 @@ public static class RoleNameExtensions
 
     /// <summary>
     /// Whether a user holding the role may be assigned to a branch at all. A
-    /// trainer may be attached to a branch without being restricted to it; the
-    /// remaining roles are head-office roles and carry no branch.
+    /// trainer may: one without a branch trains the whole chain, one with a
+    /// branch trains the staff of that branch (see <see cref="IsConfinedTo"/>).
+    /// The remaining roles are head-office roles and carry no branch.
     /// </summary>
     public static bool MayHaveBranch(this RoleName role) =>
         role.IsBranchScoped() || role is RoleName.Trainer;
+
+    /// <summary>
+    /// Whether a user holding the role, assigned to the given branch, sees and
+    /// acts on that branch alone. Always for the store-level roles; for a
+    /// trainer exactly when the trainer belongs to a branch (SRS 3.10.2: "a
+    /// trainer sees only staff assigned to their own branch").
+    /// </summary>
+    public static bool IsConfinedTo(this RoleName role, long? branchId) =>
+        role.IsBranchScoped() || (role is RoleName.Trainer && branchId is not null);
 }

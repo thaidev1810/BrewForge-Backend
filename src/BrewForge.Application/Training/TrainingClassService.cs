@@ -215,6 +215,44 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
         return await ToDtoAsync(trainingClass, cancellationToken);
     }
 
+    /// <summary>
+    /// PLANNED or RUNNING to CANCELLED: the class is abandoned. Its
+    /// enrolments that are still being studied are closed and their learners
+    /// told; what was passed, or locked, stays as it is. Attendance already
+    /// recorded is kept.
+    /// </summary>
+    public async Task<TrainingClassDto> CancelAsync(long classId, CancelClassRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var reason = string.IsNullOrWhiteSpace(request?.Reason) ? null : request.Reason.Trim();
+        new FieldErrors().MaxLength("reason", reason, 500).ThrowIfAny();
+        var trainingClass = await FindAsync(classId, cancellationToken);
+        trainingClass.Cancel();
+
+        var open = await db.Enrollments
+            .Where(e => e.TrainingClassId == classId && (e.State == EnrollmentState.Assigned
+                                                         || e.State == EnrollmentState.InProgress
+                                                         || e.State == EnrollmentState.Eligible))
+            .ToListAsync(cancellationToken);
+        var title = await db.Courses.Where(c => c.Id == trainingClass.CourseId).Select(c => c.Title)
+            .SingleAsync(cancellationToken);
+        var now = clock.GetUtcNow();
+        foreach (var enrollment in open)
+        {
+            enrollment.Close();
+            db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Close,
+                new { reason = "CLASS_CANCELLED", trainingClassId = classId });
+            db.Notify(enrollment.UserId, "Class cancelled",
+                $"The class '{trainingClass.Name}' of '{title}' was cancelled." + (reason is null ? "" : $" {reason}"), now,
+                new { trainingClassId = classId, enrollmentId = enrollment.Id });
+        }
+
+        db.Audit(AuditEntities.TrainingClass, () => trainingClass.Id, AuditActions.Cancel,
+            new { reason, closedEnrollments = open.Select(e => e.Id) });
+        await db.SaveChangesAsync(cancellationToken);
+        return await ToDtoAsync(trainingClass, cancellationToken);
+    }
+
     // ---------------------------------------------------------------- attendance
 
     public async Task<AttendanceSheetDto> GetAttendanceAsync(long sessionId, CancellationToken cancellationToken)

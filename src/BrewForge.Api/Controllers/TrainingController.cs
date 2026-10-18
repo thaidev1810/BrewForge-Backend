@@ -91,6 +91,16 @@ public sealed class TrainingClassesController(TrainingClassService classes) : Co
     [HttpPost("{id:long}/close")]
     public Task<TrainingClassDto> Close(long id, CancellationToken cancellationToken) =>
         classes.CloseAsync(id, cancellationToken);
+
+    /// <summary>
+    /// PLANNED or RUNNING to CANCELLED, with an optional <c>{ reason }</c>.
+    /// The enrolments still being studied are closed and their learners told.
+    /// Not in the contract table; the state model gives it to the Trainer.
+    /// </summary>
+    [HttpPost("{id:long}/cancel")]
+    public Task<TrainingClassDto> Cancel(long id, [FromBody] CancelClassRequest? request,
+        CancellationToken cancellationToken) =>
+        classes.CancelAsync(id, request, cancellationToken);
 }
 
 /// <summary>UC-29 and UC-30 - API contract section 7.</summary>
@@ -148,6 +158,15 @@ public sealed class EnrollmentsController(LearningService learning) : Controller
     [HttpPost("enrollments/{id:long}/modules/{moduleId:long}/complete"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
     public Task<EnrollmentDto> CompleteModule(long id, long moduleId, CancellationToken cancellationToken) =>
         learning.CompleteModuleAsync(id, moduleId, cancellationToken);
+
+    /// <summary>
+    /// UC-14, lesson by lesson. The learner's own action only. The last
+    /// unread lesson of a module completes the module. Not in the contract
+    /// table; the SRS records progress per lesson.
+    /// </summary>
+    [HttpPost("enrollments/{id:long}/lessons/{lessonId:long}/complete"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
+    public Task<LessonCompletionDto> CompleteLesson(long id, long lessonId, CancellationToken cancellationToken) =>
+        learning.CompleteLessonAsync(id, lessonId, cancellationToken);
 
     /// <summary><c>{ eligible, missingModules[], attendancePct, retakesLeft }</c> (BR-32).</summary>
     [HttpGet("enrollments/{id:long}/eligibility"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]

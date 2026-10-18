@@ -41,7 +41,10 @@ public static class SeedData
         new("rdmanager", "Lê Hoàng Nam", RoleName.RdManager, null),
         // A second manager, because the one who edits a draft may not release it (BR-12).
         new("rdmanager2", "Trịnh Bảo Châu", RoleName.RdManager, null),
+        // The trainer of the whole chain, who builds the courses; and one trainer per branch, confined to it.
         new("trainer", "Phạm Lê Nhật Huy", RoleName.Trainer, null),
+        new("trainer1", "Trương Minh Đức", RoleName.Trainer, "B01"),
+        new("trainer2", "Hồ Thị Ngọc Lan", RoleName.Trainer, "B02"),
         new("auditor", "Đỗ Thị Kim Anh", RoleName.QualityAuditor, null),
         new("trainingmgr", "Võ Thanh Tùng", RoleName.TrainingManager, null),
         new("branchmgr", "Huỳnh Gia Bảo", RoleName.BranchManager, "B01"),

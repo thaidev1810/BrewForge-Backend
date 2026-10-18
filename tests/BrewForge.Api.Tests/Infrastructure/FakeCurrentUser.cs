@@ -10,5 +10,5 @@ public sealed class FakeCurrentUser(long userId, RoleName role, long? branchId) 
     public string? Username => $"user{userId}";
     public RoleName? Role => role;
     public long? BranchId => branchId;
-    public long? RestrictedToBranchId => role.IsBranchScoped() ? branchId ?? CurrentUserExtensions.NoBranch : null;
+    public long? RestrictedToBranchId => role.IsConfinedTo(branchId) ? branchId ?? CurrentUserExtensions.NoBranch : null;
 }
