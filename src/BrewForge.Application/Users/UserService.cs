@@ -1,6 +1,7 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Application.Launch;
+using BrewForge.Application.Training;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -26,8 +27,8 @@ public sealed record UpdateUserRequest(string? Username, string? Email, string? 
     RoleName? Role, long? BranchId, UserStatus? Status);
 
 /// <summary>UC-01: user and role management (SCR-03).</summary>
-public sealed class UserService(IBrewForgeDbContext db, IPasswordHasher hasher, ICurrentUser currentUser,
-    LaunchReadinessService readiness, TimeProvider clock)
+public sealed class UserService(IBrewForgeDbContext db, IPasswordHasher hasher, LearningPathService learningPath,
+    ICurrentUser currentUser, LaunchReadinessService readiness, TimeProvider clock)
 {
     public const int MinPasswordLength = 8;
     public const int MaxPasswordLength = 128;
@@ -79,11 +80,19 @@ public sealed class UserService(IBrewForgeDbContext db, IPasswordHasher hasher, 
         var user = AppUser.Create(request.Username!, request.Email!, hasher.Hash(request.Password!),
             request.FullName!, role, request.BranchId, clock.GetUtcNow());
 
-        db.Users.Add(user);
-        db.Audit(AuditEntities.User, () => user.Id, AuditActions.Create, Snapshot(user));
-        await db.SaveChangesAsync(cancellationToken);
-        return UserDto.From(user);
+        return await db.InTransactionAsync(async () =>
+        {
+            db.Users.Add(user);
+            db.Audit(AuditEntities.User, () => user.Id, AuditActions.Create, Snapshot(user));
+            await db.SaveChangesAsync(cancellationToken);
+
+            // A new member of staff starts on what the regulation makes mandatory for their role.
+            await learningPath.AssignOpenStagesAsync(user.Id, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+            return UserDto.From(user);
+        }, cancellationToken);
     }
+
 
     public async Task<UserDto> UpdateAsync(long id, UpdateUserRequest request, CancellationToken cancellationToken)
     {

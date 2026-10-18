@@ -17,8 +17,9 @@ namespace BrewForge.Application.Training;
 public sealed record LearnerQuestionDto(long Id, long CourseModuleId, ModuleType ModuleType, string QuestionText,
     IReadOnlyList<QuizOption> Options);
 
+/// <summary><c>AttemptNo</c> is the attempt these questions are for: the answers of that attempt are marked against them.</summary>
 public sealed record LearnerQuizDto(long QuizId, string Title, int PassScore, int RetakesLeft,
-    IReadOnlyList<LearnerQuestionDto> Questions);
+    IReadOnlyList<LearnerQuestionDto> Questions, int AttemptNo = 1);
 
 public sealed record QuizAttemptRequest(IReadOnlyList<QuizAnswerRequest>? Answers);
 
@@ -60,8 +61,8 @@ public sealed record CertificateDto(long Id, long UserId, string FullName, long?
 /// the enrolment itself the moment the last of its three conditions is met.
 /// </summary>
 public sealed class AssessmentService(IBrewForgeDbContext db, CourseService courses, LearningService learning,
-    EnrollmentEvaluator evaluator, LaunchReadinessService readiness, IPracticalVideoStorage videos,
-    ICurrentUser currentUser, TimeProvider clock)
+    EnrollmentEvaluator evaluator, LaunchReadinessService readiness, LearningPathService learningPath,
+    IPracticalVideoStorage videos, ICurrentUser currentUser, TimeProvider clock)
 {
     /// <summary>
     /// The quiz as the learner takes it. Behind the same gate as the attempt
@@ -77,9 +78,10 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
         var moduleTypes = course.Modules.ToDictionary(m => m.Id, m => m.ModuleType);
         return new LearnerQuizDto(course.Quiz.Id, course.Quiz.Title, course.Quiz.PassScore, enrollment.RetakesLeft(rules),
         [
-            .. course.Quiz.Questions.OrderBy(q => q.Id).Select(q =>
+            // The questions of the attempt to come, which are the ones its answers will be marked against.
+            .. course.Quiz.DrawFor(enrollment.Id, enrollment.NextAttemptNo).Select(q =>
                 new LearnerQuestionDto(q.Id, q.CourseModuleId, moduleTypes[q.CourseModuleId], q.QuestionText, q.Options())),
-        ]);
+        ], enrollment.NextAttemptNo);
     }
 
     /// <summary>UC-15. 409 BR-32 if not eligible, 409 BR-33 if no retakes are left.</summary>
@@ -283,7 +285,9 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
         var owned = await db.Certificates.Where(c => c.UserId == enrollment.UserId && c.CourseId == course.Id)
             .ToListAsync(cancellationToken);
 
-        var certificate = enrollment.TryCertify(course, owned, clock.GetUtcNow());
+        var onEarlierVersions = await CertificatesOnEarlierVersionsAsync(enrollment.UserId, course, cancellationToken);
+
+        var certificate = enrollment.TryCertify(course, owned, clock.GetUtcNow(), onEarlierVersions);
         if (certificate is null)
         {
             await db.SaveChangesAsync(cancellationToken);
@@ -294,15 +298,43 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
         db.Audit(AuditEntities.Certificate, () => certificate.Id, AuditActions.IssueCertificate, new
         {
             certificate.UserId, certificate.CourseId, certificate.RecipeVersionId, enrollmentId = enrollment.Id,
-            superseded = owned.Where(c => c.Status == CertificateStatus.Superseded && !ReferenceEquals(c, certificate)).Select(c => c.Id),
+            superseded = owned.Concat(onEarlierVersions)
+                .Where(c => c.Status == CertificateStatus.Superseded && !ReferenceEquals(c, certificate)).Select(c => c.Id).Distinct(),
         });
         db.Notify(enrollment.UserId, "Certificate issued", $"You are now certified on '{course.Title}'.",
             clock.GetUtcNow());
         await db.SaveChangesAsync(cancellationToken);
 
         await readiness.RecomputeForCertificateAsync(certificate.UserId, certificate.RecipeVersionId, cancellationToken);
+        // Passing a course that others require opens the next stage of the holder's path.
+        if (await db.TrainingRegulations.AnyAsync(r => r.PrerequisiteType == course.CourseType, cancellationToken))
+        {
+            await learningPath.AssignOpenStagesAsync(certificate.UserId, cancellationToken);
+        }
         await db.SaveChangesAsync(cancellationToken);
         return certificate;
+
+    }
+
+    /// <summary>
+    /// The certificates the user holds, through any other course, on earlier
+    /// versions of the drink this course is bound to. One earned on this
+    /// version replaces them.
+    /// </summary>
+    private async Task<List<Certificate>> CertificatesOnEarlierVersionsAsync(long userId, Course course,
+        CancellationToken cancellationToken)
+    {
+        if (course.RecipeVersionId is not { } versionId) return [];
+        var version = await db.RecipeVersions.AsNoTracking().Where(v => v.Id == versionId)
+            .Select(v => new { v.RecipeId, v.VersionNo }).SingleAsync(cancellationToken);
+        var earlier = await db.RecipeVersions.AsNoTracking()
+            .Where(v => v.RecipeId == version.RecipeId && v.VersionNo < version.VersionNo)
+            .Select(v => v.Id).ToListAsync(cancellationToken);
+
+        return await db.Certificates
+            .Where(c => c.UserId == userId && c.CourseId != course.Id && c.RecipeVersionId != null
+                        && earlier.Contains(c.RecipeVersionId.Value) && c.Status != CertificateStatus.Superseded)
+            .ToListAsync(cancellationToken);
     }
 
     private async Task NotifyTrainingManagersAsync(Enrollment enrollment, Course course,

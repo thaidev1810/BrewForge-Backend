@@ -155,10 +155,5 @@ public sealed class EquipmentCheckTests
         Assert.Equal("no duration", violation.Actual);
     }
 
-    [Fact]
-    public void Temperature_dosed_class_has_no_value_to_compare()
-    {
-        // The schema records no numeric temperature for a step; only catalogue membership is checked.
-        Assert.Empty(Run(Draft(Step(1, "Heat the water", "KETTLE", 120, [(Water, 300m, "ml")]))));
-    }
+    // A class dosed in degC or bar is checked against the temperature or the pressure of the step: BrewingParameterTests.
 }

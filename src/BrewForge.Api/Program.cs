@@ -16,6 +16,15 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Secrets of one machine - the mail password, the model key, the VAPID private key - go in a file
+// that is never committed (.gitignore). Environment variables still win over it. The tests do not
+// read it: what a developer keeps on their machine must not change what the suite sees.
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
+    builder.Configuration.AddEnvironmentVariables();
+}
+
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, HttpContextCurrentUser>();
 builder.Services.AddApplication();
@@ -26,6 +35,8 @@ builder.Services.AddSingleton<PilotEndScheduler>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<PilotEndScheduler>());
 builder.Services.AddSingleton<NotificationDispatcher>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<NotificationDispatcher>());
+builder.Services.AddSingleton<TrainingReminderScheduler>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<TrainingReminderScheduler>());
 
 builder.Services.AddControllers()
     .AddJsonOptions(json =>

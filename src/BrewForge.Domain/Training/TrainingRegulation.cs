@@ -74,12 +74,16 @@ public sealed class TrainingRegulation
     /// </summary>
     public static TrainingRules Resolve(IEnumerable<TrainingRegulation> regulations, CourseType courseType,
         DateOnly enrolledOn) =>
+        InForce(regulations, courseType, enrolledOn)?.Rules ?? TrainingRules.Default;
+
+    /// <summary>The regulation for a course type that is in force on a day: the one that took effect most recently.</summary>
+    public static TrainingRegulation? InForce(IEnumerable<TrainingRegulation> regulations, CourseType courseType,
+        DateOnly on) =>
         regulations
-            .Where(regulation => regulation.CourseType == courseType && regulation.EffectiveFrom <= enrolledOn)
+            .Where(regulation => regulation.CourseType == courseType && regulation.EffectiveFrom <= on)
             .OrderByDescending(regulation => regulation.EffectiveFrom)
             .ThenByDescending(regulation => regulation.Id)
-            .Select(regulation => (TrainingRules?)regulation.Rules)
-            .FirstOrDefault() ?? TrainingRules.Default;
+            .FirstOrDefault();
 
     /// <summary>
     /// A rule change applies only to enrolments created after it takes

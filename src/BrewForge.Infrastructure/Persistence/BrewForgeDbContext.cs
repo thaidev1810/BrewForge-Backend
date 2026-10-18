@@ -47,6 +47,8 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<ValidationResult> ValidationResults => Set<ValidationResult>();
     public DbSet<AiDraftLog> AiDraftLogs => Set<AiDraftLog>();
     public DbSet<Course> Courses => Set<Course>();
+    public DbSet<RecipeFeedback> RecipeFeedback => Set<RecipeFeedback>();
+    public DbSet<LessonMedia> LessonMedia => Set<LessonMedia>();
     public DbSet<TrainingRegulation> TrainingRegulations => Set<TrainingRegulation>();
     public DbSet<TrainingClass> TrainingClasses => Set<TrainingClass>();
     public DbSet<Enrollment> Enrollments => Set<Enrollment>();
@@ -102,6 +104,12 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             branch.HasQueryFilter(b => BranchScope == null || b.Id == BranchScope);
         });
 
+        modelBuilder.Entity<Ingredient>(ingredient =>
+        {
+            ingredient.Property(i => i.BrewTempMinC).HasPrecision(5, 1);
+            ingredient.Property(i => i.BrewTempMaxC).HasPrecision(5, 1);
+        });
+
         modelBuilder.Entity<StandardEquipment>(equipment =>
         {
             equipment.Property(e => e.MinThreshold).HasPrecision(10, 3);
@@ -146,7 +154,24 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         ConfigureCourses(modelBuilder);
         ConfigureTraining(modelBuilder);
 
+        modelBuilder.Entity<Lesson>(lesson =>
+        {
+            lesson.HasMany(l => l.Media).WithOne().HasForeignKey(media => media.LessonId)
+                .OnDelete(DeleteBehavior.Cascade);
+            lesson.Navigation(l => l.Media).UsePropertyAccessMode(PropertyAccessMode.Field);
+        });
+
+        // Read by who may see it, which depends on the role and not only on the branch: see RecipeFeedbackService.Visible.
+        modelBuilder.Entity<RecipeFeedback>();
+
+        modelBuilder.Entity<LessonMedia>(media =>
+        {
+            media.Property(m => m.Sha256).HasMaxLength(64).IsFixedLength();
+            media.HasIndex(m => m.StorageKey).IsUnique();
+        });
+
         ApplySchemaConventions(modelBuilder);
+
     }
 
     /// <summary>
@@ -166,10 +191,32 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
                 .OnDelete(DeleteBehavior.Cascade);
             version.Navigation(v => v.Steps).UsePropertyAccessMode(PropertyAccessMode.Field);
             version.HasIndex(v => new { v.RecipeId, v.VersionNo }).IsUnique();
+            version.HasMany(v => v.Variants).WithOne().HasForeignKey(variant => variant.RecipeVersionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            version.Navigation(v => v.Variants).UsePropertyAccessMode(PropertyAccessMode.Field);
         });
+
+        modelBuilder.Entity<RecipeVariant>(variant =>
+        {
+            variant.Property(v => v.Scale).HasPrecision(5, 3);
+            variant.HasMany(v => v.Ingredients).WithOne().HasForeignKey(i => i.RecipeVariantId)
+                .OnDelete(DeleteBehavior.Cascade);
+            variant.Navigation(v => v.Ingredients).UsePropertyAccessMode(PropertyAccessMode.Field);
+            // Declared so that replacing the variants of a draft deletes the old ones before it inserts the new.
+            variant.HasIndex(v => new { v.RecipeVersionId, v.VariantCode }).IsUnique();
+        });
+
+        modelBuilder.Entity<RecipeVariantIngredient>(ingredient =>
+        {
+            ingredient.Property(i => i.Scale).HasPrecision(5, 3);
+            ingredient.HasIndex(i => new { i.RecipeVariantId, i.IngredientId }).IsUnique();
+        });
+
 
         modelBuilder.Entity<RecipeStep>(step =>
         {
+            step.Property(s => s.TemperatureC).HasPrecision(5, 1);
+            step.Property(s => s.PressureBar).HasPrecision(4, 1);
             step.HasMany(s => s.Ingredients).WithOne().HasForeignKey(i => i.StepId)
                 .OnDelete(DeleteBehavior.Cascade);
             step.HasMany(s => s.Dependencies).WithOne(d => d.Step).HasForeignKey(d => d.StepId)
@@ -492,6 +539,19 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             || ChangeTracker.Entries<StepDependency>().Any(entry =>
                 entry.State != EntityState.Unchanged && sealedStepIds.Contains(entry.Entity.StepId));
         if (childChanged) throw ReleasedVersionIsImmutable();
+
+        // The variants of a sealed version are frozen with its steps.
+        var sealedVariantIds = ChangeTracker.Entries<RecipeVariant>()
+            .Where(entry => sealedVersionIds.Contains(entry.Entity.RecipeVersionId))
+            .Select(entry => entry.Entity.Id)
+            .ToHashSet();
+        var variantChanged =
+            ChangeTracker.Entries<RecipeVariant>().Any(entry =>
+                entry.State != EntityState.Unchanged && sealedVersionIds.Contains(entry.Entity.RecipeVersionId))
+            || ChangeTracker.Entries<RecipeVariantIngredient>().Any(entry =>
+                entry.State != EntityState.Unchanged && sealedVariantIds.Contains(entry.Entity.RecipeVariantId));
+        if (variantChanged) throw ReleasedVersionIsImmutable();
+
     }
 
     private static DomainException ReleasedVersionIsImmutable() =>

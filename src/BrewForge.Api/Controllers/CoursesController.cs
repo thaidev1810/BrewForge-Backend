@@ -1,6 +1,8 @@
 using BrewForge.Api.Auth;
 using BrewForge.Application.Common;
 using BrewForge.Application.Courses;
+using BrewForge.Domain.Common;
+using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -137,4 +139,49 @@ public sealed class LessonsController(CourseService courses) : ControllerBase
         await courses.DeleteLessonAsync(id, cancellationToken);
         return NoContent();
     }
+
+    /// <summary>
+    /// Adds a picture to the lesson: <c>multipart/form-data</c> with one PNG,
+    /// JPEG, WebP or GIF of at most 5 MB in the field <c>file</c>. Not in the
+    /// contract table. 409 BR-30 on a GENERATED module.
+    /// </summary>
+    [HttpPost("{id:long}/media")]
+    [RequestSizeLimit(LessonMedia.MaxBytes + 64 * 1024)]
+    public async Task<ActionResult<LessonMediaDto>> AddMedia(long id, CancellationToken cancellationToken)
+    {
+        // Read here rather than bound, for the reason given at the POS import.
+        var file = Request.HasFormContentType
+            ? (await Request.ReadFormAsync(cancellationToken)).Files.GetFile("file")
+            : null;
+        if (file is null)
+        {
+            throw DomainException.Validation("A picture is required, sent as multipart/form-data in the field 'file'.",
+                new ErrorDetail("file", "is required"));
+        }
+        await using var content = file.OpenReadStream();
+        var picture = await courses.AddLessonMediaAsync(id, file.FileName, content, cancellationToken);
+        return Created(picture.Url, picture);
+    }
 }
+
+/// <summary>The pictures of lessons. Not in the contract table.</summary>
+[ApiController]
+[Route("api/v1/lesson-media")]
+public sealed class LessonMediaController(CourseService courses) : ControllerBase
+{
+    /// <summary>The picture itself, for any signed-in user: a learner sees it in the lesson.</summary>
+    [HttpGet("{id:long}")]
+    public async Task<IActionResult> Get(long id, CancellationToken cancellationToken)
+    {
+        var picture = await courses.OpenLessonMediaAsync(id, cancellationToken);
+        return File(picture.Content, picture.ContentType);
+    }
+
+    [HttpDelete("{id:long}"), Authorize(Policy = Policies.Trainer)]
+    public async Task<IActionResult> Delete(long id, CancellationToken cancellationToken)
+    {
+        await courses.DeleteLessonMediaAsync(id, cancellationToken);
+        return NoContent();
+    }
+}
+

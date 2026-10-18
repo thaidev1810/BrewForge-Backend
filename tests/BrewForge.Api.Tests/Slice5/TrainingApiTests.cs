@@ -548,9 +548,14 @@ public sealed class TrainingApiTests(BrewForgeApiFactory factory)
 
         // Two published courses on the same version: a PRODUCT and a RECERTIFICATION. The schema
         // allows this because ux_course_one_per_version is unique for PRODUCT courses only.
+        // Another test may already have published the PRODUCT course of this version; there is one at most.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlRawAsync(
+            "INSERT INTO course (recipe_version_id, course_type, title, created_by, state, published_at) " +
+            "SELECT {0}, 'PRODUCT', 'R05 product', {1}, 'PUBLISHED', now() WHERE NOT EXISTS " +
+            "(SELECT 1 FROM course WHERE recipe_version_id = {0} AND course_type = 'PRODUCT' AND state <> 'ARCHIVED')",
+            versionId, trainerId));
         await factory.WithDbAsync(db => db.Database.ExecuteSqlRawAsync(
             "INSERT INTO course (recipe_version_id, course_type, title, created_by, state, published_at) VALUES " +
-            "({0}, 'PRODUCT', 'R05 product', {1}, 'PUBLISHED', now()), " +
             "({0}, 'RECERTIFICATION', 'R05 recert', {1}, 'PUBLISHED', now())", versionId, trainerId));
 
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
