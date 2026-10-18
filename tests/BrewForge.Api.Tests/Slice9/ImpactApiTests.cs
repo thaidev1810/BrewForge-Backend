@@ -34,7 +34,7 @@ public sealed class ImpactApiTests(BrewForgeApiFactory factory)
         Assert.Equal(
             before.Where(table => table.Key is not ("change_impact" or "impact_run_header")),
             after.Where(table => table.Key is not ("change_impact" or "impact_run_header")));
-        Assert.Equal(50, after.Count);
+        Assert.Equal(51, after.Count);
 
         var runId = Guid.Parse(result.GetProperty("runId").GetString()!);
         var rows = await factory.WithDbAsync(db => db.ChangeImpacts.AsNoTracking().Where(r => r.AnalysisRunId == runId).ToListAsync());

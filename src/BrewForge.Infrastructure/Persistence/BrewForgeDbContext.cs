@@ -322,6 +322,9 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             enrollment.HasMany(e => e.Modules).WithOne().HasForeignKey(m => m.EnrollmentId)
                 .OnDelete(DeleteBehavior.Cascade);
             enrollment.Navigation(e => e.Modules).UsePropertyAccessMode(PropertyAccessMode.Field);
+            enrollment.HasMany(e => e.Lessons).WithOne().HasForeignKey(l => l.EnrollmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+            enrollment.Navigation(e => e.Lessons).UsePropertyAccessMode(PropertyAccessMode.Field);
             enrollment.HasMany(e => e.QuizAttempts).WithOne().HasForeignKey(a => a.EnrollmentId)
                 .OnDelete(DeleteBehavior.Cascade);
             enrollment.Navigation(e => e.QuizAttempts).UsePropertyAccessMode(PropertyAccessMode.Field);
@@ -403,6 +406,11 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         modelBuilder.Entity<ModuleProgress>(progress =>
         {
             progress.HasIndex(p => new { p.EnrollmentId, p.CourseModuleId }).IsUnique();
+        });
+
+        modelBuilder.Entity<LessonProgress>(progress =>
+        {
+            progress.HasIndex(p => new { p.EnrollmentId, p.LessonId }).IsUnique();
         });
 
         modelBuilder.Entity<Attendance>(attendance =>
