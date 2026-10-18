@@ -111,4 +111,20 @@ public sealed class LessonProgressTests
         var overview = course.Modules.Single(m => m.ModuleType == ModuleType.ProductOverview);
         Assert.All(overview.Lessons, lesson => Assert.True(enrollment.HasRead(overview.Id, lesson.Id)));
     }
+
+    [Fact]
+    public void Self_paced_enrolment_joins_a_class_once_and_keeps_what_was_read()
+    {
+        var course = PublishedCourse();
+        var enrollment = Enrollment.Assign(course, Trainee, null, Rules, Now);
+        var sop = Sop(course);
+        enrollment.CompleteLesson(course, sop.Lessons[0].Id, Now);
+
+        enrollment.JoinClass(77);
+
+        Assert.Equal(77, enrollment.TrainingClassId);
+        Assert.True(enrollment.HasRead(sop.Id, sop.Lessons[0].Id));
+        var refusal = Assert.Throws<DomainException>(() => enrollment.JoinClass(78));
+        Assert.Equal(Enrollment.StateRule, refusal.Rule);
+    }
 }

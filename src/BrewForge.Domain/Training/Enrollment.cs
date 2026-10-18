@@ -236,6 +236,21 @@ public sealed class Enrollment
     }
 
     /// <summary>
+    /// A self-paced enrolment that is still being studied is taken into a
+    /// class of its course when the class opens: progress, deadline and
+    /// attempts are kept, and from now on the class's attendance counts.
+    /// </summary>
+    public void JoinClass(long trainingClassId)
+    {
+        if (TrainingClassId is not null)
+        {
+            throw DomainException.RuleViolation(StateRule, "This enrolment already belongs to a class.");
+        }
+        EnsureStudying("Joining a class");
+        TrainingClassId = trainingClassId;
+    }
+
+    /// <summary>
     /// UC-14, lesson by lesson. The learner marks a lesson of the course
     /// read; when it is the last unread lesson of its module, the module is
     /// complete as well. Safe to repeat. Returns whether the module is now
