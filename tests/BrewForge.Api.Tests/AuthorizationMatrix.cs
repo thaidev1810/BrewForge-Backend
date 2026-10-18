@@ -226,6 +226,10 @@ public static class AuthorizationMatrix
         new("POST", "/learning-paths/{userId}/assign", [RoleName.Trainer, RoleName.TrainingManager]),
 
         // Web Push for the caller. Not in the contract.
+        new("GET", "/me/notifications", Everyone),
+        new("GET", "/me/notifications/unread-count", Everyone),
+        new("POST", "/me/notifications/{id}/read", Everyone),
+        new("POST", "/me/notifications/read-all", Everyone),
         new("GET", "/push/config", Everyone),
         new("GET", "/me/push-subscriptions", Everyone),
         new("POST", "/me/push-subscriptions", Everyone),

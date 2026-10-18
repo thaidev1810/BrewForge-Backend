@@ -861,6 +861,16 @@ it is also what happens to a new member of staff, without a schema change.
 - A module failed in the quiz, and a reset enrolment, start their lessons
   over: studied again means read again.
 
+**Notifications in the application** (`013_notification_read.sql`: column
+`notification.read_at`). Every notification is also kept for its user to read
+in the application, whatever became of its e-mail and push.
+- `GET /me/notifications` lists the caller's own, newest first and paged;
+  `?unread=true` keeps those not read. `GET /me/notifications/unread-count`
+  gives `{ count }` for a badge.
+- `POST /me/notifications/{id}/read` marks one read (reading it again keeps
+  the first time); `POST /me/notifications/read-all` marks them all and says
+  how many. Somebody else's notification does not exist for the caller.
+
 ## Known gaps
 
 - The React frontend described by the developer pack is not part of this
