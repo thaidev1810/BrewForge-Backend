@@ -7,8 +7,7 @@ namespace BrewForge.Api.Scheduling;
 /// A due date belongs to the calendar: a learner is reminded shortly before
 /// it, and a course that is past it is reported, whether or not anybody
 /// opens the training dashboard that day. Each is said once per enrolment,
-/// so running this often costs nothing. Before the reminders, the learning
-/// paths are brought up to date, which assigns nothing twice either.
+/// so running this often costs nothing.
 /// </summary>
 public sealed class TrainingReminderScheduler(IServiceScopeFactory scopes, IOptions<SchedulerOptions> options,
     ILogger<TrainingReminderScheduler> logger) : BackgroundService
@@ -35,14 +34,7 @@ public sealed class TrainingReminderScheduler(IServiceScopeFactory scopes, IOpti
 
     public async Task<ReminderResult> RunOnceAsync(CancellationToken cancellationToken)
     {
-        // The paths first: a course assigned now is one the reminders know of.
-        await using (var scope = scopes.CreateAsyncScope())
-        {
-            await scope.ServiceProvider.GetRequiredService<LearningPathService>().CatchUpAsync(cancellationToken);
-        }
-        await using (var scope = scopes.CreateAsyncScope())
-        {
-            return await scope.ServiceProvider.GetRequiredService<LearningPathService>().RemindAsync(cancellationToken);
-        }
+        await using var scope = scopes.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<LearningPathService>().RemindAsync(cancellationToken);
     }
 }

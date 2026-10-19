@@ -836,22 +836,8 @@ it is also what happens to a new member of staff, without a schema change.
   issued on a course whose type other types require, the courses that this
   opens are assigned the same way: for a trainee, the PRODUCT courses of the
   drinks their branch sells. `POST /learning-paths/{userId}/assign` does it on
-  request for one person.
-- **A course published later reaches the staff already there.** Approving a
-  course assigns it, in the same transaction, to every active member of staff
-  whose path it is now open on: for a course built on a recipe version, those
-  of the branches that have the version on their menu. A RECERTIFICATION
-  course is left out, its class picks out who needs it. What opens in any
-  other way, a drink planned or gone live at a branch after its course was
-  published, or a regulation coming into force, is assigned at the next run
-  of the scheduler below, which brings every path up to date before it sends
-  reminders. Nothing is assigned twice.
-- **A class takes in what was assigned self-paced.** Opening a class for
-  somebody who is already studying its course on their own joins that
-  enrolment to the class (`JOIN_CLASS` in the audit log, a "Class joined"
-  notification) rather than skipping them: what they read, their deadline and
-  their attempts are kept, and the class's attendance counts from then on.
-  Its id is among the `enrollmentIds` of the answer.
+  request, for staff who were there before a course was published; publishing
+  a course assigns it to nobody.
 - **Due dates are followed up.** A background service of the API
   (`Scheduler:ReminderIntervalMinutes`, 60 by default; 0 turns it off) reminds
   a learner three days before a course is due, and reports a course that is

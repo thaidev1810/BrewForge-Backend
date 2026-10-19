@@ -118,55 +118,27 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
-    public async Task Course_published_after_somebody_joined_is_assigned_to_them_when_it_is_published()
+    public async Task Course_published_after_somebody_joined_is_assigned_on_request()
     {
         var staff = await NewTraineeAsync("B03");
         var later = await NewPublishedInductionCourseAsync();
         using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
 
-        // Publishing the course put it on the path of the staff already there, and told them.
-        var stage = (await (await manager.GetAsync($"{Paths}/{staff.Id}")).ShouldBeAsync(HttpStatusCode.OK))
+        // Publishing a course assigns it to nobody: it is on the path, open and not taken.
+        var before = (await (await manager.GetAsync($"{Paths}/{staff.Id}")).ShouldBeAsync(HttpStatusCode.OK))
             .GetProperty("stages").EnumerateArray().First();
-        var course = CourseOf(stage, later);
-        Assert.Equal(("ENROLLED", "ASSIGNED"), (course.GetProperty("status").GetString(), course.GetProperty("enrollmentState").GetString()));
-        var enrollmentId = course.GetProperty("enrollmentId").GetInt64();
-        var assigned = await factory.WithDbAsync(db => db.AuditLogs.SingleAsync(a =>
-            a.EntityType == "Enrollment" && a.EntityId == enrollmentId && a.Action == "ASSIGN"));
-        Assert.Contains("LEARNING_PATH", assigned.PayloadJson);
-        Assert.True(await factory.WithDbAsync(db => db.Notifications.AnyAsync(n =>
-            n.UserId == staff.Id && n.Subject == "Course assigned" && n.Message.Contains("Induction"))));
+        Assert.Equal("AVAILABLE", CourseOf(before, later).GetProperty("status").GetString());
 
-        // Asking for the path again assigns nothing twice.
+        var assigned = await (await manager.PostAsync($"{Paths}/{staff.Id}/assign", null)).ShouldBeAsync(HttpStatusCode.OK);
+
+        var enrollmentId = Assert.Single(assigned.GetProperty("enrollmentIds").EnumerateArray()).GetInt64();
+        var after = assigned.GetProperty("path").GetProperty("stages").EnumerateArray().First();
+        Assert.Equal(("ENROLLED", enrollmentId), (CourseOf(after, later).GetProperty("status").GetString(),
+            CourseOf(after, later).GetProperty("enrollmentId").GetInt64()));
+
+        // Asking again assigns nothing twice.
         var again = await (await manager.PostAsync($"{Paths}/{staff.Id}/assign", null)).ShouldBeAsync(HttpStatusCode.OK);
         Assert.Empty(again.GetProperty("enrollmentIds").EnumerateArray());
-    }
-
-    [Fact]
-    public async Task Course_of_a_drink_reaches_the_staff_of_the_branches_that_sell_it_whichever_comes_first()
-    {
-        // Through induction at B03, and somebody at B02, where neither drink is sold.
-        var seller = await NewTraineeAsync("B03");
-        await PassInductionAsync(seller);
-        var elsewhere = await NewTraineeAsync("B02");
-        await PassInductionAsync(elsewhere);
-        Task<List<long>> OnCourseAsync(long courseId) => factory.WithDbAsync(db => db.Enrollments
-            .Where(e => e.CourseId == courseId).Select(e => e.UserId).ToListAsync());
-
-        // On the menu first, the course published after: assigned when it is published.
-        var (firstRecipe, firstVersion) = await factory.NewReleasedRecipeAsync();
-        await factory.GoLiveAsync("B03", firstRecipe, firstVersion);
-        var first = (await factory.NewPublishedCourseAsync(firstVersion)).Id();
-        Assert.Contains(seller.Id, await OnCourseAsync(first));
-        Assert.DoesNotContain(elsewhere.Id, await OnCourseAsync(first));
-
-        // The course published first, on the menu after: assigned at the next run of the scheduler.
-        var (laterRecipe, laterVersion) = await factory.NewReleasedRecipeAsync();
-        var later = (await factory.NewPublishedCourseAsync(laterVersion)).Id();
-        Assert.Empty(await OnCourseAsync(later));
-        await factory.GoLiveAsync("B03", laterRecipe, laterVersion);
-        await factory.Services.GetRequiredService<TrainingReminderScheduler>().RunOnceAsync(CancellationToken.None);
-        Assert.Contains(seller.Id, await OnCourseAsync(later));
-        Assert.DoesNotContain(elsewhere.Id, await OnCourseAsync(later));
     }
 
     [Fact]
