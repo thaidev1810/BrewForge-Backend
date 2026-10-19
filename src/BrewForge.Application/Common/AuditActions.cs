@@ -71,7 +71,6 @@ public static class AuditActions
     public const string Reset = "RESET";
     public const string CompleteModule = "COMPLETE_MODULE";
     public const string CompleteLesson = "COMPLETE_LESSON";
-    public const string JoinClass = "JOIN_CLASS";
     public const string RecordAttendance = "RECORD_ATTENDANCE";
     public const string CorrectAttendance = "CORRECT_ATTENDANCE";
     public const string QuizAttempt = "QUIZ_ATTEMPT";

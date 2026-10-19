@@ -155,28 +155,13 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
         var rules = await evaluator.RulesAsync(course.CourseType, DateOnly.FromDateTime(now.UtcDateTime),
             cancellationToken);
         var rosterIds = roster.Select(u => u.Id).ToList();
-        var existing = await db.Enrollments.IgnoreQueryFilters()
+        var alreadyEnrolled = await db.Enrollments.IgnoreQueryFilters()
             .Where(e => e.CourseId == course.Id && e.State != EnrollmentState.Closed && rosterIds.Contains(e.UserId))
-            .ToListAsync(cancellationToken);
+            .Select(e => e.UserId).ToListAsync(cancellationToken);
 
         trainingClass.Open();
         var created = new List<Enrollment>();
-
-        // Somebody studying the course self-paced, as their learning path assigned it, joins the class with it.
-        var joining = existing.Where(e => e.TrainingClassId is null && e.State is EnrollmentState.Assigned
-            or EnrollmentState.InProgress or EnrollmentState.Eligible).ToList();
-        foreach (var enrollment in joining)
-        {
-            enrollment.JoinClass(trainingClass.Id);
-            created.Add(enrollment);
-            db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.JoinClass, new { classId });
-            db.Notify(enrollment.UserId, "Class joined",
-                $"Your enrolment on '{course.Title}' now belongs to class '{trainingClass.Name}'. Due {enrollment.DueDate:yyyy-MM-dd}.",
-                now);
-        }
-        var alreadyEnrolled = existing.Except(joining).Select(e => e.UserId).ToList();
-
-        foreach (var user in roster.Where(u => existing.All(e => e.UserId != u.Id)))
+        foreach (var user in roster.Where(u => !alreadyEnrolled.Contains(u.Id)))
         {
             var enrollment = Enrollment.Assign(course, user.Id, trainingClass.Id, rules, now);
             db.Enrollments.Add(enrollment);
@@ -188,7 +173,7 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
                 now);
         }
         db.Audit(AuditEntities.TrainingClass, () => trainingClass.Id, AuditActions.Open,
-            new { enrolled = created.Count, joined = joining.Count, skipped = alreadyEnrolled });
+            new { enrolled = created.Count, skipped = alreadyEnrolled });
         await db.SaveChangesAsync(cancellationToken);
 
         return new OpenClassResultDto(await ToDtoAsync(trainingClass, cancellationToken),
