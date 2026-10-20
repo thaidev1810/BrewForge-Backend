@@ -14,7 +14,8 @@ public static class SeedRecipes
         IReadOnlyList<StepSeed> Steps);
 
     public sealed record StepSeed(string Action, string? Equipment, string? Gate, int? Seconds,
-        (string Code, decimal Quantity, string Unit)[] Uses, (int Step, DependencyType Type)[] After);
+        (string Code, decimal Quantity, string Unit)[] Uses, (int Step, DependencyType Type)[] After,
+        decimal? TemperatureC = null);
 
     /// <summary>The demonstration draft that fails validation. Never released.</summary>
     public const string BrokenDemoCode = "R99";
@@ -26,15 +27,15 @@ public static class SeedRecipes
     private const DependencyType Needs = DependencyType.RequiresOutput;
 
     private static StepSeed Step(string action, string? equipment = null, string? gate = null, int? seconds = null,
-        (string, decimal, string)[]? uses = null, (int, DependencyType)[]? after = null) =>
-        new(action, equipment, gate, seconds, uses ?? [], after ?? []);
+        (string, decimal, string)[]? uses = null, (int, DependencyType)[]? after = null, decimal? temperature = null) =>
+        new(action, equipment, gate, seconds, uses ?? [], after ?? [], temperature);
 
     public static readonly IReadOnlyList<RecipeSeed> All =
     [
         new("R01", "Trà sữa Oolong", RecipeCategory.Tea, RecipeOrigin.New,
         [
             Step("Brew the oolong", "TEA_BREWER", "Water at 90 C", 480,
-                [("ING-OOLONG", 18m, "g"), ("ING-WATER", 300m, "ml")]),
+                [("ING-OOLONG", 18m, "g"), ("ING-WATER", 300m, "ml")], temperature: 90m),
             Step("Add the milk base", gate: "Pour down the side of the cup", seconds: 20,
                 uses: [("ING-MILKBASE", 120m, "ml")], after: [(1, Then)]),
             Step("Shake with syrup and ice", "SHAKER", "Shake 10 times with a firm wrist", 15,
@@ -46,7 +47,7 @@ public static class SeedRecipes
         new("R02", "Trà đào cam sả", RecipeCategory.Tea, RecipeOrigin.New,
         [
             Step("Brew the black tea", "TEA_BREWER", "Water at 95 C", 420,
-                [("ING-BLACKTEA", 20m, "g"), ("ING-WATER", 350m, "ml")]),
+                [("ING-BLACKTEA", 20m, "g"), ("ING-WATER", 350m, "ml")], temperature: 95m),
             Step("Bruise the lemongrass and steep it in the tea", gate: "Bruise the stalk with the back of a knife",
                 seconds: 120, uses: [("ING-LEMONGRASS", 2m, "pcs")], after: [(1, Needs)]),
             Step("Shake with syrup and ice", "SHAKER", "Shake until the shaker frosts", 15,
@@ -58,7 +59,7 @@ public static class SeedRecipes
         new("R03", "Trà sữa hoa lài", RecipeCategory.Tea, RecipeOrigin.New,
         [
             Step("Brew the jasmine tea", "TEA_BREWER", "Water at 80 C, never boiling", 300,
-                [("ING-JASMINE", 16m, "g"), ("ING-WATER", 300m, "ml")]),
+                [("ING-JASMINE", 16m, "g"), ("ING-WATER", 300m, "ml")], temperature: 80m),
             Step("Add the milk base", seconds: 20,
                 uses: [("ING-MILKBASE", 100m, "ml")], after: [(1, Then)]),
             Step("Sweeten and shake with ice", "SHAKER", "Shake 10 times with a firm wrist", 15,

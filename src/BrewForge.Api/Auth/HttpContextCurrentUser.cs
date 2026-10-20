@@ -33,7 +33,7 @@ public sealed class HttpContextCurrentUser(IHttpContextAccessor accessor) : ICur
             if (!IsAuthenticated) return null;
             // An authenticated caller whose role cannot be read is treated as
             // store-level: the safe reading of a token we do not understand.
-            var storeLevel = Role?.IsBranchScoped() ?? true;
+            var storeLevel = Role?.IsConfinedTo(BranchId) ?? true;
             return storeLevel ? BranchId ?? CurrentUserExtensions.NoBranch : null;
         }
     }

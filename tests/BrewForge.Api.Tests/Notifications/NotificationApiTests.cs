@@ -10,6 +10,7 @@ using BrewForge.Domain.Notifications;
 using BrewForge.Infrastructure.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using static BrewForge.Api.Tests.Infrastructure.CourseScenario;
 
 namespace BrewForge.Api.Tests.Notifications;
 
@@ -316,5 +317,65 @@ public sealed class NotificationApiTests(BrewForgeApiFactory factory)
                 auth = Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(16)),
             },
         });
+    }
+
+    // ---------------------------------------------------------------- the inbox in the application
+
+    private const string Inbox = "/api/v1/me/notifications";
+
+    private Task<long[]> QueueAsync(string username, params string[] subjects) =>
+        factory.WithDbAsync(async db =>
+        {
+            var userId = await db.Users.Where(u => u.Username == username).Select(u => u.Id).SingleAsync();
+            var queued = subjects.Select(s => new Notification(userId, s, $"About {s}.", DateTimeOffset.UtcNow)).ToList();
+            db.Notifications.AddRange(queued);
+            await db.SaveChangesAsync();
+            return queued.Select(n => n.Id).ToArray();
+        });
+
+    [Fact]
+    public async Task Learner_reads_their_notifications_in_the_application_and_marks_them_read()
+    {
+        using var trainee = await factory.ClientForAsync("trainee3");
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        await (await trainee.PostAsync($"{Inbox}/read-all", null)).ShouldBeAsync(HttpStatusCode.OK);
+        var ids = await QueueAsync("trainee3", $"Course assigned {tag}", $"Course due soon {tag}", $"Course overdue {tag}");
+
+        var badge = await (await trainee.GetAsync($"{Inbox}/unread-count")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(3, badge.GetProperty("count").GetInt32());
+
+        // Latest first, each with its subject, message and whether it was read.
+        var unread = await (await trainee.GetAsync($"{Inbox}?unread=true")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(3, unread.GetProperty("total").GetInt32());
+        var first = unread.GetProperty("items")[0];
+        Assert.Equal((ids[2], $"Course overdue {tag}", $"About Course overdue {tag}.", false),
+            (first.Id(), first.GetProperty("subject").GetString(), first.GetProperty("message").GetString(), first.GetProperty("read").GetBoolean()));
+
+        var read = await (await trainee.PostAsync($"{Inbox}/{ids[0]}/read", null)).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.True(read.GetProperty("read").GetBoolean());
+        Assert.NotEqual(JsonValueKind.Null, read.GetProperty("readAt").ValueKind);
+        // Reading it again keeps the first time.
+        var again = await (await trainee.PostAsync($"{Inbox}/{ids[0]}/read", null)).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(read.GetProperty("readAt").GetString(), again.GetProperty("readAt").GetString());
+        Assert.Equal(2, (await (await trainee.GetAsync($"{Inbox}/unread-count")).ShouldBeAsync(HttpStatusCode.OK)).GetProperty("count").GetInt32());
+
+        var all = await (await trainee.PostAsync($"{Inbox}/read-all", null)).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(2, all.GetProperty("count").GetInt32());
+        Assert.Equal(0, (await (await trainee.GetAsync($"{Inbox}?unread=true")).ShouldBeAsync(HttpStatusCode.OK)).GetProperty("total").GetInt32());
+        // Read, they are still there.
+        var everything = await (await trainee.GetAsync($"{Inbox}?size=100")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Subset(everything.GetProperty("items").EnumerateArray().Select(n => n.Id()).ToHashSet(), ids.ToHashSet());
+    }
+
+    [Fact]
+    public async Task Somebody_else_s_notification_does_not_exist_for_the_caller()
+    {
+        var theirs = (await QueueAsync("trainee4", $"Private {Guid.NewGuid():N}"))[0];
+        using var trainee = await factory.ClientForAsync("trainee3");
+
+        await (await trainee.PostAsync($"{Inbox}/{theirs}/read", null)).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+        Assert.DoesNotContain((await (await trainee.GetAsync($"{Inbox}?size=100")).ShouldBeAsync(HttpStatusCode.OK))
+            .GetProperty("items").EnumerateArray(), n => n.Id() == theirs);
+        Assert.Null(await factory.WithDbAsync(db => db.Notifications.Where(n => n.Id == theirs).Select(n => n.ReadAt).SingleAsync()));
     }
 }

@@ -548,9 +548,14 @@ public sealed class TrainingApiTests(BrewForgeApiFactory factory)
 
         // Two published courses on the same version: a PRODUCT and a RECERTIFICATION. The schema
         // allows this because ux_course_one_per_version is unique for PRODUCT courses only.
+        // Another test may already have published the PRODUCT course of this version; there is one at most.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlRawAsync(
+            "INSERT INTO course (recipe_version_id, course_type, title, created_by, state, published_at) " +
+            "SELECT {0}, 'PRODUCT', 'R05 product', {1}, 'PUBLISHED', now() WHERE NOT EXISTS " +
+            "(SELECT 1 FROM course WHERE recipe_version_id = {0} AND course_type = 'PRODUCT' AND state <> 'ARCHIVED')",
+            versionId, trainerId));
         await factory.WithDbAsync(db => db.Database.ExecuteSqlRawAsync(
             "INSERT INTO course (recipe_version_id, course_type, title, created_by, state, published_at) VALUES " +
-            "({0}, 'PRODUCT', 'R05 product', {1}, 'PUBLISHED', now()), " +
             "({0}, 'RECERTIFICATION', 'R05 recert', {1}, 'PUBLISHED', now())", versionId, trainerId));
 
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
@@ -561,5 +566,116 @@ public sealed class TrainingApiTests(BrewForgeApiFactory factory)
         Assert.Contains(needs.EnumerateArray(), n =>
             n.GetProperty("reason").GetString() == "BRANCH_SHORTFALL"
             && n.GetProperty("courseType").GetString() == "PRODUCT");
+    }
+
+    // ---------------------------------------------------------------- UC-14, lesson by lesson
+
+    [Fact]
+    public async Task Learner_reads_a_module_lesson_by_lesson_and_the_last_lesson_completes_it()
+    {
+        using var trainee = await factory.ClientForAsync(TestUsers.Trainee);
+        var setup = await factory.NewClassAsync();
+        await factory.OpenClassAsync(setup.ClassId, [await factory.UserIdAsync(TestUsers.Trainee)]);
+        var enrollmentId = await factory.EnrollmentIdAsync(setup.ClassId, TestUsers.Trainee);
+        async Task<JsonElement> SopAsync() =>
+            (await (await trainee.GetAsync($"{Enrollments}/{enrollmentId}/modules")).ShouldBeAsync(HttpStatusCode.OK))
+            .EnumerateArray().Single(m => m.GetProperty("module").GetProperty("moduleType").GetString() == "SOP");
+        var sop = await SopAsync();
+        var lessonIds = sop.GetProperty("module").GetProperty("lessons").EnumerateArray().Select(l => l.Id()).ToList();
+        Assert.Equal((0, 3), (sop.GetProperty("lessonsRead").GetInt32(), sop.GetProperty("lessonsTotal").GetInt32()));
+
+        var first = await (await trainee.PostAsync($"{Enrollments}/{enrollmentId}/lessons/{lessonIds[0]}/complete", null))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.False(first.GetProperty("moduleCompleted").GetBoolean());
+        Assert.Equal(sop.GetProperty("module").Id(), first.GetProperty("courseModuleId").GetInt64());
+        Assert.Equal("IN_PROGRESS", first.GetProperty("enrollment").GetProperty("state").GetString());
+        var halfway = await SopAsync();
+        Assert.Equal(1, halfway.GetProperty("lessonsRead").GetInt32());
+        Assert.Equal([lessonIds[0]], halfway.GetProperty("readLessonIds").EnumerateArray().Select(id => id.GetInt64()));
+        Assert.False(halfway.GetProperty("completed").GetBoolean());
+
+        await (await trainee.PostAsync($"{Enrollments}/{enrollmentId}/lessons/{lessonIds[1]}/complete", null)).ShouldBeAsync(HttpStatusCode.OK);
+        var last = await (await trainee.PostAsync($"{Enrollments}/{enrollmentId}/lessons/{lessonIds[2]}/complete", null))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.True(last.GetProperty("moduleCompleted").GetBoolean());
+        Assert.Equal(14, last.GetProperty("enrollment").GetProperty("progressPercent").GetInt32()); // 1 of 7 modules
+        var done = await SopAsync();
+        Assert.True(done.GetProperty("completed").GetBoolean());
+        Assert.Equal(3, done.GetProperty("lessonsRead").GetInt32());
+        Assert.Equal(3, await factory.WithDbAsync(db => db.AuditLogs.CountAsync(a =>
+            a.EntityType == "Enrollment" && a.EntityId == enrollmentId && a.Action == "COMPLETE_LESSON")));
+    }
+
+    [Fact]
+    public async Task Lesson_is_read_by_its_learner_only_and_only_a_lesson_of_the_course()
+    {
+        var setup = await factory.NewClassAsync();
+        await factory.OpenClassAsync(setup.ClassId);
+        var own = await factory.EnrollmentIdAsync(setup.ClassId, TestUsers.Trainee);
+        var someoneElses = await factory.EnrollmentIdAsync(setup.ClassId, "trainee2");
+        var lessonId = (await factory.GetCourseAsync(setup.CourseId)).Module("SOP").GetProperty("lessons")[0].Id();
+        var otherCourse = await factory.NewClassAsync();
+        var foreignLesson = (await factory.GetCourseAsync(otherCourse.CourseId)).Module("SOP").GetProperty("lessons")[0].Id();
+        using var trainee = await factory.ClientForAsync(TestUsers.Trainee);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        await (await trainee.PostAsync($"{Enrollments}/{someoneElses}/lessons/{lessonId}/complete", null)).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+        await (await trainer.PostAsync($"{Enrollments}/{own}/lessons/{lessonId}/complete", null)).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+        await (await trainee.PostAsync($"{Enrollments}/{own}/lessons/{foreignLesson}/complete", null)).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+        Assert.Equal(0, await factory.WithDbAsync(db => db.Enrollments.Where(e => e.Id == own || e.Id == someoneElses)
+            .SelectMany(e => e.Lessons).CountAsync()));
+    }
+
+    // ---------------------------------------------------------------- cancelling a class
+
+    [Fact]
+    public async Task Cancelled_class_closes_the_enrolments_still_being_studied_and_tells_their_learners()
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        using var trainee = await factory.ClientForAsync(TestUsers.Trainee);
+        var setup = await factory.NewClassAsync();
+        await factory.OpenClassAsync(setup.ClassId); // trainee and trainee2
+        var studying = await factory.EnrollmentIdAsync(setup.ClassId, TestUsers.Trainee);
+        var notStarted = await factory.EnrollmentIdAsync(setup.ClassId, "trainee2");
+        await factory.CompleteModulesAsync(TestUsers.Trainee, studying, [setup.ModuleIds[0]]);
+
+        var cancelled = await (await trainer.PostAsJsonAsync($"{Classes}/{setup.ClassId}/cancel", new { reason = "The trainer is ill." }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.Equal("CANCELLED", cancelled.GetProperty("state").GetString());
+        Assert.Equal("CLOSED", (await factory.GetEnrollmentAsync(studying)).GetProperty("state").GetString());
+        Assert.Equal("CLOSED", (await factory.GetEnrollmentAsync(notStarted)).GetProperty("state").GetString());
+        // Nothing more is studied on it.
+        await (await trainee.PostAsync($"{Enrollments}/{studying}/modules/{setup.ModuleIds[1]}/complete", null))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "STATE_TRANSITION");
+
+        var inbox = await (await trainee.GetAsync("/api/v1/me/notifications?size=20")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Contains(inbox.GetProperty("items").EnumerateArray(), n =>
+            n.GetProperty("subject").GetString() == "Class cancelled"
+            && n.GetProperty("message").GetString()!.Contains("The trainer is ill."));
+        Assert.True(await factory.WithDbAsync(db => db.AuditLogs.AnyAsync(a =>
+            a.EntityType == "TrainingClass" && a.EntityId == setup.ClassId && a.Action == "CANCEL")));
+
+        // A class is cancelled once, and a closed class is not cancelled.
+        await (await trainer.PostAsync($"{Classes}/{setup.ClassId}/cancel", null)).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "STATE_TRANSITION");
+        var finished = await factory.NewClassAsync();
+        await factory.OpenClassAsync(finished.ClassId, [await factory.UserIdAsync("trainee2")]);
+        await (await trainer.PostAsync($"{Classes}/{finished.ClassId}/close", null)).ShouldBeAsync(HttpStatusCode.OK);
+        await (await trainer.PostAsync($"{Classes}/{finished.ClassId}/cancel", null)).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "STATE_TRANSITION");
+    }
+
+    [Fact]
+    public async Task Planned_class_is_cancelled_before_anybody_is_enrolled()
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var setup = await factory.NewClassAsync();
+
+        var cancelled = await (await trainer.PostAsync($"{Classes}/{setup.ClassId}/cancel", null)).ShouldBeAsync(HttpStatusCode.OK);
+
+        Assert.Equal(("CANCELLED", 0), (cancelled.GetProperty("state").GetString(), cancelled.GetProperty("enrolledCount").GetInt32()));
+        await (await trainer.PostAsJsonAsync($"{Classes}/{setup.ClassId}/open", new { })).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "STATE_TRANSITION");
+        Assert.Contains("reason", (await (await trainer.PostAsJsonAsync($"{Classes}/{(await factory.NewClassAsync()).ClassId}/cancel",
+            new { reason = new string('x', 501) })).ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
     }
 }

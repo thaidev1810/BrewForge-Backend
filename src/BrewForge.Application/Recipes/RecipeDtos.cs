@@ -24,25 +24,96 @@ public sealed record CreateVersionRequest(long? CopyFromVersionId);
 
 public sealed record RecipeVersionDto(long Id, long RecipeId, int VersionNo, VersionState State, bool IsImmutable,
     string? ContentHash, long CreatedBy, long? ApprovedBy, DateTimeOffset? ReleasedAt, DateTimeOffset? SupersededAt,
-    IReadOnlyList<StepDto> Steps);
+    IReadOnlyList<StepDto> Steps, IReadOnlyList<VariantDto> Variants);
 
 public sealed record StepDto(long Id, int StepOrder, string ActionText, string? EquipmentClass,
     string? TechniqueGate, int? DurationSeconds, IReadOnlyList<StepIngredientDto> Ingredients,
-    IReadOnlyList<StepDependencyDto> DependsOn);
+    IReadOnlyList<StepDependencyDto> DependsOn, decimal? TemperatureC = null, decimal? PressureBar = null);
 
 public sealed record StepIngredientDto(long IngredientId, string? IngredientCode, string? IngredientName,
     decimal Quantity, string Unit);
 
 public sealed record StepDependencyDto(long StepId, int StepOrder, DependencyType Type);
 
+// ---------------------------------------------------------------- transcribing an existing document
+
+/// <summary>The document of an existing recipe, as text. <c>FileName</c> is kept for the record only.</summary>
+public sealed record ExtractDocumentRequest(string? DocumentText, string? FileName);
+
+/// <summary>A step as it was extracted: the passage the model took it from, and whether that passage is in the document.</summary>
+public sealed record ExtractionStepDto(int StepOrder, string SourceQuote, bool Grounded);
+
+/// <summary>
+/// What an extraction did: the document it read, where each step came from,
+/// and what the document says that the structure could not hold. It
+/// describes the draft as it was extracted, not as it may have been edited
+/// since.
+/// </summary>
+public sealed record ExtractionReportDto(long VersionId, string? FileName, string SourceSha256, int SourceChars,
+    string DocumentText, string Model, long? ExtractedBy, DateTimeOffset ExtractedAt, int TotalSteps,
+    int GroundedSteps, IReadOnlyList<ExtractionStepDto> Steps, IReadOnlyList<string> Unmapped);
+
+public sealed record ExtractionResultDto(DraftResultDto Draft, ExtractionReportDto Extraction);
+
+// ---------------------------------------------------------------- comparing two versions
+
+public sealed record VersionRefDto(long Id, int VersionNo, VersionState State);
+
+/// <summary>A side that is null is a side that does not use the ingredient.</summary>
+public sealed record IngredientChangeDto(long IngredientId, string? IngredientCode, string? IngredientName,
+    decimal? QuantityBefore, string? UnitBefore, decimal? QuantityAfter, string? UnitAfter);
+
+/// <summary>
+/// One step of the comparison. <c>Before</c> is null for a step that was
+/// added, <c>After</c> for one that was removed. <c>ChangedFields</c> names
+/// what differs when the step is in both: actionText, equipmentClass,
+/// techniqueGate, durationSeconds, ingredients, dependsOn.
+/// </summary>
+public sealed record StepChangeDto(StepChangeKind Kind, StepDto? Before, StepDto? After,
+    IReadOnlyList<string> ChangedFields, IReadOnlyList<IngredientChangeDto> IngredientChanges);
+
+public sealed record RecipeVersionDiffDto(long RecipeId, VersionRefDto Before, VersionRefDto After, bool HasChanges,
+    int Added, int Removed, int Changed, int Unchanged, IReadOnlyList<StepChangeDto> Steps);
+
+// ---------------------------------------------------------------- variants
+
+/// <summary>One way the version is served: a scale on its quantities, with the ingredients that have a scale of their own.</summary>
+public sealed record VariantDto(long Id, string Code, string Name, decimal Scale,
+    IReadOnlyList<VariantIngredientDto> Ingredients);
+
+public sealed record VariantIngredientDto(long IngredientId, string? IngredientCode, string? IngredientName,
+    decimal Scale);
+
+/// <summary>All the variants of a draft. A PUT replaces them; an empty list removes them.</summary>
+public sealed record VariantsRequest(IReadOnlyList<VariantRequest>? Variants);
+
+public sealed record VariantRequest(string? Code, string? Name, decimal? Scale,
+    IReadOnlyList<VariantIngredientRequest>? Ingredients);
+
+/// <summary>The ingredient is named by <c>IngredientId</c> or, failing that, by <c>IngredientCode</c>. A scale of 0 leaves it out.</summary>
+public sealed record VariantIngredientRequest(long? IngredientId, string? IngredientCode, decimal? Scale);
+
+/// <summary>A version as one variant serves it.</summary>
+public sealed record ServedRecipeDto(long VersionId, int VersionNo, string VariantCode, string VariantName,
+    decimal Scale, IReadOnlyList<ServedStepDto> Steps);
+
+public sealed record ServedStepDto(long StepId, int StepOrder, string ActionText, string? EquipmentClass,
+    string? TechniqueGate, int? DurationSeconds, decimal? TemperatureC, decimal? PressureBar,
+    IReadOnlyList<ServedIngredientDto> Ingredients);
+
+/// <summary><c>Quantity</c> is what this variant uses; <c>BaseQuantity</c> is what the version prescribes as written.</summary>
+public sealed record ServedIngredientDto(long IngredientId, string? IngredientCode, string? IngredientName,
+    decimal Quantity, decimal BaseQuantity, string Unit);
+
 // ---------------------------------------------------------------- authoring
 
 /// <summary>The whole content of a draft. A PUT replaces the content; it does not patch it.</summary>
 public sealed record RecipeContentRequest(IReadOnlyList<StepRequest>? Steps);
 
+/// <summary><c>TemperatureC</c> and <c>PressureBar</c> are optional: the setting the step is done at, where the recipe states one.</summary>
 public sealed record StepRequest(int? StepOrder, string? ActionText, string? EquipmentClass, string? TechniqueGate,
     int? DurationSeconds, IReadOnlyList<StepIngredientRequest>? Ingredients,
-    IReadOnlyList<StepDependencyRequest>? DependsOn);
+    IReadOnlyList<StepDependencyRequest>? DependsOn, decimal? TemperatureC = null, decimal? PressureBar = null);
 
 /// <summary>The ingredient is named by <c>IngredientId</c> or, failing that, by <c>IngredientCode</c>.</summary>
 public sealed record StepIngredientRequest(long? IngredientId, string? IngredientCode, decimal? Quantity, string? Unit);
@@ -63,15 +134,18 @@ public sealed record ValidationResultDto(long VersionId, bool Passed, DateTimeOf
         [
             .. report.Checks.Select(check => new CheckDto(check.CheckType, check.Passed,
                 [.. check.Violations.Select(v => new ViolationDto(v.StepId is > 0 ? v.StepId : null, v.StepOrder, v.Rule,
-                    v.Code, v.Message, v.Expected, v.Actual))])),
+                    v.Code, v.Message, v.Expected, v.Actual, v.Variant))])),
         ]);
 }
 
 public sealed record CheckDto(CheckType CheckType, bool Passed, IReadOnlyList<ViolationDto> Violations);
 
-/// <summary>A violation, attached to the step that caused it.</summary>
+/// <summary>
+/// A violation, attached to the step that caused it. <c>Variant</c> is the code
+/// of the variant whose quantities caused it; null for the version as written.
+/// </summary>
 public sealed record ViolationDto(long? StepId, int? StepOrder, string Rule, string? Code, string Message,
-    string Expected, string Actual);
+    string Expected, string Actual, string? Variant = null);
 
 // ---------------------------------------------------------------- drafting and repair
 

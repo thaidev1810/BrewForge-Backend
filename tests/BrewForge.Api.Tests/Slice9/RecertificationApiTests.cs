@@ -1,0 +1,248 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using BrewForge.Api.Tests.Infrastructure;
+using BrewForge.Domain.Training;
+using Microsoft.EntityFrameworkCore;
+using static BrewForge.Api.Tests.Infrastructure.CourseScenario;
+using static BrewForge.Api.Tests.Infrastructure.TrainingScenario;
+
+namespace BrewForge.Api.Tests.Slice9;
+
+/// <summary>
+/// What follows a recipe change for the people certified on the old version:
+/// the two versions are compared, a recertification course is built from
+/// what differs, those people take it, and the certificate they earn on the
+/// new version replaces the one that was flagged.
+/// </summary>
+[Collection(ApiCollection.Name)]
+public sealed class RecertificationApiTests(BrewForgeApiFactory factory)
+{
+    private const string Versions = "/api/v1/recipe-versions";
+
+    /// <summary>A drink taught on version 1 and since changed: version 2 is released and version 1 superseded.</summary>
+    private sealed record ChangedDrink(long RecipeId, long FirstVersionId, long SecondVersionId, long FirstCourseId,
+        long TraineeId, long FirstCertificateId);
+
+    [Fact]
+    public async Task Two_versions_of_a_recipe_are_compared_step_by_step()
+    {
+        var drink = await NewChangedDrinkAsync();
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
+
+        var diff = await (await manager.GetAsync($"{Versions}/{drink.SecondVersionId}/diff")).ShouldBeAsync(HttpStatusCode.OK);
+
+        // Without ?against it is compared with the version that was in production before it.
+        Assert.Equal((drink.RecipeId, drink.FirstVersionId, 1, "SUPERSEDED", drink.SecondVersionId, 2, "RELEASED"),
+            (diff.GetProperty("recipeId").GetInt64(), diff.GetProperty("before").Id(), diff.GetProperty("before").GetProperty("versionNo").GetInt32(),
+                diff.GetProperty("before").GetProperty("state").GetString(), diff.GetProperty("after").Id(),
+                diff.GetProperty("after").GetProperty("versionNo").GetInt32(), diff.GetProperty("after").GetProperty("state").GetString()));
+        Assert.Equal((true, 0, 1, 2, 0), (diff.GetProperty("hasChanges").GetBoolean(), diff.GetProperty("added").GetInt32(),
+            diff.GetProperty("removed").GetInt32(), diff.GetProperty("changed").GetInt32(), diff.GetProperty("unchanged").GetInt32()));
+
+        var steps = diff.GetProperty("steps").EnumerateArray().ToList();
+        Assert.Equal(["CHANGED", "CHANGED", "REMOVED"], steps.Select(step => step.GetProperty("kind").GetString()));
+
+        // The brewing was reworded and brews less, for a shorter time, in cooler water.
+        var brew = steps[0];
+        Assert.Equal(("Brew the oolong", "Brew a lighter oolong"), (brew.GetProperty("before").GetProperty("actionText").GetString(),
+            brew.GetProperty("after").GetProperty("actionText").GetString()));
+        Assert.Equal(["actionText", "techniqueGate", "durationSeconds", "ingredients"],
+            brew.GetProperty("changedFields").EnumerateArray().Select(f => f.GetString()));
+        var oolong = brew.GetProperty("ingredientChanges").EnumerateArray().Single(i => i.GetProperty("ingredientCode").GetString() == "ING-OOLONG");
+        Assert.Equal((18m, 16m, "g"), (oolong.GetProperty("quantityBefore").GetDecimal(), oolong.GetProperty("quantityAfter").GetDecimal(),
+            oolong.GetProperty("unitAfter").GetString()));
+        // The water is no longer measured in that step at all.
+        var water = brew.GetProperty("ingredientChanges").EnumerateArray().Single(i => i.GetProperty("ingredientCode").GetString() == "ING-WATER");
+        Assert.Equal((300m, JsonValueKind.Null), (water.GetProperty("quantityBefore").GetDecimal(), water.GetProperty("quantityAfter").ValueKind));
+
+        // The garnish is gone.
+        Assert.Equal(("Garnish with peach", JsonValueKind.Null), (steps[2].GetProperty("before").GetProperty("actionText").GetString(),
+            steps[2].GetProperty("after").ValueKind));
+
+        // Compared the other way round, on request, the same step was added.
+        var reverse = await (await manager.GetAsync($"{Versions}/{drink.FirstVersionId}/diff?against={drink.SecondVersionId}"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal((1, 0), (reverse.GetProperty("added").GetInt32(), reverse.GetProperty("removed").GetInt32()));
+    }
+
+    [Fact]
+    public async Task Version_with_nothing_before_it_and_versions_of_two_recipes_are_not_compared()
+    {
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
+        var (_, only) = await factory.NewReleasedRecipeAsync();
+        var (_, other) = await factory.NewReleasedRecipeAsync();
+
+        await (await manager.GetAsync($"{Versions}/{only}/diff")).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "NO_EARLIER_VERSION");
+        var mixed = await (await manager.GetAsync($"{Versions}/{only}/diff?against={other}")).ShouldBeErrorAsync(HttpStatusCode.BadRequest);
+        await (await manager.GetAsync($"{Versions}/{only}/diff?against=999999999")).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+
+        Assert.Contains("against", mixed.DetailFields());
+    }
+
+    [Fact]
+    public async Task Recertification_course_is_built_from_what_changed_between_the_two_versions()
+    {
+        var drink = await NewChangedDrinkAsync();
+
+        var course = await NewRecertificationCourseAsync(drink);
+
+        Assert.Equal(("RECERTIFICATION", drink.SecondVersionId, "DRAFT"), (course.GetProperty("courseType").GetString(),
+            course.GetProperty("recipeVersionId").GetInt64(), course.StateOf()));
+        var recertification = course.GetProperty("recertification");
+        Assert.Equal((drink.FirstVersionId, 1, 0, 1, 2), (recertification.GetProperty("fromVersionId").GetInt64(),
+            recertification.GetProperty("fromVersionNo").GetInt32(), recertification.GetProperty("added").GetInt32(),
+            recertification.GetProperty("removed").GetInt32(), recertification.GetProperty("changed").GetInt32()));
+
+        // Seven modules as always (BR-29); the procedure is the two steps that changed and the one that is gone.
+        Assert.Equal(7, course.GetProperty("modules").GetArrayLength());
+        Assert.Equal(["Step 1 - brew a lighter oolong", "Step 2 - add the milk base", "No longer done - garnish with peach"],
+            course.Module("SOP").GetProperty("lessons").EnumerateArray().Select(l => l.GetProperty("title").GetString()));
+        Assert.Equal("What changed since version 1",
+            course.Module("PRODUCT_OVERVIEW").GetProperty("lessons").EnumerateArray().Single().GetProperty("title").GetString());
+        // One of the changed steps has a technique gate: that is what the trainer observes.
+        var gate = Assert.Single(course.GetProperty("practicalChecklist").EnumerateArray());
+        Assert.Equal(("Brew a lighter oolong", "Water at 85 C"), (gate.GetProperty("actionText").GetString(), gate.GetProperty("techniqueGate").GetString()));
+
+        // The whole course of the same version stands beside it, and has every step.
+        var whole = await factory.NewCourseAsync(drink.SecondVersionId);
+        Assert.Equal(2, whole.Module("SOP").GetProperty("lessons").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, whole.GetProperty("recertification").ValueKind);
+    }
+
+    [Fact]
+    public async Task Recertification_course_needs_an_earlier_version_and_is_one_per_version()
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var (_, firstEver) = await factory.NewReleasedRecipeAsync();
+        var drink = await NewChangedDrinkAsync();
+        await NewRecertificationCourseAsync(drink);
+
+        var nothingBefore = await trainer.PostAsJsonAsync(Courses,
+            new { recipeVersionId = firstEver, courseType = "RECERTIFICATION", title = "What changed" });
+        var noVersion = await trainer.PostAsJsonAsync(Courses, new { courseType = "RECERTIFICATION", title = "What changed" });
+        var second = await trainer.PostAsJsonAsync(Courses,
+            new { recipeVersionId = drink.SecondVersionId, courseType = "RECERTIFICATION", title = "What changed, again" });
+
+        await nothingBefore.ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RECERTIFICATION");
+        Assert.Contains("recipeVersionId", (await noVersion.ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
+        Assert.Contains("existingCourseId", (await second.ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "BR-18")).DetailFields());
+    }
+
+    [Fact]
+    public async Task Staff_certified_on_the_old_version_recertify_and_the_new_certificate_replaces_the_flagged_one()
+    {
+        var drink = await NewChangedDrinkAsync();
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        // The release flagged the certificate (BR-15); nothing was deleted.
+        Assert.Equal(CertificateStatus.NeedsRecert, await StatusAsync(drink.FirstCertificateId));
+
+        var course = await PublishAsync(await NewRecertificationCourseAsync(drink));
+        var needs = await NeedsAsync(course.Id());
+        var need = Assert.Single(needs);
+        Assert.Equal((TestUsers.Trainee, "RECERTIFICATION", "RECERTIFICATION"),
+            (need.GetProperty("username").GetString(), need.GetProperty("reason").GetString(), need.GetProperty("courseType").GetString()));
+
+        // A class for the whole branch takes in those who were certified on the drink and leaves the others.
+        var classId = await NewClassAsync(course.Id());
+        var opened = await factory.OpenClassAsync(classId);
+        var enrollmentId = Assert.Single(opened.GetProperty("enrollmentIds").EnumerateArray()).GetInt64();
+        Assert.Equal(drink.TraineeId, await factory.WithDbAsync(db => db.Enrollments.Where(e => e.Id == enrollmentId).Select(e => e.UserId).SingleAsync()));
+
+        var moduleIds = course.GetProperty("modules").EnumerateArray().Select(m => m.Id()).ToList();
+        var learner = await factory.StudyAsync(new ClassSetup(course.Id(), drink.SecondVersionId, classId, [], moduleIds), TestUsers.Trainee);
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        var evaluation = await (await factory.EvaluatePracticalAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+
+        // Certified on version 2 through the short course...
+        var certificateId = evaluation.GetProperty("certificateId").GetInt64();
+        var certificate = await (await trainer.GetAsync($"{AssessmentScenario.Certificates}/{certificateId}")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal((drink.TraineeId, course.Id(), drink.SecondVersionId, "VALID"), (certificate.GetProperty("userId").GetInt64(),
+            certificate.GetProperty("courseId").GetInt64(), certificate.GetProperty("recipeVersionId").GetInt64(),
+            certificate.GetProperty("status").GetString()));
+
+        // ...and the certificate on version 1 is superseded by it, and kept.
+        var replaced = await (await trainer.GetAsync($"{AssessmentScenario.Certificates}/{drink.FirstCertificateId}")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(("SUPERSEDED", certificateId), (replaced.GetProperty("status").GetString(), replaced.GetProperty("supersededBy").GetInt64()));
+        Assert.Empty(await NeedsAsync(course.Id()));
+    }
+
+    [Fact]
+    public async Task Somebody_never_certified_on_the_drink_is_not_put_on_its_recertification_course()
+    {
+        var drink = await NewChangedDrinkAsync();
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var course = await PublishAsync(await NewRecertificationCourseAsync(drink));
+        var newcomer = await factory.UserIdAsync("trainee2");
+
+        var refusal = await (await trainer.PostAsJsonAsync($"{Classes}/{await NewClassAsync(course.Id())}/open",
+                new { traineeIds = new[] { drink.TraineeId, newcomer } }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RECERTIFICATION");
+
+        Assert.Contains("traineeIds", refusal.DetailFields());
+        Assert.Contains($"user {newcomer}", refusal.GetProperty("details")[0].GetProperty("issue").GetString());
+        Assert.False(await factory.WithDbAsync(db => db.Enrollments.AnyAsync(e => e.CourseId == course.Id())));
+
+        // A branch where nobody was certified on the drink has nobody for such a class either.
+        await (await trainer.PostAsJsonAsync($"{Classes}/{await NewClassAsync(course.Id(), "B02")}/open", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RECERTIFICATION");
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    /// <summary>
+    /// A drink with a published course on version 1 and the seeded trainee
+    /// certified on it, then changed: version 2 is lighter, shorter and has
+    /// no garnish.
+    /// </summary>
+    private async Task<ChangedDrink> NewChangedDrinkAsync()
+    {
+        var (recipeId, firstVersion) = await factory.NewReleasedRecipeAsync();
+        var firstCourse = (await factory.NewPublishedCourseAsync(firstVersion)).Id();
+        var traineeId = await factory.UserIdAsync(TestUsers.Trainee);
+        await factory.CertifyAsync(traineeId, firstCourse, firstVersion);
+        var certificateId = await factory.WithDbAsync(db => db.Certificates
+            .Where(c => c.UserId == traineeId && c.RecipeVersionId == firstVersion).Select(c => c.Id).SingleAsync());
+
+        var secondVersion = await factory.ReleaseNewVersionAsync(recipeId, RecipeScenario.LighterContent());
+        return new ChangedDrink(recipeId, firstVersion, secondVersion, firstCourse, traineeId, certificateId);
+    }
+
+    private async Task<JsonElement> NewRecertificationCourseAsync(ChangedDrink drink)
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        return await (await trainer.PostAsJsonAsync(Courses, new
+        {
+            recipeVersionId = drink.SecondVersionId, courseType = "RECERTIFICATION", title = $"What changed {Guid.NewGuid():N}"[..24],
+        })).ShouldBeAsync(HttpStatusCode.Created);
+    }
+
+    private async Task<JsonElement> PublishAsync(JsonElement course)
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+        await factory.CompleteAuthoringAsync(course.Id());
+        await (await trainer.PostAsync($"{Courses}/{course.Id()}/submit", null)).ShouldBeAsync(HttpStatusCode.OK);
+        return await (await manager.PostAsync($"{Courses}/{course.Id()}/approve", null)).ShouldBeAsync(HttpStatusCode.OK);
+    }
+
+    private async Task<long> NewClassAsync(long courseId, string branchCode = "B01")
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        return (await (await trainer.PostAsJsonAsync(Classes, new
+        {
+            courseId, branchId = await factory.BranchIdAsync(branchCode), name = $"Recert {Guid.NewGuid():N}"[..16],
+            startDate = Today, endDate = Today.AddDays(7),
+        })).ShouldBeAsync(HttpStatusCode.Created)).Id();
+    }
+
+    private async Task<List<JsonElement>> NeedsAsync(long courseId)
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        return [.. (await (await trainer.GetAsync($"/api/v1/training-needs?courseId={courseId}")).ShouldBeAsync(HttpStatusCode.OK)).EnumerateArray()];
+    }
+
+    private Task<CertificateStatus> StatusAsync(long certificateId) =>
+        factory.WithDbAsync(db => db.Certificates.Where(c => c.Id == certificateId).Select(c => c.Status).SingleAsync());
+}

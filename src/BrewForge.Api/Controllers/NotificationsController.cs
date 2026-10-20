@@ -1,3 +1,4 @@
+using BrewForge.Application.Common;
 using BrewForge.Application.Notifications;
 using Microsoft.AspNetCore.Mvc;
 
@@ -18,6 +19,29 @@ public sealed class NotificationsController(NotificationService notifications) :
     /// </summary>
     [HttpGet("push/config")]
     public PushConfigDto PushConfig() => notifications.PushConfig();
+
+    /// <summary>
+    /// The caller's notifications in the application, latest first, paged.
+    /// <c>?unread=true</c> lists those not read yet.
+    /// </summary>
+    [HttpGet("me/notifications")]
+    public Task<PagedResult<NotificationDto>> Inbox([FromQuery] PageQuery paging, [FromQuery] bool? unread,
+        CancellationToken cancellationToken) =>
+        notifications.MyNotificationsAsync(paging, unread, cancellationToken);
+
+    /// <summary><c>{ count }</c> of the caller's unread notifications, for a badge.</summary>
+    [HttpGet("me/notifications/unread-count")]
+    public Task<UnreadCountDto> UnreadCount(CancellationToken cancellationToken) =>
+        notifications.UnreadCountAsync(cancellationToken);
+
+    [HttpPost("me/notifications/{id:long}/read")]
+    public Task<NotificationDto> MarkRead(long id, CancellationToken cancellationToken) =>
+        notifications.MarkReadAsync(id, cancellationToken);
+
+    /// <summary>Marks every unread notification of the caller read: <c>{ count }</c> of those it marked.</summary>
+    [HttpPost("me/notifications/read-all")]
+    public Task<UnreadCountDto> MarkAllRead(CancellationToken cancellationToken) =>
+        notifications.MarkAllReadAsync(cancellationToken);
 
     [HttpGet("me/push-subscriptions")]
     public Task<IReadOnlyList<PushSubscriptionDto>> Mine(CancellationToken cancellationToken) =>

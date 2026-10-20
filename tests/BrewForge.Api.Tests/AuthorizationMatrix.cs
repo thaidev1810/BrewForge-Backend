@@ -135,6 +135,11 @@ public static class AuthorizationMatrix
         new("GET", "/recipes/{id}/versions", HeadOffice),
         new("POST", "/recipes/{id}/versions", Specialist),
         new("GET", "/recipe-versions/{id}", HeadOffice),
+        new("GET", "/recipe-versions/{id}/diff", HeadOffice),
+        new("PUT", "/recipe-versions/{id}/variants", Specialist),
+        new("GET", "/recipe-versions/{id}/variants/{code}", HeadOffice),
+        new("POST", "/recipe-versions/{id}/extract-document", Specialist),
+        new("GET", "/recipe-versions/{id}/extraction", HeadOffice),
         new("PUT", "/recipe-versions/{id}", Specialist),
         new("POST", "/recipe-versions/{id}/generate-draft", Specialist),
         new("POST", "/recipe-versions/{id}/validate", [RoleName.RdSpecialist, RoleName.RdManager]),
@@ -144,6 +149,16 @@ public static class AuthorizationMatrix
         new("POST", "/recipe-versions/{id}/release", Manager),
         new("POST", "/recipe-versions/{id}/rollback", Manager),
         new("POST", "/recipes/import-existing", Specialist),
+
+        // Feedback on a recipe from the counter. Not in the contract.
+        new("POST", "/recipes/{id}/feedback", [RoleName.Trainee, RoleName.Trainer, RoleName.BranchManager]),
+        new("GET", "/recipes/{id}/feedback-summary", HeadOffice),
+        new("GET", "/recipe-feedback", Everyone),
+        new("GET", "/recipe-feedback/{id}", Everyone),
+        new("POST", "/recipe-feedback/{id}/accept", [RoleName.RdSpecialist, RoleName.RdManager]),
+        new("POST", "/recipe-feedback/{id}/reject", [RoleName.RdSpecialist, RoleName.RdManager]),
+        new("POST", "/recipe-feedback/{id}/address", [RoleName.RdSpecialist, RoleName.RdManager]),
+
 
         // 5. Course authoring
         new("GET", "/courses", [RoleName.Trainer, RoleName.TrainingManager, RoleName.RdManager]),
@@ -157,6 +172,9 @@ public static class AuthorizationMatrix
         new("POST", "/course-modules/{id}/lessons", TrainerOnly),
         new("PUT", "/lessons/{id}", TrainerOnly),
         new("DELETE", "/lessons/{id}", TrainerOnly),
+        new("POST", "/lessons/{id}/media", TrainerOnly),
+        new("GET", "/lesson-media/{id}", Everyone),
+        new("DELETE", "/lesson-media/{id}", TrainerOnly),
         new("GET", "/courses/{id}/quiz", TrainerOnly),
         new("PUT", "/courses/{id}/quiz", TrainerOnly),
         new("GET", "/courses/{id}/quiz/questions", TrainerOnly),
@@ -181,6 +199,7 @@ public static class AuthorizationMatrix
         new("POST", "/training-classes/{id}/sessions", TrainerOnly),
         new("POST", "/training-classes/{id}/open", TrainerOnly),
         new("POST", "/training-classes/{id}/close", TrainerOnly),
+        new("POST", "/training-classes/{id}/cancel", TrainerOnly),
         new("PUT", "/training-sessions/{id}", TrainerOnly),
         new("DELETE", "/training-sessions/{id}", TrainerOnly),
         new("GET", "/training-sessions/{id}/attendance", TrainerOnly),
@@ -191,6 +210,7 @@ public static class AuthorizationMatrix
         new("GET", "/enrollments/{id}", Learners),
         new("GET", "/enrollments/{id}/modules", Learners),
         new("POST", "/enrollments/{id}/modules/{moduleId}/complete", Learners),
+        new("POST", "/enrollments/{id}/lessons/{lessonId}/complete", Learners),
         new("GET", "/enrollments/{id}/eligibility", Learners),
         new("POST", "/enrollments/{id}/close", [RoleName.TrainingManager]),
         new("POST", "/enrollments/{id}/reset", [RoleName.TrainingManager]),
@@ -205,7 +225,16 @@ public static class AuthorizationMatrix
         new("GET", "/me/certificates", Learners),
         new("GET", "/certificates/{id}", [RoleName.Trainee, RoleName.Trainer, RoleName.QualityAuditor]),
 
+        // The learning path. Not in the contract.
+        new("GET", "/me/learning-path", Learners),
+        new("GET", "/learning-paths/{userId}", [RoleName.Trainer, RoleName.TrainingManager]),
+        new("POST", "/learning-paths/{userId}/assign", [RoleName.Trainer, RoleName.TrainingManager]),
+
         // Web Push for the caller. Not in the contract.
+        new("GET", "/me/notifications", Everyone),
+        new("GET", "/me/notifications/unread-count", Everyone),
+        new("POST", "/me/notifications/{id}/read", Everyone),
+        new("POST", "/me/notifications/read-all", Everyone),
         new("GET", "/push/config", Everyone),
         new("GET", "/me/push-subscriptions", Everyone),
         new("POST", "/me/push-subscriptions", Everyone),

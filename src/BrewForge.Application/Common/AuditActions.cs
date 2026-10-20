@@ -12,7 +12,14 @@ public static class AuditActions
 
     public const string Validate = "VALIDATE";
     public const string Submit = "SUBMIT";
+    public const string UpdateVariants = "UPDATE_VARIANTS";
     public const string AiDraft = "AI_DRAFT";
+
+    /// <summary>
+    /// A draft was transcribed from an existing recipe document. The entry keeps the document and, step by
+    /// step, the passage the model says it took the step from and whether that passage is in the document.
+    /// </summary>
+    public const string AiExtract = "AI_EXTRACT";
 
     /// <summary>
     /// One automatic AI repair of a draft. The schema has no counter column
@@ -28,6 +35,13 @@ public static class AuditActions
     public const string ReleaseRefused = "RELEASE_REFUSED";
     public const string Supersede = "SUPERSEDE";
     public const string Rollback = "ROLLBACK";
+
+    /// <summary>R&amp;D agreed with a remark on a recipe.</summary>
+    public const string AcceptFeedback = "ACCEPT_FEEDBACK";
+    public const string RejectFeedback = "REJECT_FEEDBACK";
+
+    /// <summary>R&amp;D named the later version that took an accepted remark in.</summary>
+    public const string AddressFeedback = "ADDRESS_FEEDBACK";
     public const string ImportExisting = "IMPORT_EXISTING";
 
     public const string Delete = "DELETE";
@@ -35,6 +49,8 @@ public static class AuditActions
     public const string UpdateQuiz = "UPDATE_QUIZ";
     public const string AddQuestion = "ADD_QUESTION";
     public const string UpdateChecklist = "UPDATE_CHECKLIST";
+    public const string AddLessonMedia = "ADD_LESSON_MEDIA";
+    public const string RemoveLessonMedia = "REMOVE_LESSON_MEDIA";
     public const string Approve = "APPROVE";
     public const string Return = "RETURN";
     public const string Rebuild = "REBUILD";
@@ -45,8 +61,16 @@ public static class AuditActions
     public const string Open = "OPEN";
     public const string Close = "CLOSE";
     public const string Assign = "ASSIGN";
+
+    /// <summary>A learner was told their course is due soon. Said once per enrolment; the entry is the record of it.</summary>
+    public const string RemindDue = "REMIND_DUE";
+
+    /// <summary>A course past its due date was reported to the learner and the training managers. Once per enrolment.</summary>
+    public const string EscalateOverdue = "ESCALATE_OVERDUE";
+
     public const string Reset = "RESET";
     public const string CompleteModule = "COMPLETE_MODULE";
+    public const string CompleteLesson = "COMPLETE_LESSON";
     public const string RecordAttendance = "RECORD_ATTENDANCE";
     public const string CorrectAttendance = "CORRECT_ATTENDANCE";
     public const string QuizAttempt = "QUIZ_ATTEMPT";
@@ -95,6 +119,7 @@ public static class AuditEntities
     public const string StandardEquipment = "StandardEquipment";
     public const string Recipe = "Recipe";
     public const string RecipeVersion = "RecipeVersion";
+    public const string RecipeFeedback = "RecipeFeedback";
     public const string Course = "Course";
     public const string CourseModule = "CourseModule";
     public const string Lesson = "Lesson";

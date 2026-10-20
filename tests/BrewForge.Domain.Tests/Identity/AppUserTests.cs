@@ -53,6 +53,15 @@ public sealed class AppUserTests
         Assert.Equal([RoleName.Trainee, RoleName.BranchManager], confined);
     }
 
+    [Fact]
+    public void A_trainer_is_confined_to_a_branch_exactly_when_they_belong_to_one()
+    {
+        Assert.True(RoleName.Trainer.IsConfinedTo(7));
+        Assert.False(RoleName.Trainer.IsConfinedTo(null));
+        Assert.True(RoleName.Trainee.IsConfinedTo(null));
+        Assert.False(RoleName.RdManager.IsConfinedTo(7));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("not-an-email")]

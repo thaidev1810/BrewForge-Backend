@@ -25,6 +25,17 @@ public sealed class Ingredient : INeverDeleted
     /// <summary>Hours from preparation during which the ingredient may be used (BR-11).</summary>
     public int ShelfLifeHours { get; private set; }
     public string? StorageRule { get; private set; }
+
+    /// <summary>
+    /// The lowest and the highest water temperature this leaf is brewed at,
+    /// in degrees Celsius. Both or neither: most ingredients are not brewed
+    /// and have no window.
+    /// </summary>
+    public decimal? BrewTempMinC { get; private set; }
+    public decimal? BrewTempMaxC { get; private set; }
+
+    public bool HasBrewingWindow => BrewTempMinC is not null && BrewTempMaxC is not null;
+
     public CatalogStatus Status { get; private set; } = CatalogStatus.Active;
 
     public bool IsActive => Status == CatalogStatus.Active;
@@ -57,6 +68,20 @@ public sealed class Ingredient : INeverDeleted
         Unit = unit;
         ShelfLifeHours = shelfLifeHours;
         StorageRule = storageRule;
+    }
+
+    /// <summary>Sets or, with two nulls, removes the temperature window the leaf is brewed in.</summary>
+    public void SetBrewingWindow(decimal? minC, decimal? maxC)
+    {
+        new FieldErrors()
+            .Check(minC is null == maxC is null, "brewTempMaxC", "the window needs both a minimum and a maximum, or neither")
+            .Check(minC is null or >= 0, "brewTempMinC", "must not be below 0")
+            .Check(maxC is null or <= 100, "brewTempMaxC", "must not be above 100")
+            .Check(minC is null || maxC is null || minC <= maxC, "brewTempMinC", "must not be above the maximum")
+            .ThrowIfAny();
+
+        BrewTempMinC = minC is { } min ? decimal.Round(min, 1) : null;
+        BrewTempMaxC = maxC is { } max ? decimal.Round(max, 1) : null;
     }
 
     /// <summary>An ingredient is never deleted, only deactivated (BR-16).</summary>

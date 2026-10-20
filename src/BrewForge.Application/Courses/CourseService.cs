@@ -14,8 +14,8 @@ namespace BrewForge.Application.Courses;
 public sealed record TrainerOptionDto(long Id, string FullName, long? BranchId, bool Eligible, string? Reason);
 
 /// <summary>UC-11 to UC-13 and UC-28: course authoring and approval (SCR-13 to SCR-16, SCR-30).</summary>
-public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer renderer, ICurrentUser currentUser,
-    TimeProvider clock)
+public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer renderer, ILessonMediaStorage media,
+    ICurrentUser currentUser, TimeProvider clock)
 {
     private static readonly SortMap<Course> Sorting = new SortMap<Course>("title", c => c.Id)
         .Add("id", c => c.Id)
@@ -119,21 +119,26 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
 
         // BR-20 before the duplicate check: a draft version is refused for what it is.
         Course.EnsureUsableAsSource(version);
-        if (request.CourseType == CourseType.Product && version is not null)
+        // One course of a kind per version: the PRODUCT course, and the RECERTIFICATION course beside it.
+        if (request.CourseType is CourseType.Product or CourseType.Recertification && version is not null)
         {
             var existing = await db.Courses.AsNoTracking()
-                .Where(c => c.RecipeVersionId == version.Id && c.CourseType == CourseType.Product
+                .Where(c => c.RecipeVersionId == version.Id && c.CourseType == request.CourseType
                             && c.State != CourseState.Archived)
                 .Select(c => (long?)c.Id).FirstOrDefaultAsync(cancellationToken);
             if (existing is not null)
             {
                 throw DomainException.RuleViolation("BR-18",
-                    $"A course already exists for version {version.VersionNo}. Open the existing course instead of creating a duplicate.",
+                    $"A {request.CourseType.Value.Code()} course already exists for version {version.VersionNo}. Open the existing course instead of creating a duplicate.",
                     "MSG-W04", new ErrorDetail("existingCourseId", existing.Value.ToString()));
             }
         }
 
-        var course = Course.Create(request.CourseType!.Value, request.Title, version, currentUser.RequireUserId());
+        var previous = request.CourseType == CourseType.Recertification && version is not null
+            ? await db.FindPreviousVersionAsync(version, cancellationToken)
+            : null;
+        var course = Course.Create(request.CourseType!.Value, request.Title, version, currentUser.RequireUserId(), previous);
+
         db.Courses.Add(course);
         db.Audit(AuditEntities.Course, () => course.Id, AuditActions.Create, new
         {
@@ -165,8 +170,12 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
     {
         var (course, module) = await FindModuleAsync(moduleId, cancellationToken);
         var version = await BoundVersionAsync(course, cancellationToken);
+        var previous = course.CourseType == CourseType.Recertification
+            ? await db.FindPreviousVersionAsync(version, cancellationToken)
+            : null;
 
-        course.RegenerateModule(module, version);
+        course.RegenerateModule(module, version, previous);
+
 
         db.Audit(AuditEntities.CourseModule, () => module.Id, AuditActions.Regenerate,
             new { type = module.ModuleType.Code(), course.RecipeVersionId });
@@ -208,12 +217,87 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
     public async Task DeleteLessonAsync(long lessonId, CancellationToken cancellationToken)
     {
         var (course, module, lesson) = await FindLessonAsync(lessonId, cancellationToken);
+        var pictures = lesson.Media.Select(media => media.StorageKey).ToList();
 
         course.RemoveLesson(module, lesson);
 
         db.Audit(AuditEntities.Lesson, () => lessonId, AuditActions.Delete, new { module.Id, lesson.Title });
         await db.SaveChangesAsync(cancellationToken);
+        // The rows went with the lesson; the files go once that is certain.
+        foreach (var key in pictures) await media.DeleteAsync(key, CancellationToken.None);
     }
+
+    // ---------------------------------------------------------------- pictures of a lesson
+
+    /// <summary>
+    /// Adds a picture to a lesson of a draft course. The first bytes of the
+    /// file decide what it is, not its name. 409 BR-30 on a GENERATED module,
+    /// which is the recipe's and not the trainer's to illustrate.
+    /// </summary>
+    public async Task<LessonMediaDto> AddLessonMediaAsync(long lessonId, string? fileName, Stream content,
+        CancellationToken cancellationToken)
+    {
+        var (course, module, lesson) = await FindLessonAsync(lessonId, cancellationToken);
+        // Refused before a byte is read.
+        course.EnsureAcceptsLessonMedia(module, lesson);
+
+        // A picture is small: it is read whole, so that what it is can be told before it is kept.
+        using var buffer = new MemoryStream();
+        var chunk = new byte[81920];
+        int read;
+        while ((read = await content.ReadAsync(chunk, cancellationToken)) > 0)
+        {
+            if (buffer.Length + read > LessonMedia.MaxBytes) LessonMedia.EnsureSize(LessonMedia.MaxBytes + 1);
+            buffer.Write(chunk, 0, read);
+        }
+        LessonMedia.EnsureSize(buffer.Length);
+        var (extension, contentType) = LessonMedia.Format(fileName,
+            buffer.GetBuffer().AsSpan(0, (int)Math.Min(buffer.Length, LessonMedia.SignatureBytes)));
+
+        buffer.Position = 0;
+        var stored = await media.SaveAsync(buffer, extension, LessonMedia.MaxBytes, cancellationToken)
+                     ?? throw DomainException.Validation("The picture is too large.", new ErrorDetail("file", "is too large"));
+        try
+        {
+            var picture = course.AddLessonMedia(module, lesson, currentUser.RequireUserId(),
+                Path.GetFileName(fileName!.Trim()), contentType, stored.SizeBytes, stored.Sha256, stored.Key, clock.GetUtcNow());
+            db.Audit(AuditEntities.Lesson, () => lesson.Id, AuditActions.AddLessonMedia,
+                new { picture.FileName, picture.SizeBytes, picture.Sha256 });
+            await db.SaveChangesAsync(cancellationToken);
+            return LessonMediaDto.From(picture);
+        }
+        catch
+        {
+            // A file nothing refers to is not kept.
+            await media.DeleteAsync(stored.Key, CancellationToken.None);
+            throw;
+        }
+    }
+
+    public async Task DeleteLessonMediaAsync(long mediaId, CancellationToken cancellationToken)
+    {
+        var lessonId = await db.LessonMedia.Where(m => m.Id == mediaId).Select(m => (long?)m.LessonId)
+                           .SingleOrDefaultAsync(cancellationToken)
+                       ?? throw DomainException.NotFound("Lesson picture", mediaId);
+        var (course, module, lesson) = await FindLessonAsync(lessonId, cancellationToken);
+        var picture = lesson.Media.Single(m => m.Id == mediaId);
+
+        course.RemoveLessonMedia(module, lesson, picture);
+
+        db.Audit(AuditEntities.Lesson, () => lesson.Id, AuditActions.RemoveLessonMedia, new { picture.FileName });
+        await db.SaveChangesAsync(cancellationToken);
+        await media.DeleteAsync(picture.StorageKey, CancellationToken.None);
+    }
+
+    /// <summary>The picture itself. Course content is not secret within the chain: any signed-in user may see it.</summary>
+    public async Task<LessonMediaContent> OpenLessonMediaAsync(long mediaId, CancellationToken cancellationToken)
+    {
+        var picture = await db.LessonMedia.AsNoTracking().SingleOrDefaultAsync(m => m.Id == mediaId, cancellationToken)
+                      ?? throw DomainException.NotFound("Lesson picture", mediaId);
+        var content = media.OpenRead(picture.StorageKey) ?? throw DomainException.NotFound("Lesson picture", mediaId);
+        return new LessonMediaContent(content, picture.ContentType, picture.FileName);
+    }
+
 
     // ---------------------------------------------------------------- quiz and checklist
 
@@ -224,10 +308,10 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
     {
         var course = await FindAsync(courseId, cancellationToken);
 
-        course.UpdateQuiz(request.Title, request.PassScore);
+        course.UpdateQuiz(request.Title, request.PassScore, request.DrawPerModule);
 
         db.Audit(AuditEntities.Course, () => course.Id, AuditActions.UpdateQuiz,
-            new { course.Quiz.Title, course.Quiz.PassScore });
+            new { course.Quiz.Title, course.Quiz.PassScore, course.Quiz.DrawPerModule });
         await db.SaveChangesAsync(cancellationToken);
         return CourseRenderer.ToDto(course.Quiz);
     }
@@ -335,7 +419,7 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
 
     internal static IQueryable<Course> WithContent(IQueryable<Course> courses) =>
         courses
-            .Include(course => course.Modules).ThenInclude(module => module.Lessons)
+            .Include(course => course.Modules).ThenInclude(module => module.Lessons).ThenInclude(lesson => lesson.Media)
             .Include(course => course.Quiz).ThenInclude(quiz => quiz.Questions);
 
     internal async Task<Course> FindAsync(long id, CancellationToken cancellationToken) =>

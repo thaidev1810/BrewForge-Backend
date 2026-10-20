@@ -40,6 +40,7 @@ public static class DependencyInjection
         services.AddScoped<RecipeValidationService>();
         services.AddScoped<RecipeDraftingService>();
         services.AddScoped<RecipeReleaseService>();
+        services.AddScoped<RecipeFeedbackService>();
 
         services.AddScoped<CourseRenderer>();
         services.AddScoped<CourseService>();
@@ -48,6 +49,7 @@ public static class DependencyInjection
         services.AddScoped<TrainingRegulationService>();
         services.AddScoped<TrainingClassService>();
         services.AddScoped<LearningService>();
+        services.AddScoped<LearningPathService>();
         services.AddScoped<AssessmentService>();
         services.AddScoped<LaunchReadinessService>();
         services.AddScoped<LaunchHistory>();

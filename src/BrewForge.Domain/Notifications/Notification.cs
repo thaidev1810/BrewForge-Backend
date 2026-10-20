@@ -50,6 +50,12 @@ public sealed class Notification
 
     public bool IsProcessed => ProcessedAt is not null;
 
+    /// <summary>When the user read it in the application; null while unread. Delivery does not read it.</summary>
+    public DateTimeOffset? ReadAt { get; private set; }
+
+    /// <summary>The user has read it. Reading it again keeps the first time.</summary>
+    public void MarkRead(DateTimeOffset now) => ReadAt ??= now;
+
     /// <summary>
     /// Records one run of the dispatcher over this notification. A channel
     /// that is already settled keeps its status: what was sent is not sent

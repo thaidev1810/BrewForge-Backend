@@ -62,13 +62,17 @@ duty can be demonstrated. They all share the password in
 | `admin` | ADMIN | — |
 | `rdspec` | RD_SPECIALIST | — |
 | `rdmanager`, `rdmanager2` | RD_MANAGER | — |
-| `trainer` | TRAINER | — |
+| `trainer` | TRAINER | — (the whole chain) |
+| `trainer1` / `trainer2` | TRAINER | B01 / B02 (confined to it) |
 | `auditor` | QUALITY_AUDITOR | — |
 | `trainingmgr` | TRAINING_MANAGER | — |
 | `branchmgr` / `branchmgr2` | BRANCH_MANAGER | B01 / B02 |
 | `trainee`, `trainee2` / `trainee3`, `trainee4` | TRAINEE | B01 / B02 |
 
-Also seeded: three branches, sixteen ingredients, seven equipment classes and
+Also seeded: the induction course, with the seeded trainees and trainer
+certified on it; a published PRODUCT course on `R07` (Cà phê sữa đá), the next
+stage of every seeded trainee's learning path and already assigned to them, so
+signing in as `trainee` shows a course to study; three branches, sixteen ingredients, seven equipment classes and
 eleven recipes — nine released (`R01`–`R08`, `R10`), one validated and waiting
 for review (`R09`), and one draft that deliberately fails all three validator
 checks (`R99`) so the validation and repair screens have something to show.
@@ -104,7 +108,7 @@ dotnet test
 
 ```
 db/migrations/        The schema. Authoritative; EF Core never creates or alters tables. 001 is the developer pack's, the later scripts are ours.
-docs/reference/       The fixed JSON schema of the LLM call. The rest of the developer pack is not published here.
+docs/reference/       The JSON schema of the LLM call: the developer pack's, with the temperature and the pressure of a step added. The rest of the pack is not published here.
 samples/              Demonstration files that are also test fixtures.
 src/BrewForge.Domain          Entities, state machines, validators. No dependencies.
 src/BrewForge.Application     Use cases, DTOs, ports (persistence, tokens, language model).
@@ -125,8 +129,8 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-07 non-conforming answer retried once, then rejected | `RecipeDraftParser`, `RecipeDraftingService` | `RecipeDraftParserTests`, `AiDraftingTests` |
 | BR-08 a partial pass is a failure | `ValidationReport.Passed`, `RecipeVersion.Submit` | `RecipeValidatorTests` |
 | BR-09 dependency graph is acyclic | `StepDependencyGraph`, `OrderingCheck` | `StepDependencyGraphTests`, `OrderingCheckTests` |
-| BR-10 dose within the equipment range | `EquipmentCheck`, `UnitConverter` | `EquipmentCheckTests`, `UnitConverterTests` |
-| BR-11 ingredient within its shelf life | `IngredientCheck` | `IngredientCheckTests` |
+| BR-10 dose within the equipment range, a temperature and a pressure included | `EquipmentCheck`, `UnitConverter` | `EquipmentCheckTests`, `UnitConverterTests`, `BrewingParameterTests.BR_10_*`, `BrewingParameterApiTests.BR_10_*` |
+| BR-11 ingredient within its shelf life, and a leaf within the window it is brewed in | `IngredientCheck`, `Ingredient.SetBrewingWindow` | `IngredientCheckTests`, `BrewingParameterTests.BR_11_*`, `BrewingParameterApiTests.BR_11_*` |
 | BR-12 approver is not the author | `RecipeVersion.EnsureReleasable`; DB check | `RecipeReleaseTests.BR_12_*`, `ReleaseTests.BR_12_*` |
 | BR-16 master data is never deleted | no DELETE route; `INeverDeleted` guard in the DbContext | `MasterDataIsNeverDeletedTests`, `MasterDataTests` (domain) |
 | BR-18 a course is bound to one version | `Course.RebuildOn` is the only way a binding moves; index `ux_course_one_per_version` | `CourseTests.BR_18_*`, `CourseApiTests.BR_18_*` |
@@ -166,6 +170,17 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-37 a branch audit is never changed or deleted; a corrective action goes OPEN, IN_PROGRESS, CLOSED and a closed one is final | `BranchAudit` has no mutators; `CorrectiveAction.Start`, `Close`; `INeverDeleted` guard; no PUT or DELETE route | `BranchAuditApiTests` |
 | BR-38 a branch is audited against a released version only; score and verdict are computed, not sent | `QualityAuditService.CreateAsync`, `BranchAudit.Record` | `BranchAuditApiTests` |
 | BR-39 a practical is scheduled after the quiz is passed, one open appointment per enrolment, in the future | `PracticalSchedule.Create`, `Reschedule`; index `ux_practical_schedule_open` | `SupportApiTests.Practical_is_scheduled_*` |
+| Two versions of a recipe are compared step by step | `RecipeVersionDiff.Between` | `RecipeVersionDiffTests`, `RecertificationApiTests.Two_versions_*` |
+| A recertification course teaches what changed, to staff certified before, and its certificate replaces the flagged one | `Course.WhatToRelearn`, `CourseModuleGenerator.Generate`, `TrainingClassService.OnlyCertifiedBeforeAsync`, `Enrollment.TryCertify` | `RecertificationCourseTests`, `AssessmentTests.Certificate_on_a_newer_version_*`, `RecertificationApiTests` |
+| A course is not assigned to somebody who has not passed its prerequisite | `LearningPathService.OnlyWithPrerequisiteAsync`, `MissingPrerequisiteAsync` | `LearningPathApiTests.Course_is_not_opened_*` |
+| New staff are put on their path, moved on when they pass a stage, and reminded of due dates | `LearningPathService.AssignOpenStagesAsync`, `RemindAsync`; `TrainingReminderScheduler` | `LearningPathApiTests` |
+| A document of an existing drink is transcribed, each step held to the passage it quotes | `RecipeExtractSchema`, `SourceGrounding`, `RecipeExtractionParser`, `RecipeDraftingService.ExtractAsync` | `DocumentExtractionUnitTests`, `DocumentExtractionApiTests` |
+| A variant is content of its version and must pass like it | `RecipeVariant.Apply`, `RecipeVersion.ReplaceVariants`, `AsServed`, `RecipeValidator.Validate`; triggers on `recipe_variant` | `RecipeVariantTests`, `RecipeVariantApiTests` |
+| A picture of a lesson is a picture by its content, and goes only where the trainer writes | `LessonMedia.Format`, `CourseModule.EnsureAcceptsMedia`, `Course.AddLessonMedia` | `LessonMediaTests`, `LessonMediaApiTests` |
+| A quiz with a draw gives each attempt so many questions of every module, and marks it against those | `Quiz.DrawFor`, `QuestionsPerAttempt`, `Enrollment.AttemptQuiz`, `NextAttemptNo` | `QuestionDrawTests`, `QuestionDrawApiTests` |
+| Feedback on how a drink is made comes from staff certified on it; a customer's comes from a branch that sells it | `RecipeFeedback.FromStaff`, `FromCustomer`, `RecipeFeedbackService.SubmitAsync` | `RecipeFeedbackTests`, `RecipeFeedbackApiTests.Staff_*`, `Customer_*`, `Branch_*` |
+| A remark is reviewed once, and addressed only by a later version of the same drink | `RecipeFeedback.Accept`, `Reject`, `MarkAddressed` | `RecipeFeedbackTests`, `RecipeFeedbackApiTests.Research_*`, `Accepted_remark_*` |
+| An accepted staff remark is read in the course of the drink until a version of the recipe says it | `RecipeFeedback.IsFieldNoteFor`, `CourseRenderer.FieldNotesAsync` (rendered, never stored) | `RecipeFeedbackTests.*field_note*`, `CourseFieldNotesApiTests` |
 | Authorization matrix | policies per role; branch query filters | `AuthorizationMatrixTests`, `BranchScopeTests` |
 | Append-only audit trail | `AuditLog` has no mutators; DbContext guard; DB trigger | `AuditTrailTests` |
 
@@ -236,9 +251,10 @@ entries of the version, which cannot be reset because the log is append-only.
 **The equipment check and units.** A step is range-checked on the quantities
 whose unit has the dimension of the machine's dosing unit. Water in millilitres
 on a brewer dosed in grams of leaf is not a dose of that machine. A class dosed
-in `sec` checks the step's duration. A class dosed in `degC` or `bar` has no
-numeric field to compare against in the schema, so only its catalogue
-membership is checked. There is no density table: grams never become
+in `sec` checks the step's duration. A class dosed in `degC` or `bar`
+checks the temperature or the pressure the step states, which the pack's schema
+had no column for and migration 004 added; see "Brewing parameters" under
+"Beyond the developer pack". There is no density table: grams never become
 millilitres.
 
 **Shelf life.** The window of an ingredient runs from the start of the first
@@ -312,8 +328,9 @@ the user they are for. The pack's schema has no notification table; since
 migration 003 they are also queued and delivered by e-mail and Web Push, as
 described under "Beyond the developer pack".
 
-**Prerequisites** of a regulation are reported by `GET /training-needs` but
-not enforced when a course is assigned.
+**Prerequisites** of a regulation are reported by `GET /training-needs`, and
+enforced when a course is assigned: see "The learning path" under "Beyond the
+developer pack".
 
 **The quiz as the learner sees it.** `GET /enrollments/{id}/quiz` is not in the
 contract table; the quiz screen needs the questions, and the trainer's
@@ -571,9 +588,307 @@ notification.
   works, as with the language model.
 - Two instances of the API would both send: run the dispatcher in one.
 
+**Brewing parameters** (`007_brewing_parameters.sql`: `recipe_step.temperature_c`
+and `pressure_bar`, `ingredient.brew_temp_min_c` and `brew_temp_max_c`). In the
+pack a temperature exists only as the free text of a technique gate ("Water at
+90 C"), which a trainer reads and no check can. For a tea chain that figure is
+the recipe.
+
+- A step may state `temperatureC` (0 to 100, one decimal) and `pressureBar`
+  (above 0, at most 20). Most steps state neither. The released versions that
+  were there before keep NULL, and their content hash is unchanged: the two
+  figures enter the hash only where a step states one.
+- **BR-10, completed.** A step on an equipment class dosed in `degC` must state
+  its temperature, and one on a class dosed in `bar` its pressure, within the
+  range of the class. Untold, it is a violation: a kettle that is not told its
+  setting is not left unchecked.
+- **BR-11, extended.** An ingredient may have a brewing window, the range of
+  water temperature the leaf is brewed at (`brewTempMinC`, `brewTempMaxC` on
+  the ingredient; both or neither). A step that uses the leaf and states its
+  temperature is held to the window. A step that states none is not, so the
+  recipes written before are not made invalid by a leaf gaining a window.
+- The language model is told the window of each leaf and may answer with both
+  figures: `recipe-draft.schema.json` gained `temperatureC` and `pressureBar`,
+  both optional. This is the one file of the pack that was changed. The schema
+  of an extraction is derived from it and gained them with it.
+- A changed temperature or pressure is a changed step in the comparison of two
+  versions, and so reaches a recertification course.
+- Seeded: the brewing windows of the four tea leaves (oolong 85-95, black tea
+  90-100, jasmine 75-85, matcha 70-80), set also on a database seeded earlier,
+  and the water temperature of the three brewed teas of the reference recipes.
+
+**Recipe variants** (`008_recipe_variants.sql`: tables `recipe_variant` and
+`recipe_variant_ingredient`, with two triggers). A drink is sold in sizes and
+hot or iced; the pack's schema has one set of quantities per version.
+
+- A variant is the same procedure with the quantities scaled: a `scale` for
+  the whole drink, and a scale of its own for an ingredient that does not
+  follow it (the leaf of a large tea that is brewed as ever is 1; the ice of a
+  hot drink is 0, which leaves it out). It has no steps of its own, so it can
+  prescribe nothing the version does not.
+- `PUT /recipe-versions/{id}/variants` replaces the variants of a draft, and
+  `GET /recipe-versions/{id}/variants/{code}` reads the version as one variant
+  serves it, each quantity beside the one the version prescribes. The version
+  itself lists its variants.
+- **BR-08 covers every serving.** The equipment and ingredient checks are run
+  again on the quantities of each variant, and what they find is reported
+  under the same check with `variant` naming the serving. A large size that
+  puts 27 g through a brewer that takes 25 fails the version, which cannot
+  then be submitted. A violation of the version as written is reported once,
+  not again for every variant.
+- **BR-01 covers them.** Variants are content: they change only while the
+  version is a draft, they are in the content hash (only where there are any,
+  so earlier hashes stand), and after release the application refuses a change
+  and two triggers refuse one that goes around it. A copy of a version and a
+  rollback carry the variants over.
+- Replacing the steps of a draft drops the scale of an ingredient the recipe
+  no longer uses. Courses and sales are per version, not per variant: a
+  trainee is certified on the drink, and a cup sold is a cup of the drink.
+
+**The pictures of a lesson** (`009_lesson_media.sql`: table `lesson_media`).
+The pack gives a lesson one `media_url`, "image upload or embedded video
+link", and nowhere to keep an upload. A lesson may now carry up to eight
+pictures, in order; `media_url` stays the link of an embedded video, and a
+video is not uploaded to a lesson.
+
+- `POST /lessons/{id}/media` (multipart, field `file`; PNG, JPEG, WebP or GIF,
+  at most 5 MB) adds a picture, `DELETE /lesson-media/{id}` removes one, and
+  `GET /lesson-media/{id}` serves it to any signed-in user, since a learner
+  sees it in the lesson. Every rendering of a lesson lists its `media`, each
+  with the `url` it is served at.
+- What a file is, is decided by its first bytes, and its name has to agree: a
+  script named `pour.png` is refused, and so is a PNG named `pour.jpg`.
+- A picture goes where the trainer's own text goes. A lesson of a GENERATED
+  module belongs to the recipe and takes none (`409 BR-30`); a technique gate
+  of the MIXED module does. Pictures are added and removed only while the
+  course is a draft, like everything else about it.
+- Deleting a lesson deletes its pictures and their files. The files are kept
+  under `Storage:LessonMediaRoot` (`storage/lesson-media` by default), behind
+  `ILessonMediaStorage`, on the same local file store as the recordings of
+  practicals.
+
+**The quiz as a bank of questions** (`010_question_draw.sql`: column
+`quiz.draw_per_module`). In the pack a quiz is its questions, all of them, the
+same on every attempt, so a trainee who fails meets the very same questions on
+the retake. A quiz may now draw: each attempt is given so many questions of
+each module, and the next attempt is given others.
+
+- `PUT /courses/{id}/quiz` takes `drawPerModule` (1 to 50; 0 turns the draw
+  off; left out, it stays as it is), while the course is a draft like the rest
+  of the quiz. The quiz answers with `drawPerModule` and `questionsPerAttempt`,
+  what the draw comes to with the questions there are now.
+- The draw is per module, not over the whole quiz: a module with fewer
+  questions than the draw is asked all of them, and no module is ever left
+  out. BR-35 keeps its point, and a failed attempt still says which modules to
+  study again.
+- Nothing about a draw is stored. It is fixed by the quiz, the enrolment and
+  the number of the attempt (a hash of the four ids orders the questions of a
+  module), so `GET /enrollments/{id}/quiz` serves the same questions however
+  often it is asked, with the `attemptNo` they are for, and
+  `POST /enrollments/{id}/quiz-attempts` is marked against exactly those. The
+  score is over the questions drawn; an answer to a question that was not
+  drawn is refused (`400`), not ignored.
+- Attempt numbers are never reused, across a reset as well, so a retake is
+  always another draw. It may share questions with the one before: a bank
+  larger than the draw is what makes them differ.
+
+**Feedback from the counter** (`011_recipe_feedback.sql`: table
+`recipe_feedback`). In the pack a recipe travels one way: R&D writes it, staff
+are trained on it, the counter makes it. What somebody learns making the drink
+a hundred times, and what a customer says about it, has no way back. A remark
+is now a record, about one released version, that R&D reads and answers.
+
+- `POST /recipes/{id}/feedback` takes `{ source, category, content, rating?,
+  recipeVersionId?, recipeStepId? }`; `category` is `PREPARATION_NOTE`,
+  `COMMON_MISTAKE`, `TASTE` or `OTHER`.
+  - `STAFF`: from a trainee or a trainer who was certified on a version of the
+    drink, whatever became of the certificate since (`409
+    FEEDBACK_REQUIRES_TRAINING` otherwise). It is about the latest version
+    they were certified on unless they name one, and may name the step it
+    concerns. Staff do not rate.
+  - `CUSTOMER`: what a customer said, written down by a trainee or the branch
+    manager of a branch where the drink is LIVE (`409 FEEDBACK_NOT_ON_SALE`
+    otherwise), with the customer's `rating`, 1 to 5. The version is the one
+    that branch sells; like the version of a sale (BR-24), nobody supplies it.
+- A remark never changes a recipe. `POST /recipe-feedback/{id}/accept` and
+  `/reject` (R&D Specialist or R&D Manager; a rejection needs a `note`) review
+  it, once (`409 FEEDBACK_STATE`). An accepted remark stays open until
+  `POST /recipe-feedback/{id}/address` names the later version of the same
+  drink that took it in (`409 FEEDBACK_ADDRESSED_VERSION` for the same
+  version, an earlier one or another drink). The author of the recipe is told
+  of a new remark, and the author of the remark of each of the three
+  outcomes.
+- `GET /recipe-feedback` (`?recipeId=&state=&source=&category=&branchId=&mine=true`)
+  and `GET /recipe-feedback/{id}` are open to every role, and what they return
+  depends on who asks: head office everything, a branch manager what came from
+  their branch, a trainee what they sent and the staff remarks R&D accepted or
+  addressed, from any branch. Those are the notes worth knowing when making
+  the drink.
+- An accepted staff remark is shown in the course of the drink, as
+  `fieldNotes`, to the trainer and to the learner. Like the reference values
+  of a lesson (BR-22) the notes are read when the course is, and never stored
+  with it: a published course is not edited by a remark, and nothing has to be
+  republished.
+  - A remark about a step is on the lessons that teach that step, in the SOP
+    module and, where the step has a technique gate, in the TECHNIQUE module.
+    A remark about the drink as a whole is on the COMMON_MISTAKES module.
+  - A remark applies from the version it is about onwards, until the version
+    that addressed it: the course of version 2 still shows a remark that
+    version 3 took in, and the course of version 3 does not. A remark about a
+    step of an earlier version is shown as a note on the drink, the steps of
+    two versions not being the same rows.
+  - What was rejected, what is not reviewed yet, and what a customer said are
+    never in a course.
+- `GET /recipes/{id}/feedback-summary` (head office) counts the remarks of a
+  drink by state and source, with the customers' average rating overall and
+  per version; `open` is what was accepted and no version has taken in yet,
+  which is what the next draft should look at.
+
+**Digitising an existing recipe.** UC-26 in the pack is a person typing the
+chain's document into the structure. Here the model does the typing, and is
+held to the document, without a schema change.
+
+- `POST /recipe-versions/{id}/extract-document` takes the document of a drink
+  of origin EXISTING, as `{ documentText, fileName? }` or as an uploaded .txt,
+  .md or .docx (field `file`, at most 2 MB; a Word document is read without a
+  document library, text only), and makes it the content of the draft. A
+  drink that is new is drafted from a description instead
+  (`409 EXTRACT_EXISTING_ONLY`).
+- The model is asked to transcribe, not to write. Its answer must satisfy the
+  schema of an extraction, which is made from the pack's draft schema at
+  start-up so the two cannot drift: the same fields, plus `sourceQuote` on
+  every step (the passage the step was taken from) and `unmapped` (what the
+  document says that no field can hold).
+- Every `sourceQuote` is looked for in the document; case, spacing and
+  typographic punctuation aside, it has to be there. A step whose passage is
+  not in the document is kept and flagged for the reviewer. An answer of which
+  no step is in the document is not a transcription of it at all, and is
+  treated as any non-conforming answer: retried once, then rejected unseen
+  (BR-07).
+- `GET /recipe-versions/{id}/extraction` is the report of the last extraction
+  into a version: the document, each step with its passage and whether it was
+  found, and the unmapped passages. It is the payload of the `AI_EXTRACT`
+  audit entry, so it stays with the version after release, and it describes
+  the draft as extracted, not as edited since. Every call is in `ai_draft_log`
+  as for a generated draft (BR-06).
+- From there the draft goes the way of any other: validated at once, repaired
+  if need be, submitted, reviewed and released by somebody else (BR-05,
+  BR-12), and on release the drink is on sale at the branches without a pilot
+  (BR-36).
+
+**Comparing versions and re-certification.** The pack stops at flagging: a
+superseded version leaves its course OUT_OF_DATE and its certificates
+NEEDS_RECERT, and a certified person could not be enrolled on the rebuilt
+course again, since their passed enrolment on it still stands. Three things
+close that loop, without a schema change.
+
+- `GET /recipe-versions/{id}/diff` compares a version with the one that was in
+  production before it (or with `?against=`), step by step. Two versions share
+  no rows, so steps are lined up by their action text: the longest run both
+  have in common is matched, what lies between two matches is paired off in
+  order as reworded steps, and the rest was added or removed. A step that only
+  moved down because another was inserted has not changed. For a step in both
+  versions, `changedFields` names what differs (`actionText`, `equipmentClass`,
+  `techniqueGate`, `durationSeconds`, `ingredients`, `dependsOn`), with the
+  quantity of each ingredient before and after.
+- `POST /courses` with `courseType: "RECERTIFICATION"` builds a course on a
+  released version from that comparison. It has the seven modules of any
+  course (BR-29), but its SOP module has a lesson only for each step that was
+  added or changed, and names each step that is gone; its technique gates, and
+  so its practical checklist, are those of the changed steps. It is refused
+  for the first version of a recipe and when no step differs
+  (`409 RECERTIFICATION`), and there is one per version beside the PRODUCT
+  course (`409 BR-18`). `recertification` on the course says which version it
+  starts from. Such a course is not rebuilt on a third version: a new one is
+  built on the version that replaced it.
+- It is for staff certified on an earlier version of the drink. Opening a
+  class of it for a whole branch enrols those who were and leaves the others
+  for the PRODUCT course; naming somebody who was not is refused
+  (`409 RECERTIFICATION`). `GET /training-needs` lists them with the reason
+  `RECERTIFICATION`, and no longer sends them to the whole course as well.
+- The certificate earned on the newer version supersedes the holder's
+  certificates on earlier versions of the same drink, whichever course they
+  came from; they are kept and point at it (BR-15). The regulation counts a
+  valid certificate on a version however it was earned.
+
+**The learning path.** The regulation says which course types are mandatory
+for a role and which type has to be passed first. The pack reports that; here
+it is also what happens to a new member of staff, without a schema change.
+
+- A path is not stored. `GET /me/learning-path` and
+  `GET /learning-paths/{userId}` read it from the regulation in force, the
+  published courses and what the user has passed: one stage per course type
+  that is mandatory for the user's role, prerequisite-free types first. A
+  stage holds the published courses of its type that concern the user: a
+  course built from no recipe concerns everybody, one built from a recipe
+  version concerns those whose branch has that version on its menu. Each
+  course is `CERTIFIED`, `ENROLLED`, `BLOCKED` or `AVAILABLE`.
+- **Prerequisites are enforced.** A course whose type has a prerequisite is
+  not assigned to somebody who never passed a course of that type. Opening a
+  class naming such a person is refused (`409 PREREQUISITE`, each of them
+  named in `details`); a class for a whole branch enrols those who qualify. A
+  course once passed stays passed for this purpose.
+- **A new user starts by themselves.** Creating a user assigns, self-paced
+  (an enrolment that belongs to no class), every course of their path that is
+  open to them, with the deadline of the regulation and a notification. With
+  the seeded regulation a new trainee gets the induction course.
+- **Passing a prerequisite opens the next stage.** When a certificate is
+  issued on a course whose type other types require, the courses that this
+  opens are assigned the same way: for a trainee, the PRODUCT courses of the
+  drinks their branch sells. `POST /learning-paths/{userId}/assign` does it on
+  request, for staff who were there before a course was published; publishing
+  a course assigns it to nobody.
+- **Due dates are followed up.** A background service of the API
+  (`Scheduler:ReminderIntervalMinutes`, 60 by default; 0 turns it off) reminds
+  a learner three days before a course is due, and reports a course that is
+  past its due date to the learner and to the training managers. Each is said
+  once per enrolment: the reminder is an audit entry of the enrolment
+  (`REMIND_DUE`, `ESCALATE_OVERDUE`), and one made since the enrolment was
+  last assigned is not repeated.
+- The seed now includes a published induction course, "Welcome to the chain",
+  and certifies the seeded trainees and trainer on it: they joined before the
+  system existed. Without it nobody seeded could be enrolled on a PRODUCT
+  course.
+
+**Progress lesson by lesson** (`012_lesson_progress.sql`: table
+`lesson_progress`). The SRS records progress per lesson (SCR-18).
+- `POST /enrollments/{id}/lessons/{lessonId}/complete`, the learner's own
+  action, marks a lesson read; the last unread lesson of a module completes
+  the module, and the eligibility checker runs as for a module (BR-32).
+- `GET /enrollments/{id}/modules` says per module `lessonsRead`,
+  `lessonsTotal` and `readLessonIds`. Completing a whole module counts its
+  lessons as read.
+- `progressPercent` stays the share of modules complete, as BR-32 counts it.
+- A module failed in the quiz, and a reset enrolment, start their lessons
+  over: studied again means read again.
+
+**Notifications in the application** (`013_notification_read.sql`: column
+`notification.read_at`). Every notification is also kept for its user to read
+in the application, whatever became of its e-mail and push.
+- `GET /me/notifications` lists the caller's own, newest first and paged;
+  `?unread=true` keeps those not read. `GET /me/notifications/unread-count`
+  gives `{ count }` for a badge.
+- `POST /me/notifications/{id}/read` marks one read (reading it again keeps
+  the first time); `POST /me/notifications/read-all` marks them all and says
+  how many. Somebody else's notification does not exist for the caller.
+
+**Cancelling a class.** `POST /training-classes/{id}/cancel`, with an
+optional `{ reason }`, takes a PLANNED or RUNNING class to CANCELLED, as the
+state model gives the Trainer. The enrolments of the class still being
+studied are closed and their learners notified with the reason; a passed or
+locked enrolment stays as it is, and recorded attendance is kept. Not in the
+contract table.
+
+**A trainer who belongs to a branch** (SRS 3.10.2: a trainer sees only staff
+assigned to their own branch). A trainer may be given a branch. Without one
+(`trainer`) they train the whole chain, as before; with one (`trainer1` at
+B01, `trainer2` at B02) they are scoped like the store-level roles: classes,
+enrolments, learners, learning paths and the training-progress dashboard of
+other branches do not exist for them, and a class can be opened at their own
+branch alone. Courses stay chain-wide, since a course follows a recipe.
+
 ## Known gaps
 
-- Prerequisites of a training regulation are reported and not enforced.
 - The React frontend described by the developer pack is not part of this
   repository.
 

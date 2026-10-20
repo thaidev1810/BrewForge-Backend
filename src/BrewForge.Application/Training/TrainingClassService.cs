@@ -12,7 +12,7 @@ namespace BrewForge.Application.Training;
 
 /// <summary>UC-29 and UC-30: classes, sessions and attendance (SCR-31, SCR-32).</summary>
 public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService courses, EnrollmentEvaluator evaluator,
-    ICurrentUser currentUser, TimeProvider clock)
+    LearningPathService learningPath, ICurrentUser currentUser, TimeProvider clock)
 {
     private static readonly SortMap<TrainingClass> Sorting = new SortMap<TrainingClass>("startDate", c => c.Id)
         .Add("id", c => c.Id)
@@ -141,7 +141,15 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
     {
         var trainingClass = await FindAsync(classId, cancellationToken);
         var course = await courses.FindAsync(trainingClass.CourseId, cancellationToken);
-        var roster = await RosterAsync(trainingClass, request?.TraineeIds, cancellationToken);
+        var named = request?.TraineeIds is { Count: > 0 };
+        var roster = await learningPath.OnlyWithPrerequisiteAsync(
+            await RosterAsync(trainingClass, request?.TraineeIds, cancellationToken), course.CourseType, named,
+            cancellationToken);
+        if (course is { CourseType: CourseType.Recertification, RecipeVersionId: { } versionId })
+        {
+            roster = await OnlyCertifiedBeforeAsync(roster, versionId, named, cancellationToken);
+        }
+
 
         var now = clock.GetUtcNow();
         var rules = await evaluator.RulesAsync(course.CourseType, DateOnly.FromDateTime(now.UtcDateTime),
@@ -172,12 +180,75 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
             [.. created.Select(e => e.Id)], alreadyEnrolled);
     }
 
+    /// <summary>
+    /// A recertification course teaches only what changed, so it is for
+    /// staff who were certified on an earlier version of the drink. Somebody
+    /// named for the class who was not is refused by name; of a whole branch,
+    /// those who were are enrolled and the others are left for the PRODUCT
+    /// course.
+    /// </summary>
+    private async Task<List<AppUser>> OnlyCertifiedBeforeAsync(List<AppUser> roster, long recipeVersionId, bool named,
+        CancellationToken cancellationToken)
+    {
+        var certifiedBefore = await db.CertifiedOnEarlierVersionAsync(recipeVersionId,
+            [.. roster.Select(u => u.Id)], cancellationToken);
+        var others = roster.Where(u => !certifiedBefore.Contains(u.Id)).ToList();
+        if (others.Count == 0) return roster;
+
+        if (named || others.Count == roster.Count)
+        {
+            throw DomainException.RuleViolation(Course.RecertificationRule,
+                "A recertification course is for staff certified on an earlier version of the drink. " +
+                "Those who were never certified on it take the PRODUCT course.",
+                details: [.. others.Select(u => new ErrorDetail("traineeIds", $"user {u.Id} was never certified on this drink"))]);
+        }
+        return [.. roster.Where(u => certifiedBefore.Contains(u.Id))];
+    }
+
     /// <summary>RUNNING to CLOSED. Attendance is frozen from here on.</summary>
     public async Task<TrainingClassDto> CloseAsync(long classId, CancellationToken cancellationToken)
     {
         var trainingClass = await FindAsync(classId, cancellationToken);
         trainingClass.Close();
         db.Audit(AuditEntities.TrainingClass, () => trainingClass.Id, AuditActions.Close);
+        await db.SaveChangesAsync(cancellationToken);
+        return await ToDtoAsync(trainingClass, cancellationToken);
+    }
+
+    /// <summary>
+    /// PLANNED or RUNNING to CANCELLED: the class is abandoned. Its
+    /// enrolments that are still being studied are closed and their learners
+    /// told; what was passed, or locked, stays as it is. Attendance already
+    /// recorded is kept.
+    /// </summary>
+    public async Task<TrainingClassDto> CancelAsync(long classId, CancelClassRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var reason = string.IsNullOrWhiteSpace(request?.Reason) ? null : request.Reason.Trim();
+        new FieldErrors().MaxLength("reason", reason, 500).ThrowIfAny();
+        var trainingClass = await FindAsync(classId, cancellationToken);
+        trainingClass.Cancel();
+
+        var open = await db.Enrollments
+            .Where(e => e.TrainingClassId == classId && (e.State == EnrollmentState.Assigned
+                                                         || e.State == EnrollmentState.InProgress
+                                                         || e.State == EnrollmentState.Eligible))
+            .ToListAsync(cancellationToken);
+        var title = await db.Courses.Where(c => c.Id == trainingClass.CourseId).Select(c => c.Title)
+            .SingleAsync(cancellationToken);
+        var now = clock.GetUtcNow();
+        foreach (var enrollment in open)
+        {
+            enrollment.Close();
+            db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Close,
+                new { reason = "CLASS_CANCELLED", trainingClassId = classId });
+            db.Notify(enrollment.UserId, "Class cancelled",
+                $"The class '{trainingClass.Name}' of '{title}' was cancelled." + (reason is null ? "" : $" {reason}"), now,
+                new { trainingClassId = classId, enrollmentId = enrollment.Id });
+        }
+
+        db.Audit(AuditEntities.TrainingClass, () => trainingClass.Id, AuditActions.Cancel,
+            new { reason, closedEnrollments = open.Select(e => e.Id) });
         await db.SaveChangesAsync(cancellationToken);
         return await ToDtoAsync(trainingClass, cancellationToken);
     }

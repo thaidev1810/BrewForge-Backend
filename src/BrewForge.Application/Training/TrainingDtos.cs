@@ -49,6 +49,9 @@ public sealed record SessionRequest(int? SessionNo, DateOnly? ScheduledDate, Tim
 /// </summary>
 public sealed record OpenClassRequest(IReadOnlyList<long>? TraineeIds);
 
+/// <summary>Why a class is cancelled, told to its learners. Optional.</summary>
+public sealed record CancelClassRequest(string? Reason);
+
 public sealed record OpenClassResultDto(TrainingClassDto Class, IReadOnlyList<long> EnrollmentIds,
     IReadOnlyList<long> SkippedUserIds);
 
@@ -71,7 +74,12 @@ public sealed record EnrollmentDto(long Id, long CourseId, string CourseTitle, C
     EnrollmentState State, DateTimeOffset EnrolledAt, DateTimeOffset? CompletedAt, bool Overdue);
 
 /// <summary>A module as the trainee sees it: the rendered lessons, and whether it is done.</summary>
-public sealed record EnrollmentModuleDto(CourseModuleDto Module, bool Completed, DateTimeOffset? CompletedAt);
+/// <summary>A module as the learner sees it: its lessons, which of them are read, and whether it is complete.</summary>
+public sealed record EnrollmentModuleDto(CourseModuleDto Module, bool Completed, DateTimeOffset? CompletedAt,
+    int LessonsRead = 0, int LessonsTotal = 0, IReadOnlyList<long>? ReadLessonIds = null);
+
+/// <summary>The answer to marking a lesson read: the enrolment, and whether that finished its module.</summary>
+public sealed record LessonCompletionDto(EnrollmentDto Enrollment, long CourseModuleId, bool ModuleCompleted);
 
 public sealed record MissingModuleDto(long CourseModuleId, ModuleType ModuleType);
 

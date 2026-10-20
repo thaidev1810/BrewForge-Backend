@@ -222,7 +222,11 @@ public sealed class UserManagementTests(BrewForgeApiFactory factory)
             join r in db.Recipes on v.RecipeId equals r.Id
             where r.RecipeCode == "R05" && v.State == BrewForge.Domain.Recipes.VersionState.Released
             select v.Id).SingleAsync());
-        var course = (await factory.NewPublishedCourseAsync(version)).GetProperty("id").GetInt64();
+        // Reuse the published course bound to this version if the seed already made one; only the
+        // certificate's course_id matters here, and a version keeps at most one PRODUCT course (BR-18).
+        var existing = await factory.WithDbAsync(db => db.Courses
+            .Where(c => c.RecipeVersionId == version).Select(c => (long?)c.Id).FirstOrDefaultAsync());
+        var course = existing ?? (await factory.NewPublishedCourseAsync(version)).GetProperty("id").GetInt64();
 
         async Task<long> NewB01TraineeAsync()
         {

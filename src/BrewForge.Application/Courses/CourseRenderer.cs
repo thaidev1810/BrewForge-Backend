@@ -19,7 +19,15 @@ public sealed class CourseRenderer(IBrewForgeDbContext db)
 {
     /// <summary>Everything a rendering needs from the recipe side, loaded once per request.</summary>
     public sealed record Source(Recipe Recipe, RecipeVersion Version, IReadOnlyDictionary<long, Ingredient> Ingredients,
-        IReadOnlyDictionary<string, StandardEquipment> Equipment);
+        IReadOnlyDictionary<string, StandardEquipment> Equipment, IReadOnlyList<FieldNoteDto> FieldNotes)
+    {
+        /// <summary>The notes about the step a lesson teaches.</summary>
+        public IReadOnlyList<FieldNoteDto> NotesOn(long? recipeStepId) =>
+            recipeStepId is null ? [] : [.. FieldNotes.Where(note => note.RecipeStepId == recipeStepId)];
+
+        /// <summary>The notes about the drink as a whole.</summary>
+        public IReadOnlyList<FieldNoteDto> GeneralNotes() => [.. FieldNotes.Where(note => note.RecipeStepId is null)];
+    }
 
     public async Task<Source?> LoadSourceAsync(long? recipeVersionId, CancellationToken cancellationToken)
     {
@@ -29,8 +37,44 @@ public sealed class CourseRenderer(IBrewForgeDbContext db)
         var recipe = await db.Recipes.AsNoTracking().SingleAsync(r => r.Id == version.RecipeId, cancellationToken);
         var (equipment, ingredients) = await db.LoadCatalogAsync(cancellationToken);
         return new Source(recipe, version, ingredients.ToDictionary(i => i.Id),
-            equipment.ToDictionary(e => e.EquipmentClass, StringComparer.Ordinal));
+            equipment.ToDictionary(e => e.EquipmentClass, StringComparer.Ordinal),
+            await FieldNotesAsync(version, cancellationToken));
     }
+
+    /// <summary>
+    /// The staff remarks on the drink that R&amp;D accepted and that this
+    /// version does not say itself, oldest first. A remark about a step of
+    /// this version keeps its step; one about a step of an earlier version
+    /// is a note on the drink, the steps of two versions not being the same.
+    /// </summary>
+    private async Task<IReadOnlyList<FieldNoteDto>> FieldNotesAsync(RecipeVersion version,
+        CancellationToken cancellationToken)
+    {
+        var remarks = await db.RecipeFeedback.AsNoTracking()
+            .Where(f => f.RecipeId == version.RecipeId && f.Source == FeedbackSource.Staff
+                        && (f.State == FeedbackState.Accepted || f.State == FeedbackState.Addressed))
+            .OrderBy(f => f.Id)
+            .ToListAsync(cancellationToken);
+        if (remarks.Count == 0) return [];
+
+        var versionNos = await db.RecipeVersions.AsNoTracking().Where(v => v.RecipeId == version.RecipeId)
+            .ToDictionaryAsync(v => v.Id, v => v.VersionNo, cancellationToken);
+        var authorIds = remarks.Select(f => f.SubmittedBy).Distinct().ToList();
+        // A learner reads the name of the colleague a note comes from, whatever branch either works at.
+        var authors = await db.Users.IgnoreQueryFilters().AsNoTracking().Where(u => authorIds.Contains(u.Id))
+            .ToDictionaryAsync(u => u.Id, u => u.FullName, cancellationToken);
+
+        return
+        [
+            .. remarks
+                .Where(f => f.IsFieldNoteFor(versionNos[f.RecipeVersionId],
+                    f.AddressedInVersionId is { } addressedId ? versionNos[addressedId] : null, version.VersionNo))
+                .Select(f => new FieldNoteDto(f.Id, f.Category, f.Content,
+                    f.RecipeVersionId == version.Id ? f.RecipeStepId : null, versionNos[f.RecipeVersionId],
+                    authors.GetValueOrDefault(f.SubmittedBy), f.ReviewedAt)),
+        ];
+    }
+
 
     public async Task<CourseDetailDto> RenderAsync(Course course, CancellationToken cancellationToken)
     {
@@ -38,7 +82,21 @@ public sealed class CourseRenderer(IBrewForgeDbContext db)
         return new CourseDetailDto(course.Id, course.RecipeVersionId, course.CourseType, course.Title,
             course.TotalDurationMin, course.CreatedBy, course.ApprovedBy, course.State, course.PublishedAt,
             source?.Recipe.Id, source?.Recipe.RecipeCode, source?.Recipe.Name, source?.Version.VersionNo,
-            RenderModules(course, source), ToDto(course.Quiz), RenderChecklist(course, source));
+            RenderModules(course, source), ToDto(course.Quiz), RenderChecklist(course, source),
+            await RecertificationAsync(course, source, cancellationToken));
+    }
+
+    private async Task<RecertificationDto?> RecertificationAsync(Course course, Source? source,
+        CancellationToken cancellationToken)
+    {
+        if (course.CourseType != CourseType.Recertification || source is null) return null;
+        var previous = await db.FindPreviousVersionAsync(source.Version, cancellationToken);
+        if (previous is null) return null;
+
+        var diff = RecipeVersionDiff.Between(previous, source.Version);
+        return new RecertificationDto(previous.Id, previous.VersionNo, diff.Count(StepChangeKind.Added),
+            diff.Count(StepChangeKind.Removed), diff.Count(StepChangeKind.Changed));
+
     }
 
     public static IReadOnlyList<CourseModuleDto> RenderModules(Course course, Source? source) =>
@@ -46,16 +104,21 @@ public sealed class CourseRenderer(IBrewForgeDbContext db)
 
     public static CourseModuleDto RenderModule(CourseModule module, Source? source) =>
         new(module.Id, module.CourseId, module.ModuleType, module.ModuleOrder, module.Source, module.DurationMinutes,
-            module.State, [.. module.OrderedLessons().Select(lesson => RenderLesson(module, lesson, source))]);
+            module.State, [.. module.OrderedLessons().Select(lesson => RenderLesson(module, lesson, source))],
+            // What goes wrong with the drink in practice belongs with the mistakes the trainer wrote about.
+            module.ModuleType == ModuleType.CommonMistakes ? source?.GeneralNotes() ?? [] : []);
 
     public static LessonDto RenderLesson(CourseModule module, Lesson lesson, Source? source)
     {
         var generated = module.Source == ModuleSource.Generated || lesson.RecipeStepId is not null;
         return new LessonDto(lesson.Id, lesson.LessonOrder, lesson.Title, lesson.RecipeStepId, lesson.Content,
-            lesson.MediaUrl, generated, generated && source is not null ? Reference(module, lesson, source) : null);
+            lesson.MediaUrl, generated, generated && source is not null ? Reference(module, lesson, source) : null,
+            [.. lesson.OrderedMedia().Select(LessonMediaDto.From)], source?.NotesOn(lesson.RecipeStepId) ?? []);
     }
 
-    public static QuizDto ToDto(Quiz quiz) => new(quiz.Id, quiz.CourseId, quiz.Title, quiz.PassScore, quiz.QuestionCount);
+    public static QuizDto ToDto(Quiz quiz) =>
+        new(quiz.Id, quiz.CourseId, quiz.Title, quiz.PassScore, quiz.QuestionCount, quiz.DrawPerModule,
+            quiz.QuestionsPerAttempt());
 
     /// <summary>
     /// The practical checklist: the gate items of the TECHNIQUE module, with

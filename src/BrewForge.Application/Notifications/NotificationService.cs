@@ -44,6 +44,16 @@ public sealed record PushSubscriptionDto(long Id, string Endpoint, DateTimeOffse
 /// <summary>What a browser needs before it can subscribe. <c>PublicKey</c> is null while push is not configured.</summary>
 public sealed record PushConfigDto(bool Enabled, string? PublicKey);
 
+/// <summary>A notification as its user reads it in the application.</summary>
+public sealed record NotificationDto(long Id, string Subject, string Message, DateTimeOffset CreatedAt,
+    DateTimeOffset? ReadAt, bool Read)
+{
+    public static NotificationDto From(Notification n) =>
+        new(n.Id, n.Subject, n.Message, n.CreatedAt, n.ReadAt, n.ReadAt is not null);
+}
+
+public sealed record UnreadCountDto(int Count);
+
 /// <summary>How many notifications one run of the dispatcher handled.</summary>
 public sealed record DispatchResult(int Processed, int Emails, int Pushes);
 
@@ -87,6 +97,53 @@ public sealed class NotificationService(IBrewForgeDbContext db, IEmailSender ema
         await db.SaveChangesAsync(cancellationToken);
         var stored = known ?? subscription;
         return new PushSubscriptionDto(stored.Id, stored.Endpoint, stored.CreatedAt);
+    }
+
+    // ---------------------------------------------------------------- the inbox
+
+    private static readonly SortMap<Notification> InboxSorting = new SortMap<Notification>("id,desc", n => n.Id)
+        .Add("id", n => n.Id)
+        .Add("createdAt", n => n.CreatedAt);
+
+    /// <summary>The caller's notifications, latest first; <paramref name="unread"/> narrows them to those not read.</summary>
+    public async Task<PagedResult<NotificationDto>> MyNotificationsAsync(PageQuery paging, bool? unread,
+        CancellationToken cancellationToken)
+    {
+        var userId = currentUser.RequireUserId();
+        var query = db.Notifications.AsNoTracking().Where(n => n.UserId == userId);
+        if (unread == true) query = query.Where(n => n.ReadAt == null);
+        return await query.ToPagedAsync(paging, InboxSorting, NotificationDto.From, cancellationToken);
+    }
+
+    public async Task<UnreadCountDto> UnreadCountAsync(CancellationToken cancellationToken)
+    {
+        var userId = currentUser.RequireUserId();
+        return new UnreadCountDto(await db.Notifications.CountAsync(n => n.UserId == userId && n.ReadAt == null,
+            cancellationToken));
+    }
+
+    /// <summary>Marks one of the caller's notifications read. Somebody else's does not exist for them.</summary>
+    public async Task<NotificationDto> MarkReadAsync(long id, CancellationToken cancellationToken)
+    {
+        var userId = currentUser.RequireUserId();
+        var notification = await db.Notifications.SingleOrDefaultAsync(n => n.Id == id && n.UserId == userId,
+                               cancellationToken)
+                           ?? throw DomainException.NotFound("Notification", id);
+        notification.MarkRead(clock.GetUtcNow());
+        await db.SaveChangesAsync(cancellationToken);
+        return NotificationDto.From(notification);
+    }
+
+    /// <summary>Marks every unread notification of the caller read. Returns how many there were.</summary>
+    public async Task<UnreadCountDto> MarkAllReadAsync(CancellationToken cancellationToken)
+    {
+        var userId = currentUser.RequireUserId();
+        var unread = await db.Notifications.Where(n => n.UserId == userId && n.ReadAt == null)
+            .ToListAsync(cancellationToken);
+        var now = clock.GetUtcNow();
+        foreach (var notification in unread) notification.MarkRead(now);
+        await db.SaveChangesAsync(cancellationToken);
+        return new UnreadCountDto(unread.Count);
     }
 
     /// <summary>Forgets a browser of the caller. Somebody else's does not exist for them.</summary>

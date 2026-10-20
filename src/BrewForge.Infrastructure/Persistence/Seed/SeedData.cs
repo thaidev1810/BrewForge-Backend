@@ -1,3 +1,4 @@
+using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.MasterData;
 
@@ -40,7 +41,10 @@ public static class SeedData
         new("rdmanager", "Lê Hoàng Nam", RoleName.RdManager, null),
         // A second manager, because the one who edits a draft may not release it (BR-12).
         new("rdmanager2", "Trịnh Bảo Châu", RoleName.RdManager, null),
+        // The trainer of the whole chain, who builds the courses; and one trainer per branch, confined to it.
         new("trainer", "Phạm Lê Nhật Huy", RoleName.Trainer, null),
+        new("trainer1", "Trương Minh Đức", RoleName.Trainer, "B01"),
+        new("trainer2", "Hồ Thị Ngọc Lan", RoleName.Trainer, "B02"),
         new("auditor", "Đỗ Thị Kim Anh", RoleName.QualityAuditor, null),
         new("trainingmgr", "Võ Thanh Tùng", RoleName.TrainingManager, null),
         new("branchmgr", "Huỳnh Gia Bảo", RoleName.BranchManager, "B01"),
@@ -50,6 +54,59 @@ public static class SeedData
         new("trainee3", "Lý Quốc Đạt", RoleName.Trainee, "B02"),
         new("trainee4", "Mai Ngọc Hân", RoleName.Trainee, "B02"),
     ];
+
+    /// <summary>
+    /// The water temperature each tea leaf of the catalogue is brewed at, in
+    /// degrees Celsius. A step that brews the leaf and states its temperature
+    /// is held to this window by the ingredient check.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, (decimal MinC, decimal MaxC)> BrewingWindows =
+        new Dictionary<string, (decimal, decimal)>
+        {
+            ["ING-OOLONG"] = (85m, 95m),
+            ["ING-BLACKTEA"] = (90m, 100m),
+            ["ING-JASMINE"] = (75m, 85m),
+            ["ING-MATCHA"] = (70m, 80m),
+        };
+
+    /// <summary>
+    /// The induction course every new member of staff takes first: one or two
+    /// lessons for each of the seven modules. It is built from no recipe, so
+    /// the lessons of its TECHNIQUE module are its practical checklist.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<ModuleType, (string Title, string Content)[]> InductionLessons =
+        new Dictionary<ModuleType, (string, string)[]>
+        {
+            [ModuleType.ProductOverview] =
+            [
+                ("What the chain serves", "Specialty tea and coffee, made to one recipe at every branch. A guest should not be able to tell which branch made their drink."),
+            ],
+            [ModuleType.Ingredients] =
+            [
+                ("How ingredients are stored and dated", "Every opened, brewed or cooked ingredient is labelled with the time it was prepared. Past its shelf life it is discarded, not topped up."),
+            ],
+            [ModuleType.Equipment] =
+            [
+                ("The standard equipment of a branch", "Every branch has the same machines, set to the same doses. Report a machine that doses outside its range; do not adjust the recipe to it."),
+            ],
+            [ModuleType.Sop] =
+            [
+                ("Opening and closing the counter", "Clean, stock and check dates before the first order; clean, cover and log before leaving. The checklist at the counter is the order to do it in."),
+            ],
+            [ModuleType.Technique] =
+            [
+                ("Wash hands and prepare the station", "Twenty seconds with soap, up to the wrist, before every shift and after every break. Tools in their place before the first order."),
+                ("Greet the guest and repeat the order", "Greet within five seconds, take the order, and say it back before making anything."),
+            ],
+            [ModuleType.CommonMistakes] =
+            [
+                ("What new staff get wrong", "Pouring by eye, skipping the date label, and changing a recipe because a guest asked. Measure, label, and offer what the menu offers."),
+            ],
+            [ModuleType.ExceptionHandling] =
+            [
+                ("When something goes wrong", "A spill, a machine fault or a complaint: stop, make it safe, tell the shift lead, and remake the drink. Never serve a drink you are unsure of."),
+            ],
+        };
 
     /// <summary>
     /// Shelf life is in hours from preparation (BR-11): how long the
@@ -89,4 +146,47 @@ public static class SeedData
         new("EQ-SHK-01", "SHAKER", 10.000m, 500.000m, DosingUnit.Millilitre),
         new("EQ-BLD-01", "BLENDER", 10.000m, 600.000m, DosingUnit.Millilitre),
     ];
+
+    /// <summary>The recipe the seeded PRODUCT course teaches: a drink every branch already sells.</summary>
+    public const string ProductCourseRecipe = "R07";
+
+    /// <summary>
+    /// What the trainer writes for the PRODUCT course of R07. The first four
+    /// modules are generated from the recipe and need nothing here; the
+    /// technique module gets prose for each of its gates.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<ModuleType, (string Title, string Content)[]> ProductCourseLessons =
+        new Dictionary<ModuleType, (string, string)[]>
+        {
+            [ModuleType.CommonMistakes] =
+            [
+                ("Coffee that is too thin or too bitter", "Too little coffee in the phin, or water off the boil, gives a thin cup; pressing the filter down hard gives a bitter one. Weigh the 22 g and let the water do the work."),
+                ("Undissolved condensed milk", "Pouring over ice before stirring leaves the milk at the bottom of the glass. Stir in the glass until it is one colour, then pour over the ice."),
+            ],
+            [ModuleType.ExceptionHandling] =
+            [
+                ("The phin drips too fast or stops", "Too fast: the grind is coarse or the press too light; tell the shift lead and brew again. Stopped: the grind is too fine; do not shake the phin, start again with a new dose."),
+                ("A guest asks for less sweet", "Offer the menu option with less condensed milk; do not change the dose by eye."),
+            ],
+        };
+
+    /// <summary>The technique gate lessons of the R07 course, in step order.</summary>
+    public static readonly IReadOnlyList<string> ProductCourseTechnique =
+    [
+        "Pour 20 ml of water first and wait 30 seconds while the coffee blooms. Then fill the phin and close the lid; it should drip for about four to five minutes.",
+        "Stir in the glass until no streak of condensed milk is left, then pour over the ice in one movement.",
+    ];
+
+    /// <summary>One question per module of the R07 course; the correct answer is always "A".</summary>
+    public static readonly IReadOnlyDictionary<ModuleType, (string Question, string Right, string Wrong1, string Wrong2)> ProductCourseQuiz =
+        new Dictionary<ModuleType, (string, string, string, string)>
+        {
+            [ModuleType.ProductOverview] = ("What is Cà phê sữa đá?", "Phin coffee with condensed milk, served over ice", "Espresso with steamed milk", "Cold brew with fresh milk"),
+            [ModuleType.Ingredients] = ("How much condensed milk goes into one cup?", "30 ml", "15 ml", "60 ml"),
+            [ModuleType.Equipment] = ("Which equipment brews the coffee?", "The phin filter", "The espresso machine", "The tea brewer"),
+            [ModuleType.Sop] = ("What comes first in the glass?", "The condensed milk", "The ice", "The coffee"),
+            [ModuleType.Technique] = ("How long does the coffee bloom?", "30 seconds, with 20 ml of water", "No bloom: fill the phin at once", "5 minutes, with all the water"),
+            [ModuleType.CommonMistakes] = ("Why is condensed milk left at the bottom of the glass?", "It was poured over ice before being stirred", "There was too much coffee", "The phin dripped too slowly"),
+            [ModuleType.ExceptionHandling] = ("The phin has stopped dripping. What do you do?", "Start again with a new dose", "Shake the phin until it drips", "Serve what has dripped"),
+        };
 }

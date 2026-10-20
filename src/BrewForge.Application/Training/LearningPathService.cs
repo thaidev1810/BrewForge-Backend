@@ -1,0 +1,311 @@
+using BrewForge.Application.Abstractions;
+using BrewForge.Application.Common;
+using BrewForge.Application.Notifications;
+using BrewForge.Domain.Common;
+using BrewForge.Domain.Courses;
+using BrewForge.Domain.Identity;
+using BrewForge.Domain.Launch;
+using BrewForge.Domain.Training;
+using Microsoft.EntityFrameworkCore;
+
+namespace BrewForge.Application.Training;
+
+/// <summary>One course of a stage, and where the user stands on it.</summary>
+public sealed record PathCourseDto(long CourseId, string Title, long? RecipeVersionId, string Status,
+    long? EnrollmentId, EnrollmentState? EnrollmentState, DateOnly? DueDate, long? CertificateId);
+
+/// <summary>
+/// One stage of a learning path: the courses of one type that are mandatory
+/// for the user's role. A stage is blocked while the user has not passed a
+/// course of its prerequisite type.
+/// </summary>
+public sealed record PathStageDto(CourseType CourseType, CourseType? PrerequisiteType, bool Blocked, long RegulationId,
+    int DueDays, IReadOnlyList<PathCourseDto> Courses);
+
+public sealed record LearningPathDto(long UserId, string Username, string FullName, RoleName Role, long? BranchId,
+    IReadOnlyList<PathStageDto> Stages);
+
+public sealed record PathAssignmentDto(LearningPathDto Path, IReadOnlyList<long> EnrollmentIds);
+
+/// <summary>How many reminders one run sent.</summary>
+public sealed record ReminderResult(int DueSoon, int Overdue);
+
+/// <summary>
+/// The learning path of a member of staff: what the training regulation
+/// makes mandatory for their role, in the order its prerequisites impose.
+/// The path is not stored. It is read from the regulation in force, the
+/// published courses and what the user has passed, so it follows a change of
+/// any of them.
+///
+/// A stage holds the published courses of its type that concern the user: a
+/// course built from no recipe concerns everybody, and a course built from a
+/// recipe version concerns those whose branch has that version on its menu.
+/// </summary>
+public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser currentUser, TimeProvider clock)
+{
+    public const string PrerequisiteRule = "PREREQUISITE";
+
+    public const string Certified = "CERTIFIED";
+    public const string Enrolled = "ENROLLED";
+    public const string BlockedStatus = "BLOCKED";
+    public const string Available = "AVAILABLE";
+
+    /// <summary>How many days before the due date a learner is reminded.</summary>
+    public const int DueSoonDays = 3;
+
+    private DateOnly Today => DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+
+    // ---------------------------------------------------------------- prerequisites
+
+    /// <summary>
+    /// The course type that has to be passed before a course of the given
+    /// type, by the regulation in force today, and which of the users have
+    /// not passed one. A course once passed stays passed: the status of the
+    /// certificate does not matter here.
+    /// </summary>
+    public async Task<(CourseType? Prerequisite, HashSet<long> Missing)> MissingPrerequisiteAsync(CourseType courseType,
+        IReadOnlyCollection<long> userIds, CancellationToken cancellationToken)
+    {
+        var regulations = await db.TrainingRegulations.AsNoTracking().Where(r => r.CourseType == courseType)
+            .ToListAsync(cancellationToken);
+        var prerequisite = TrainingRegulation.InForce(regulations, courseType, Today)?.PrerequisiteType;
+        if (prerequisite is null) return (null, []);
+
+        var passed = await db.Certificates.AsNoTracking().Where(c => userIds.Contains(c.UserId))
+            .Join(db.Courses.Where(course => course.CourseType == prerequisite), c => c.CourseId, course => course.Id,
+                (c, course) => c.UserId)
+            .Distinct().ToListAsync(cancellationToken);
+        return (prerequisite, [.. userIds.Where(id => !passed.Contains(id))]);
+    }
+
+    /// <summary>
+    /// The roster of a class with those left out who have not passed the
+    /// prerequisite of its course. Somebody named for the class is refused
+    /// by name; of a whole branch, those who qualify are enrolled.
+    /// </summary>
+    public async Task<List<AppUser>> OnlyWithPrerequisiteAsync(List<AppUser> roster, CourseType courseType, bool named,
+        CancellationToken cancellationToken)
+    {
+        var (prerequisite, missing) = await MissingPrerequisiteAsync(courseType, [.. roster.Select(u => u.Id)],
+            cancellationToken);
+        if (prerequisite is null || missing.Count == 0) return roster;
+
+        if (named || missing.Count == roster.Count)
+        {
+            throw DomainException.RuleViolation(PrerequisiteRule,
+                $"A {courseType.Code()} course is taken after a {prerequisite.Value.Code()} course has been passed.",
+                details:
+                [
+                    .. roster.Where(u => missing.Contains(u.Id)).Select(u =>
+                        new ErrorDetail("traineeIds", $"user {u.Id} has not passed a {prerequisite.Value.Code()} course")),
+                ]);
+        }
+        return [.. roster.Where(u => !missing.Contains(u.Id))];
+    }
+
+    // ---------------------------------------------------------------- the path
+
+    public Task<LearningPathDto> MyPathAsync(CancellationToken cancellationToken) =>
+        GetPathAsync(currentUser.RequireUserId(), cancellationToken);
+
+    public async Task<LearningPathDto> GetPathAsync(long userId, CancellationToken cancellationToken)
+    {
+        var path = await LoadAsync(userId, tracking: false, cancellationToken);
+        EnsureVisible(path.User);
+        return ToDto(path);
+    }
+
+    /// <summary>A caller confined to a branch sees the staff of that branch; anybody else does not exist for them.</summary>
+    private void EnsureVisible(AppUser user)
+    {
+        if (currentUser.RestrictedToBranchId is { } own && user.BranchId != own) throw DomainException.NotFound("User", user.Id);
+    }
+
+    /// <summary>
+    /// Assigns, self-paced, every course of the user's path that is open to
+    /// them and that they are neither certified on nor enrolled on. Nothing
+    /// is saved here: the caller saves, in the transaction of what caused the
+    /// assignment. Returns the enrolments created.
+    /// </summary>
+    public async Task<IReadOnlyList<Enrollment>> AssignOpenStagesAsync(long userId, CancellationToken cancellationToken)
+    {
+        var path = await LoadAsync(userId, tracking: true, cancellationToken);
+        if (!path.User.IsActive) return [];
+
+        var now = clock.GetUtcNow();
+        var created = new List<Enrollment>();
+        foreach (var stage in path.Stages.Where(stage => !stage.Blocked))
+        {
+            foreach (var course in stage.Courses.Where(course => path.StatusOf(stage, course) == Available))
+            {
+                var enrollment = Enrollment.Assign(course, userId, trainingClassId: null, stage.Regulation.Rules, now);
+                db.Enrollments.Add(enrollment);
+                created.Add(enrollment);
+                db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Assign, new
+                {
+                    enrollment.CourseId, enrollment.UserId, enrollment.DueDate, regulationId = stage.Regulation.Id,
+                    reason = "LEARNING_PATH",
+                });
+                db.Notify(userId, "Course assigned",
+                    $"'{course.Title}' is part of your training path. Due {enrollment.DueDate:yyyy-MM-dd}.", now);
+            }
+        }
+        return created;
+    }
+
+    /// <summary>Runs the assignment for a user on request, for staff who were there before a course was published.</summary>
+    public async Task<PathAssignmentDto> AssignAsync(long userId, CancellationToken cancellationToken)
+    {
+        EnsureVisible(await db.Users.IgnoreQueryFilters().AsNoTracking().SingleOrDefaultAsync(u => u.Id == userId, cancellationToken)
+                      ?? throw DomainException.NotFound("User", userId));
+        var created = await AssignOpenStagesAsync(userId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return new PathAssignmentDto(await GetPathAsync(userId, cancellationToken), [.. created.Select(e => e.Id)]);
+    }
+
+    // ---------------------------------------------------------------- reminders
+
+    /// <summary>
+    /// Reminds learners whose course is due within <see cref="DueSoonDays"/>
+    /// days, and reports those whose due date has passed to them and to the
+    /// training managers. Each is said once per enrolment: the reminder is an
+    /// audit entry of the enrolment, and an enrolment that has one since it
+    /// was last assigned is not reminded again.
+    /// </summary>
+    public async Task<ReminderResult> RemindAsync(CancellationToken cancellationToken)
+    {
+        var now = clock.GetUtcNow();
+        var today = Today;
+        var soon = today.AddDays(DueSoonDays);
+        var open = await db.Enrollments.IgnoreQueryFilters().AsNoTracking()
+            .Where(e => (e.State == EnrollmentState.Assigned || e.State == EnrollmentState.InProgress
+                         || e.State == EnrollmentState.Eligible) && e.DueDate != null && e.DueDate <= soon)
+            .Select(e => new { e.Id, e.UserId, e.CourseId, DueDate = e.DueDate!.Value, e.EnrolledAt })
+            .ToListAsync(cancellationToken);
+        if (open.Count == 0) return new ReminderResult(0, 0);
+
+        var ids = open.Select(e => e.Id).ToList();
+        var said = (await db.AuditLogs.AsNoTracking()
+                .Where(a => a.EntityType == AuditEntities.Enrollment && ids.Contains(a.EntityId)
+                            && (a.Action == AuditActions.RemindDue || a.Action == AuditActions.EscalateOverdue))
+                .Select(a => new { a.EntityId, a.Action, a.CreatedAt }).ToListAsync(cancellationToken))
+            .ToLookup(a => (a.EntityId, a.Action), a => a.CreatedAt);
+        var courseIds = open.Select(e => e.CourseId).Distinct().ToList();
+        var titles = await db.Courses.AsNoTracking().Where(c => courseIds.Contains(c.Id))
+            .ToDictionaryAsync(c => c.Id, c => c.Title, cancellationToken);
+        var managers = await db.Users.IgnoreQueryFilters().AsNoTracking()
+            .Where(u => u.Role.RoleName == RoleName.TrainingManager && u.Status == UserStatus.Active)
+            .Select(u => u.Id).ToListAsync(cancellationToken);
+
+        var (dueSoon, overdue) = (0, 0);
+        foreach (var enrollment in open)
+        {
+            var late = enrollment.DueDate < today;
+            var action = late ? AuditActions.EscalateOverdue : AuditActions.RemindDue;
+            if (said[(enrollment.Id, action)].Any(at => at >= enrollment.EnrolledAt)) continue;
+
+            var title = titles[enrollment.CourseId];
+            db.Audit(AuditEntities.Enrollment, () => enrollment.Id, action, new { enrollment.UserId, enrollment.DueDate });
+            if (late)
+            {
+                overdue++;
+                db.Notify(enrollment.UserId, "Course overdue",
+                    $"'{title}' was due on {enrollment.DueDate:yyyy-MM-dd}. Finish it as soon as you can.", now);
+                foreach (var managerId in managers)
+                {
+                    db.Notify(managerId, "Course overdue",
+                        $"Enrolment {enrollment.Id} on '{title}' was due on {enrollment.DueDate:yyyy-MM-dd} and is not finished.",
+                        now, new { enrollmentId = enrollment.Id });
+                }
+            }
+            else
+            {
+                dueSoon++;
+                db.Notify(enrollment.UserId, "Course due soon",
+                    $"'{title}' is due on {enrollment.DueDate:yyyy-MM-dd}.", now);
+            }
+        }
+        await db.SaveChangesAsync(cancellationToken);
+        return new ReminderResult(dueSoon, overdue);
+    }
+
+    // ---------------------------------------------------------------- loading
+
+    private sealed record Stage(TrainingRegulation Regulation, bool Blocked, List<Course> Courses);
+
+    private sealed record UserPath(AppUser User, List<Stage> Stages, List<Certificate> Certificates,
+        List<Enrollment> Enrollments)
+    {
+        public Certificate? CertificateOn(Course course) =>
+            Certificates.FirstOrDefault(c => c.Status == CertificateStatus.Valid
+                                             && (c.CourseId == course.Id
+                                                 || (course.RecipeVersionId is not null && c.RecipeVersionId == course.RecipeVersionId)));
+
+        public Enrollment? EnrollmentOn(Course course) => Enrollments.FirstOrDefault(e => e.CourseId == course.Id);
+
+        public string StatusOf(Stage stage, Course course) =>
+            CertificateOn(course) is not null ? Certified
+            : EnrollmentOn(course) is not null ? Enrolled
+            : stage.Blocked ? BlockedStatus
+            : Available;
+    }
+
+    private async Task<UserPath> LoadAsync(long userId, bool tracking, CancellationToken cancellationToken)
+    {
+        var user = await db.Users.IgnoreQueryFilters().AsNoTracking().Include(u => u.Role)
+                       .SingleOrDefaultAsync(u => u.Id == userId, cancellationToken)
+                   ?? throw DomainException.NotFound("User", userId);
+
+        var today = Today;
+        var mandatory = (await db.TrainingRegulations.AsNoTracking().ToListAsync(cancellationToken))
+            .GroupBy(r => r.CourseType)
+            .Select(group => TrainingRegulation.InForce(group, group.Key, today))
+            .OfType<TrainingRegulation>()
+            .Where(r => r.MandatoryForRole == user.Role.RoleName)
+            // What has no prerequisite comes first; the rest follows in the order of the course types.
+            .OrderBy(r => r.PrerequisiteType is null ? 0 : 1).ThenBy(r => r.CourseType)
+            .ToList();
+        var types = mandatory.Select(r => r.CourseType).ToList();
+
+        var menu = user.BranchId is { } branchId
+            ? await db.BranchLaunchStatuses.IgnoreQueryFilters().AsNoTracking()
+                .Where(l => l.BranchId == branchId && l.Status != LaunchStatus.Withdrawn && l.RecipeVersionId != null)
+                .Select(l => l.RecipeVersionId!.Value).ToListAsync(cancellationToken)
+            : [];
+        var courseQuery = db.Courses.Include(c => c.Modules)
+            .Where(c => c.State == CourseState.Published && types.Contains(c.CourseType)
+                        && (c.RecipeVersionId == null || menu.Contains(c.RecipeVersionId.Value)));
+        var courses = await (tracking ? courseQuery : courseQuery.AsNoTracking()).OrderBy(c => c.Id)
+            .ToListAsync(cancellationToken);
+
+        var certificates = await db.Certificates.AsNoTracking().Where(c => c.UserId == userId)
+            .ToListAsync(cancellationToken);
+        var passedCourseIds = certificates.Select(c => c.CourseId).Distinct().ToList();
+        var passedTypes = await db.Courses.AsNoTracking().Where(c => passedCourseIds.Contains(c.Id))
+            .Select(c => c.CourseType).Distinct().ToListAsync(cancellationToken);
+        var enrollments = await db.Enrollments.IgnoreQueryFilters().AsNoTracking()
+            .Where(e => e.UserId == userId && e.State != EnrollmentState.Closed).ToListAsync(cancellationToken);
+
+        return new UserPath(user,
+        [
+            .. mandatory.Select(regulation => new Stage(regulation,
+                regulation.PrerequisiteType is { } prerequisite && !passedTypes.Contains(prerequisite),
+                [.. courses.Where(c => c.CourseType == regulation.CourseType)])),
+        ], certificates, enrollments);
+    }
+
+    private static LearningPathDto ToDto(UserPath path) =>
+        new(path.User.Id, path.User.Username, path.User.FullName, path.User.Role.RoleName, path.User.BranchId,
+        [
+            .. path.Stages.Select(stage => new PathStageDto(stage.Regulation.CourseType, stage.Regulation.PrerequisiteType,
+                stage.Blocked, stage.Regulation.Id, stage.Regulation.DueDays,
+                [
+                    .. stage.Courses.Select(course =>
+                    {
+                        var enrollment = path.EnrollmentOn(course);
+                        return new PathCourseDto(course.Id, course.Title, course.RecipeVersionId, path.StatusOf(stage, course),
+                            enrollment?.Id, enrollment?.State, enrollment?.DueDate, path.CertificateOn(course)?.Id);
+                    }),
+                ])),
+        ]);
+}

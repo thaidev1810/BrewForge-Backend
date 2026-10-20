@@ -10,19 +10,22 @@ public sealed class StorageOptions
 
     /// <summary>The folder the recordings of practicals are kept in. A relative path starts at the working directory.</summary>
     public string PracticalVideoRoot { get; set; } = "storage/practical-videos";
+
+    /// <summary>The folder the pictures of lessons are kept in. A relative path starts at the working directory.</summary>
+    public string LessonMediaRoot { get; set; } = "storage/lesson-media";
 }
 
 /// <summary>
-/// Keeps the recordings on the disk of the server, one file per recording
-/// under a key the storage chooses itself: nothing a client sent is ever
-/// part of a path.
+/// Keeps files on the disk of the server under one root, each under a key
+/// the store chooses itself: nothing a client sent is ever part of a path.
 /// </summary>
-public sealed class LocalPracticalVideoStorage(IOptions<StorageOptions> options) : IPracticalVideoStorage
+internal sealed class LocalFileStore(string root)
 {
-    private readonly string _root = Path.GetFullPath(options.Value.PracticalVideoRoot);
+    private readonly string _root = Path.GetFullPath(root);
 
-    public async Task<StoredVideo?> SaveAsync(Stream content, string extension, long maxBytes,
-        CancellationToken cancellationToken)
+    /// <summary>Null, and nothing kept, as soon as the content turns out to be longer than <paramref name="maxBytes"/>.</summary>
+    public async Task<(string Key, long SizeBytes, string Sha256)?> SaveAsync(Stream content, string extension,
+        long maxBytes, CancellationToken cancellationToken)
     {
         var key = $"{DateTime.UtcNow:yyyy/MM}/{Guid.NewGuid():N}{extension}";
         var path = PathOf(key);
@@ -62,7 +65,7 @@ public sealed class LocalPracticalVideoStorage(IOptions<StorageOptions> options)
             File.Delete(path);
             return null;
         }
-        return new StoredVideo(key, size, Convert.ToHexStringLower(hash.GetHashAndReset()));
+        return (key, size, Convert.ToHexStringLower(hash.GetHashAndReset()));
     }
 
     public Stream? OpenRead(string key)
@@ -73,11 +76,7 @@ public sealed class LocalPracticalVideoStorage(IOptions<StorageOptions> options)
             : null;
     }
 
-    public Task DeleteAsync(string key, CancellationToken cancellationToken)
-    {
-        File.Delete(PathOf(key));
-        return Task.CompletedTask;
-    }
+    public void Delete(string key) => File.Delete(PathOf(key));
 
     private string PathOf(string key)
     {
@@ -85,8 +84,48 @@ public sealed class LocalPracticalVideoStorage(IOptions<StorageOptions> options)
         // Keys are made here, but a key read back from the database is still not allowed to leave the root.
         if (!path.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("The storage key does not name a file of the video storage.");
+            throw new InvalidOperationException("The storage key does not name a file of this storage.");
         }
         return path;
+    }
+}
+
+/// <summary>The recordings of practicals, on the disk of the server.</summary>
+public sealed class LocalPracticalVideoStorage(IOptions<StorageOptions> options) : IPracticalVideoStorage
+{
+    private readonly LocalFileStore _store = new(options.Value.PracticalVideoRoot);
+
+    public async Task<StoredVideo?> SaveAsync(Stream content, string extension, long maxBytes,
+        CancellationToken cancellationToken) =>
+        await _store.SaveAsync(content, extension, maxBytes, cancellationToken) is { } stored
+            ? new StoredVideo(stored.Key, stored.SizeBytes, stored.Sha256)
+            : null;
+
+    public Stream? OpenRead(string key) => _store.OpenRead(key);
+
+    public Task DeleteAsync(string key, CancellationToken cancellationToken)
+    {
+        _store.Delete(key);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>The pictures of lessons, on the disk of the server.</summary>
+public sealed class LocalLessonMediaStorage(IOptions<StorageOptions> options) : ILessonMediaStorage
+{
+    private readonly LocalFileStore _store = new(options.Value.LessonMediaRoot);
+
+    public async Task<StoredFile?> SaveAsync(Stream content, string extension, long maxBytes,
+        CancellationToken cancellationToken) =>
+        await _store.SaveAsync(content, extension, maxBytes, cancellationToken) is { } stored
+            ? new StoredFile(stored.Key, stored.SizeBytes, stored.Sha256)
+            : null;
+
+    public Stream? OpenRead(string key) => _store.OpenRead(key);
+
+    public Task DeleteAsync(string key, CancellationToken cancellationToken)
+    {
+        _store.Delete(key);
+        return Task.CompletedTask;
     }
 }
