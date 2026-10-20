@@ -281,6 +281,31 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Managers_read_enrolment_and_course_detail_within_their_reach()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();   // the B01 trainee
+        var enrollmentId = learner.EnrollmentId;
+        var courseId = learner.Setup.CourseId;
+
+        // The training manager (head office) reads any enrolment and its quiz-attempt summary.
+        using var tm = await factory.ClientForAsync(TestUsers.TrainingManager);
+        await (await tm.GetAsync($"/api/v1/enrollments/{enrollmentId}")).ShouldBeAsync(HttpStatusCode.OK);
+        await (await tm.GetAsync($"/api/v1/enrollments/{enrollmentId}/eligibility")).ShouldBeAsync(HttpStatusCode.OK);
+        await (await tm.GetAsync($"/api/v1/enrollments/{enrollmentId}/quiz-attempts")).ShouldBeAsync(HttpStatusCode.OK);
+
+        // The B01 branch manager reads their branch's enrolment; the B02 manager is scoped out (404).
+        using var b01Manager = await factory.ClientForAsync(TestUsers.BranchManager);
+        await (await b01Manager.GetAsync($"/api/v1/enrollments/{enrollmentId}")).ShouldBeAsync(HttpStatusCode.OK);
+        using var b02Manager = await factory.ClientForAsync(TestUsers.BranchManagerB02);
+        Assert.Equal(HttpStatusCode.NotFound, (await b02Manager.GetAsync($"/api/v1/enrollments/{enrollmentId}")).StatusCode);
+
+        // The R&D manager reads course detail and modules (to check the SOP-bound course), nothing to author.
+        using var rdm = await factory.ClientForAsync(TestUsers.RdManager);
+        await (await rdm.GetAsync($"/api/v1/courses/{courseId}")).ShouldBeAsync(HttpStatusCode.OK);
+        await (await rdm.GetAsync($"/api/v1/courses/{courseId}/modules")).ShouldBeAsync(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task Practical_is_scheduled_only_after_the_quiz_and_the_trainee_can_read_it()
     {
         var learner = await factory.NewEligibleLearnerAsync();
