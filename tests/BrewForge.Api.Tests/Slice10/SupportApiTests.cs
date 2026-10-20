@@ -230,6 +230,57 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task A_held_certificate_does_not_complete_a_fresh_assignment()
+    {
+        var course = await factory.NewPublishedCourseAsync();
+        var courseId = course.Id();
+        var versionId = course.GetProperty("recipeVersionId").GetInt64();
+        var b01 = await factory.BranchIdAsync("B01");
+        var trainee = await factory.UserIdAsync(TestUsers.Trainee);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        // The trainee already holds a valid certificate on this course's version.
+        await factory.CertifyAsync(trainee, courseId, versionId);
+
+        // Assigning the course again starts a fresh cycle: the stage is ASSIGNED, not COMPLETED off the
+        // old certificate.
+        await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+            { courseId, branchId = b01, employeeIds = new[] { trainee } })).ShouldBeAsync(HttpStatusCode.Created);
+        var list = await (await trainer.GetAsync($"/api/v1/assignments?courseId={courseId}&size=100"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        var row = list.GetProperty("items").EnumerateArray().Single(a => a.GetProperty("userId").GetInt64() == trainee);
+        Assert.Equal("ASSIGNED", row.GetProperty("stage").GetString());
+    }
+
+    [Fact]
+    public async Task An_appointment_from_before_the_cycle_does_not_move_the_stage()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        var trainerId = await factory.UserIdAsync(TestUsers.Trainer);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var url = $"/api/v1/assignments?courseId={learner.Setup.CourseId}&size=100";
+
+        async Task<string?> StageAsync()
+        {
+            var list = await (await trainer.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
+            return list.GetProperty("items").EnumerateArray()
+                .Single(a => a.GetProperty("enrollmentId").GetInt64() == learner.EnrollmentId)
+                .GetProperty("stage").GetString();
+        }
+
+        // The quiz is passed; nothing is booked for this cycle yet.
+        Assert.Equal("QUIZ_PASSED", await StageAsync());
+
+        // A SCHEDULED appointment made before this cycle began must not push the stage to PRACTICAL_PENDING.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlRawAsync(
+            "INSERT INTO practical_schedule (enrollment_id, trainer_id, scheduled_at, location, status, created_at) " +
+            "SELECT id, {1}, now() + interval '2 days', 'old cycle', 'SCHEDULED', enrolled_at - interval '1 day' " +
+            "FROM enrollment WHERE id = {0}", learner.EnrollmentId, trainerId));
+        Assert.Equal("QUIZ_PASSED", await StageAsync());
+    }
+
+    [Fact]
     public async Task Practical_is_scheduled_only_after_the_quiz_and_the_trainee_can_read_it()
     {
         var learner = await factory.NewEligibleLearnerAsync();

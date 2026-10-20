@@ -174,17 +174,17 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
         CancellationToken cancellationToken)
     {
         var courseIds = enrollments.Select(e => e.CourseId).Distinct().ToList();
-        var userIds = enrollments.Select(e => e.UserId).Distinct().ToList();
         var titles = await db.Courses.AsNoTracking().Where(c => courseIds.Contains(c.Id))
             .ToDictionaryAsync(c => c.Id, c => c.Title, cancellationToken);
-        var certified = (await db.Certificates.AsNoTracking()
-                .Where(c => courseIds.Contains(c.CourseId) && userIds.Contains(c.UserId)
-                            && c.Status != CertificateStatus.Superseded)
-                .Select(c => new { c.UserId, c.CourseId }).ToListAsync(cancellationToken))
-            .Select(c => (c.UserId, c.CourseId)).ToHashSet();
+        // An appointment counts only if it belongs to the CURRENT cycle: one made before the enrolment
+        // last started (a reset moves EnrolledAt forward and cancels the old ones) must not move the stage.
+        var enrolledAt = enrollments.ToDictionary(e => e.Id, e => e.EnrolledAt);
+        var enrollmentIds = enrolledAt.Keys.ToList();
         var scheduled = (await db.PracticalSchedules.AsNoTracking()
-                .Where(s => s.Status == ScheduleStatus.Scheduled).Select(s => s.EnrollmentId).ToListAsync(cancellationToken))
-            .ToHashSet();
+                .Where(s => s.Status == ScheduleStatus.Scheduled && enrollmentIds.Contains(s.EnrollmentId))
+                .Select(s => new { s.EnrollmentId, s.CreatedAt }).ToListAsync(cancellationToken))
+            .Where(s => enrolledAt.TryGetValue(s.EnrollmentId, out var at) && s.CreatedAt >= at)
+            .Select(s => s.EnrollmentId).ToHashSet();
         var branchIds = enrollments.Select(e => e.User.BranchId).Where(b => b is not null).Distinct().ToList();
         var codes = await db.Branches.AsNoTracking().Where(b => branchIds.Contains(b.Id))
             .ToDictionaryAsync(b => b.Id, b => b.BranchCode, cancellationToken);
@@ -192,7 +192,7 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
 
         return [.. enrollments.Select(e =>
         {
-            var stage = StageOf(e, certified.Contains((e.UserId, e.CourseId)), scheduled.Contains(e.Id));
+            var stage = StageOf(e, scheduled.Contains(e.Id));
             // Overdue is a separate flag, and only while the work is still outstanding.
             var isOverdue = e.DueDate is { } due && due < today
                 && stage is not (AssignmentStage.Completed or AssignmentStage.Closed or AssignmentStage.Locked);
@@ -205,15 +205,15 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
     /// <summary>
     /// The stage of an assignment, read from the enrolment and the CURRENT training cycle only: a reset
     /// starts a fresh cycle, so quiz attempts, appointments and practicals from before it do not count.
-    /// COMPLETED once a certificate stands; CLOSED and LOCKED follow the domain state; otherwise the
-    /// progress through the cycle. A passed quiz is QUIZ_PASSED until a practical is booked or has been
-    /// failed this cycle, then PRACTICAL_PENDING. Being past the deadline is reported by isOverdue, not
-    /// here, so it never hides the real stage; a cancelled appointment is not a booking, and completing
-    /// one is not passing the practical.
+    /// The enrolment's own state wins over any history — a CLOSED or LOCKED cycle is reported as such,
+    /// and COMPLETED means this enrolment reached PASSED (its cycle certified), not that the person once
+    /// held a certificate (an older or NEEDS_RECERT certificate does not complete a new cycle). A passed
+    /// quiz is QUIZ_PASSED until a practical is booked or has been failed this cycle, then PRACTICAL_PENDING.
+    /// Being past the deadline is reported by isOverdue, not here; a cancelled appointment is not a booking,
+    /// and completing one is not passing the practical.
     /// </summary>
-    internal static AssignmentStage StageOf(Enrollment e, bool certified, bool practicalBooked)
+    internal static AssignmentStage StageOf(Enrollment e, bool practicalBooked)
     {
-        if (certified) return AssignmentStage.Completed;
         if (e.State == EnrollmentState.Closed) return AssignmentStage.Closed;
         if (e.State == EnrollmentState.Locked) return AssignmentStage.Locked;
 
@@ -225,7 +225,8 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
             EnrollmentState.Eligible when practicalBooked || e.LatestPractical() is { Passed: false }
                 => AssignmentStage.PracticalPending,
             EnrollmentState.Eligible => AssignmentStage.QuizPassed,
-            _ => AssignmentStage.Completed,   // PASSED without a certificate on record: the course is done.
+            EnrollmentState.Passed => AssignmentStage.Completed,
+            _ => AssignmentStage.Assigned,
         };
     }
 }
