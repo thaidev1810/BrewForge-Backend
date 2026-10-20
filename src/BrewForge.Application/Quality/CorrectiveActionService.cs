@@ -97,6 +97,18 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
         }
         new FieldErrors().Check(request.CourseId is not null, "courseId", "is required").ThrowIfAny();
 
+        // Enforce the same rule the GET options uses, server-side: the course must be a published one
+        // tied to the audited SOP. The client cannot substitute an unrelated course, and stale options
+        // (the course was archived or the SOP moved on) are refused with a clear conflict.
+        var (_, _, validCourses) = await RetrainingCoursesAsync(action, cancellationToken);
+        if (validCourses.All(c => c.CourseId != request.CourseId!.Value))
+        {
+            throw DomainException.RuleViolation("RETRAINING_COURSE_NOT_ALLOWED",
+                "That course is not a retraining option for this action: it must be published and tied to the audited SOP.",
+                details: new ErrorDetail("courseId",
+                    $"{request.CourseId} is not among the current retraining options; reload them"));
+        }
+
         var course = await courses.FindAsync(request.CourseId!.Value, cancellationToken);
         var ids = action.EmployeeIds;
         var users = await db.Users.Include(u => u.Role)
@@ -119,7 +131,18 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
     public async Task<RetrainingOptionsDto> RetrainingOptionsAsync(long id, CancellationToken cancellationToken)
     {
         var action = await FindAsync(id, cancellationToken);
+        var (auditedVersionId, _, courses) = await RetrainingCoursesAsync(action, cancellationToken);
+        return new RetrainingOptionsDto(action.Id, action.BranchAuditId, auditedVersionId, action.EmployeeIds, courses);
+    }
 
+    /// <summary>
+    /// The one rule for which courses an action may retrain on, used by both the GET options and the POST
+    /// assignment so they can never diverge: published courses bound to the audited SOP version, or the
+    /// recipe's current released version if the audited one was superseded (G-19).
+    /// </summary>
+    private async Task<(long AuditedVersionId, long? CurrentVersionId, List<RetrainingCourseOption> Courses)>
+        RetrainingCoursesAsync(CorrectiveAction action, CancellationToken cancellationToken)
+    {
         var auditedVersionId = await db.BranchAudits.AsNoTracking().Where(a => a.Id == action.BranchAuditId)
             .Select(a => a.RecipeVersionId).SingleAsync(cancellationToken);
         var recipeId = await db.RecipeVersions.AsNoTracking().Where(v => v.Id == auditedVersionId)
@@ -139,7 +162,7 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
                 c.RecipeVersionId == currentVersionId))
             .ToListAsync(cancellationToken);
 
-        return new RetrainingOptionsDto(action.Id, action.BranchAuditId, auditedVersionId, action.EmployeeIds, courses);
+        return (auditedVersionId, currentVersionId, courses);
     }
 
     private async Task<CorrectiveAction> FindAsync(long id, CancellationToken cancellationToken) =>

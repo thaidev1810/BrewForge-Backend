@@ -230,4 +230,34 @@ public sealed class BranchAuditApiTests(BrewForgeApiFactory factory)
         Assert.Contains(options.GetProperty("courses").EnumerateArray(),
             c => c.GetProperty("courseId").GetInt64() == course.Id());
     }
+
+    [Fact]
+    public async Task Retraining_can_only_be_assigned_on_a_course_tied_to_the_audited_sop()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        var trainee = await factory.UserIdAsync(TestUsers.Trainee);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+
+        // A fresh released SOP with its published course, and an unrelated published course on another recipe.
+        var sop = await factory.NewPublishedCourseAsync();
+        var sopVersion = sop.GetProperty("recipeVersionId").GetInt64();
+        var sopCourse = sop.Id();
+        var otherCourse = (await factory.NewPublishedCourseAsync()).Id();
+
+        var audit = await (await auditor.PostAsJsonAsync(Audits, new
+        {
+            branchId = branch, recipeVersionId = sopVersion, retrainingRequired = true, employeeIds = new[] { trainee },
+            items = new[] { Item("Sugar quantity", false) },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        var actionId = audit.GetProperty("correctiveActionId").GetInt64();
+
+        // A course on a different recipe is refused server-side, even when sent directly.
+        await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/assign-retraining", new { courseId = otherCourse }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_COURSE_NOT_ALLOWED");
+
+        // The course tied to the audited SOP is accepted.
+        var result = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/assign-retraining", new { courseId = sopCourse }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Single(result.GetProperty("enrollmentIds").EnumerateArray());
+    }
 }
