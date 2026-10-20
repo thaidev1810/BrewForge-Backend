@@ -260,4 +260,50 @@ public sealed class BranchAuditApiTests(BrewForgeApiFactory factory)
             .ShouldBeAsync(HttpStatusCode.OK);
         Assert.Single(result.GetProperty("enrollmentIds").EnumerateArray());
     }
+
+    [Fact]
+    public async Task Retraining_reports_each_employee_and_skips_an_inactive_one()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+
+        async Task<long> NewB01TraineeAsync()
+        {
+            var name = $"t{Guid.NewGuid():N}"[..12];
+            var created = await (await admin.PostAsJsonAsync("/api/v1/users", new
+            {
+                username = name, email = $"{name}@brewforge.local", password = "Another-Test-Passw0rd",
+                fullName = "Audit Trainee", role = "TRAINEE", branchId = branch,
+            })).ShouldBeAsync(HttpStatusCode.Created);
+            return created.GetProperty("id").GetInt64();
+        }
+
+        var keep = await NewB01TraineeAsync();
+        var gone = await NewB01TraineeAsync();
+        var sop = await factory.NewPublishedCourseAsync();
+        var sopCourse = sop.Id();
+
+        var audit = await (await auditor.PostAsJsonAsync(Audits, new
+        {
+            branchId = branch, recipeVersionId = sop.GetProperty("recipeVersionId").GetInt64(),
+            retrainingRequired = true, employeeIds = new[] { keep, gone }, items = new[] { Item("Shaking", false) },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        var actionId = audit.GetProperty("correctiveActionId").GetInt64();
+
+        // One named employee is deactivated before retraining is assigned: it is reported, not dropped.
+        await (await admin.PostAsync($"/api/v1/users/{gone}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+
+        var result = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/assign-retraining", new { courseId = sopCourse }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        var results = result.GetProperty("results").EnumerateArray().ToList();
+        var keepItem = results.Single(r => r.GetProperty("employeeId").GetInt64() == keep);
+        var goneItem = results.Single(r => r.GetProperty("employeeId").GetInt64() == gone);
+        Assert.Equal("ASSIGNED", keepItem.GetProperty("outcome").GetString());
+        Assert.True(keepItem.GetProperty("enrollmentId").GetInt64() > 0);
+        Assert.Equal("SKIPPED", goneItem.GetProperty("outcome").GetString());
+        Assert.Equal("INACTIVE", goneItem.GetProperty("reasonCode").GetString());
+        Assert.Single(result.GetProperty("enrollmentIds").EnumerateArray());   // only the active one
+    }
 }

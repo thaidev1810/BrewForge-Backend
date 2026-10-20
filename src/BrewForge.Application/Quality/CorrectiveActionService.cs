@@ -24,6 +24,28 @@ public sealed record RetrainingRequest(long? CourseId, DateOnly? Deadline);
 public sealed record RetrainingCourseOption(long CourseId, string Title, CourseType CourseType, long RecipeVersionId,
     bool CurrentVersion);
 
+/// <summary>What became of one named employee when retraining was assigned.</summary>
+public enum RetrainingOutcome
+{
+    /// <summary>A fresh enrolment on the retraining course was created.</summary>
+    Assigned,
+    /// <summary>The employee already holds an open enrolment on the course; a second is not created.</summary>
+    AlreadyEnrolled,
+    /// <summary>Left out, for the reason in <c>ReasonCode</c> (inactive, moved branch, ...).</summary>
+    Skipped,
+}
+
+/// <summary>The result for one employee named on the action.</summary>
+public sealed record RetrainingResultItem(long EmployeeId, RetrainingOutcome Outcome, long? EnrollmentId,
+    string? ReasonCode);
+
+/// <summary>
+/// The result of assigning retraining, reported per employee so a partial outcome is never shown as a
+/// whole success. <c>EnrollmentIds</c> and <c>AlreadyEnrolled</c> are kept for the old contract.
+/// </summary>
+public sealed record RetrainingResultDto(long CorrectiveActionId, long CourseId,
+    IReadOnlyList<RetrainingResultItem> Results, IReadOnlyList<long> EnrollmentIds, IReadOnlyList<long> AlreadyEnrolled);
+
 /// <summary>
 /// What an auditor needs to assign retraining after a failed audit: the staff the action already names,
 /// and the published courses tied to the SOP of that audit (its recipe version, or the recipe's current
@@ -86,7 +108,7 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
     /// Enrols the staff named on the action on a published course. Those who already hold an open
     /// enrolment on it are reported, not enrolled twice.
     /// </summary>
-    public async Task<AssignmentResultDto> AssignRetrainingAsync(long id, RetrainingRequest request,
+    public async Task<RetrainingResultDto> AssignRetrainingAsync(long id, RetrainingRequest request,
         CancellationToken cancellationToken)
     {
         var action = await FindAsync(id, cancellationToken);
@@ -110,16 +132,45 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
         }
 
         var course = await courses.FindAsync(request.CourseId!.Value, cancellationToken);
-        var ids = action.EmployeeIds;
-        var users = await db.Users.Include(u => u.Role)
-            .Where(u => ids.Contains(u.Id) && u.Status == UserStatus.Active).ToListAsync(cancellationToken);
+        var named = await db.Users.IgnoreQueryFilters().Include(u => u.Role)
+            .Where(u => action.EmployeeIds.Contains(u.Id)).ToListAsync(cancellationToken);
+        var byId = named.ToDictionary(u => u.Id);
 
-        var result = await assignments.AssignToAsync(course, users, request.Deadline,
-            $"Retraining after audit {action.BranchAuditId}", cancellationToken);
-        db.Audit(AuditEntities.CorrectiveAction, () => action.Id, AuditActions.Assign,
-            new { course.Id, enrolled = result.EnrollmentIds, skipped = result.AlreadyEnrolled });
+        // Sort each named employee into "retrain" or "skipped with a reason": an inactive one or one who
+        // moved to another branch is reported, never silently dropped.
+        var skipped = new Dictionary<long, string>();
+        var eligible = new List<AppUser>();
+        foreach (var employeeId in action.EmployeeIds)
+        {
+            if (!byId.TryGetValue(employeeId, out var user)) skipped[employeeId] = "NOT_FOUND";
+            else if (user.Status != UserStatus.Active) skipped[employeeId] = "INACTIVE";
+            else if (user.BranchId != action.BranchId) skipped[employeeId] = "WRONG_BRANCH";
+            else eligible.Add(user);
+        }
+
+        var outcomes = eligible.Count > 0
+            ? await assignments.AssignToAsync(course, eligible, request.Deadline,
+                $"Retraining after audit {action.BranchAuditId}", cancellationToken)
+            : [];
+        var byUser = outcomes.ToDictionary(o => o.UserId);
+
+        var results = action.EmployeeIds.Select(employeeId =>
+            skipped.TryGetValue(employeeId, out var reason)
+                ? new RetrainingResultItem(employeeId, RetrainingOutcome.Skipped, null, reason)
+                : new RetrainingResultItem(employeeId,
+                    byUser[employeeId].AlreadyEnrolled ? RetrainingOutcome.AlreadyEnrolled : RetrainingOutcome.Assigned,
+                    byUser[employeeId].EnrollmentId, null)).ToList();
+
+        db.Audit(AuditEntities.CorrectiveAction, () => action.Id, AuditActions.Assign, new
+        {
+            course.Id,
+            results = results.Select(r => new { r.EmployeeId, outcome = r.Outcome.ToString(), r.EnrollmentId, r.ReasonCode }),
+        });
         await db.SaveChangesAsync(cancellationToken);
-        return result;
+
+        return new RetrainingResultDto(action.Id, course.Id, results,
+            [.. results.Where(r => r.Outcome == RetrainingOutcome.Assigned).Select(r => r.EnrollmentId!.Value)],
+            [.. results.Where(r => r.Outcome == RetrainingOutcome.AlreadyEnrolled).Select(r => r.EmployeeId)]);
     }
 
     /// <summary>

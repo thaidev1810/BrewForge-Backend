@@ -32,6 +32,9 @@ public sealed record AssignmentRequest(long? CourseId, long? BranchId, IReadOnly
 public sealed record AssignmentResultDto(long CourseId, IReadOnlyList<long> EnrollmentIds,
     IReadOnlyList<long> AlreadyEnrolled);
 
+/// <summary>What became of one named user in an assignment: a fresh enrolment, or the open one they already had.</summary>
+public sealed record AssignmentOutcome(long UserId, long EnrollmentId, bool AlreadyEnrolled);
+
 public sealed record AssignmentDto(long EnrollmentId, long UserId, string? FullName, long? BranchId, string? BranchCode,
     long CourseId, string CourseTitle, DateOnly? DueDate, int ProgressPercent, AssignmentStage Stage, bool IsOverdue,
     EnrollmentState EnrollmentState);
@@ -102,12 +105,15 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
         }
 
         var users = await RosterAsync(branchId, request, cancellationToken);
-        return await AssignToAsync(course, users, request.Deadline, reason, cancellationToken);
+        var outcomes = await AssignToAsync(course, users, request.Deadline, reason, cancellationToken);
+        return new AssignmentResultDto(course.Id,
+            [.. outcomes.Where(o => !o.AlreadyEnrolled).Select(o => o.EnrollmentId)],
+            [.. outcomes.Where(o => o.AlreadyEnrolled).Select(o => o.UserId)]);
     }
 
     /// <summary>Enrols the users on the course, skipping those who already hold an open enrolment on it.</summary>
-    internal async Task<AssignmentResultDto> AssignToAsync(Course course, IReadOnlyList<AppUser> users, DateOnly? deadline,
-        string? reason, CancellationToken cancellationToken)
+    internal async Task<IReadOnlyList<AssignmentOutcome>> AssignToAsync(Course course, IReadOnlyList<AppUser> users,
+        DateOnly? deadline, string? reason, CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
         var today = DateOnly.FromDateTime(now.UtcDateTime);
@@ -118,16 +124,17 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
 
         var rules = await evaluator.RulesAsync(course.CourseType, today, cancellationToken);
         var ids = users.Select(u => u.Id).ToList();
-        var already = await db.Enrollments.IgnoreQueryFilters()
-            .Where(e => e.CourseId == course.Id && e.State != EnrollmentState.Closed && ids.Contains(e.UserId))
-            .Select(e => e.UserId).ToListAsync(cancellationToken);
+        var already = (await db.Enrollments.IgnoreQueryFilters()
+                .Where(e => e.CourseId == course.Id && e.State != EnrollmentState.Closed && ids.Contains(e.UserId))
+                .Select(e => new { e.UserId, e.Id }).ToListAsync(cancellationToken))
+            .ToDictionary(e => e.UserId, e => e.Id);
 
-        var created = new List<Enrollment>();
-        foreach (var user in users.Where(u => !already.Contains(u.Id)))
+        var created = new Dictionary<long, Enrollment>();
+        foreach (var user in users.Where(u => !already.ContainsKey(u.Id)))
         {
             var enrollment = Enrollment.Assign(course, user.Id, null, rules, now, deadline);
             db.Enrollments.Add(enrollment);
-            created.Add(enrollment);
+            created[user.Id] = enrollment;
             db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Assign,
                 new { enrollment.CourseId, enrollment.UserId, enrollment.DueDate, reason });
             db.Notify(user.Id, "Course assigned",
@@ -135,7 +142,10 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
                 + (reason is null ? "" : $" Reason: {reason}"), now);
         }
         await db.SaveChangesAsync(cancellationToken);
-        return new AssignmentResultDto(course.Id, [.. created.Select(e => e.Id)], already);
+
+        return [.. users.Select(u => already.TryGetValue(u.Id, out var existing)
+            ? new AssignmentOutcome(u.Id, existing, AlreadyEnrolled: true)
+            : new AssignmentOutcome(u.Id, created[u.Id].Id, AlreadyEnrolled: false))];
     }
 
     private async Task<IReadOnlyList<AppUser>> RosterAsync(long branchId, AssignmentRequest request,
