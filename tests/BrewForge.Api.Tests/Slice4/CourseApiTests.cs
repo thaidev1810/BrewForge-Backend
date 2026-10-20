@@ -499,19 +499,25 @@ public sealed class CourseApiTests(BrewForgeApiFactory factory)
         var versionId = course.GetProperty("recipeVersionId").GetInt64();
         var trainerId = await factory.UserIdAsync(TestUsers.Trainer);
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        var url = $"/api/v1/courses/{courseId}/eligible-trainers";
+        var url = $"/api/v1/courses/{courseId}/eligible-trainers?size=100";
 
         // Not certified on this fresh version yet: the trainer is listed but not eligible, with a reason.
         var before = await (await trainer.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
-        var meBefore = before.EnumerateArray().Single(t => t.GetProperty("id").GetInt64() == trainerId);
+        Assert.True(before.GetProperty("total").GetInt32() >= 1);   // the response is paged
+        var meBefore = before.GetProperty("items").EnumerateArray().Single(t => t.GetProperty("id").GetInt64() == trainerId);
         Assert.False(meBefore.GetProperty("eligible").GetBoolean());
         Assert.Equal(JsonValueKind.String, meBefore.GetProperty("reason").ValueKind);
 
         // Certified on the version: now eligible, no reason given.
         await factory.CertifyAsync(trainerId, courseId, versionId);
         var after = await (await trainer.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
-        var meAfter = after.EnumerateArray().Single(t => t.GetProperty("id").GetInt64() == trainerId);
+        var meAfter = after.GetProperty("items").EnumerateArray().Single(t => t.GetProperty("id").GetInt64() == trainerId);
         Assert.True(meAfter.GetProperty("eligible").GetBoolean());
         Assert.Equal(JsonValueKind.Null, meAfter.GetProperty("reason").ValueKind);
+
+        // Search narrows by name/username; a term that matches nobody returns an empty page.
+        var none = await (await trainer.GetAsync($"/api/v1/courses/{courseId}/eligible-trainers?q=zzz-no-such-trainer"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(0, none.GetProperty("total").GetInt32());
     }
 }

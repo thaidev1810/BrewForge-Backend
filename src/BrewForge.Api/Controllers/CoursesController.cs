@@ -42,10 +42,11 @@ public sealed class CoursesController(CourseService courses) : ControllerBase
     public Task<IReadOnlyList<CourseModuleDto>> Modules(long id, CancellationToken cancellationToken) =>
         courses.GetModulesAsync(id, cancellationToken);
 
-    /// <summary>The active trainers for a session, each flagged eligible (BR-34) or with the reason they are not.</summary>
+    /// <summary><c>?q=&amp;page=&amp;size=&amp;sort=</c>. The active trainers for a session, each flagged eligible (BR-34) or with the reason they are not.</summary>
     [HttpGet("{id:long}/eligible-trainers"), AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager)]
-    public Task<IReadOnlyList<TrainerOptionDto>> EligibleTrainers(long id, CancellationToken cancellationToken) =>
-        courses.EligibleTrainersAsync(id, cancellationToken);
+    public Task<PagedResult<TrainerOptionDto>> EligibleTrainers(long id, [FromQuery] PageQuery paging,
+        [FromQuery] string? q, CancellationToken cancellationToken) =>
+        courses.EligibleTrainersAsync(id, paging, q, cancellationToken);
 
     [HttpGet("{id:long}/quiz"), Authorize(Policy = Policies.Trainer)]
     public Task<QuizDto> GetQuiz(long id, CancellationToken cancellationToken) =>

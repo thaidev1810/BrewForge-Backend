@@ -24,6 +24,11 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
         .Add("state", c => c.State)
         .Add("publishedAt", c => c.PublishedAt);
 
+    private static readonly SortMap<AppUser> TrainerSorting = new SortMap<AppUser>("fullName", u => u.Id)
+        .Add("id", u => u.Id)
+        .Add("fullName", u => u.FullName)
+        .Add("username", u => u.Username);
+
     // ---------------------------------------------------------------- courses
 
     public async Task<PagedResult<CourseDto>> ListAsync(PageQuery paging, string? keyword, string? state,
@@ -70,8 +75,8 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
     /// no recipe has no version to be certified on, so every active trainer is eligible. Being a TRAINER
     /// is not enough on its own; the reason says why one is not eligible.
     /// </summary>
-    public async Task<IReadOnlyList<TrainerOptionDto>> EligibleTrainersAsync(long courseId,
-        CancellationToken cancellationToken)
+    public async Task<PagedResult<TrainerOptionDto>> EligibleTrainersAsync(long courseId, PageQuery paging,
+        string? keyword, CancellationToken cancellationToken)
     {
         var versionId = await db.Courses.AsNoTracking().Where(c => c.Id == courseId)
             .Select(c => c.RecipeVersionId).FirstOrDefaultAsync(cancellationToken);
@@ -80,23 +85,30 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
             throw DomainException.NotFound("Course", courseId);
         }
 
-        var trainers = await db.Users.AsNoTracking().Include(u => u.Role)
-            .Where(u => u.Role.RoleName == RoleName.Trainer && u.Status == UserStatus.Active)
-            .OrderBy(u => u.FullName).ThenBy(u => u.Id)
-            .Select(u => new { u.Id, u.FullName, u.BranchId }).ToListAsync(cancellationToken);
+        var query = db.Users.AsNoTracking().Include(u => u.Role)
+            .Where(u => u.Role.RoleName == RoleName.Trainer && u.Status == UserStatus.Active);
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            var term = keyword.Trim().ToLower();
+            query = query.Where(u => u.Username.ToLower().Contains(term) || u.FullName.ToLower().Contains(term));
+        }
 
+        // Page over a stable order; eligibility (BR-34) is derived for the page that was drawn.
+        var page = await query.ToPagedAsync(paging, TrainerSorting, u => u, cancellationToken);
+        var pageIds = page.Items.Select(u => u.Id).ToList();
         var certified = versionId is { } version
             ? (await db.Certificates.AsNoTracking()
-                .Where(c => c.Status == CertificateStatus.Valid && c.RecipeVersionId == version)
+                .Where(c => c.Status == CertificateStatus.Valid && c.RecipeVersionId == version && pageIds.Contains(c.UserId))
                 .Select(c => c.UserId).ToListAsync(cancellationToken)).ToHashSet()
             : [];
 
-        return [.. trainers.Select(t =>
+        var items = page.Items.Select(t =>
         {
             var eligible = versionId is null || certified.Contains(t.Id);
             return new TrainerOptionDto(t.Id, t.FullName, t.BranchId, eligible,
                 eligible ? null : $"not certified on recipe version {versionId}");
-        })];
+        }).ToList();
+        return new PagedResult<TrainerOptionDto>(items, page.Page, page.Size, page.Total);
     }
 
     public async Task<IReadOnlyList<CourseModuleDto>> GetModulesAsync(long id, CancellationToken cancellationToken)
