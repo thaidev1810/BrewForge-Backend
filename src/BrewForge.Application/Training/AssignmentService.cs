@@ -10,8 +10,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace BrewForge.Application.Training;
 
-/// <summary>Where one assignment stands, in the words of the training flow.</summary>
-public enum AssignmentStatus
+/// <summary>
+/// The stage of an assignment in the training flow, derived from the enrolment. Being past the
+/// deadline is a separate flag (<c>isOverdue</c>), not a stage, so it never hides the real progress.
+/// </summary>
+public enum AssignmentStage
 {
     Assigned,
     InProgress,
@@ -19,7 +22,6 @@ public enum AssignmentStatus
     QuizPassed,
     PracticalPending,
     Completed,
-    Overdue,
     Locked,
     Closed,
 }
@@ -31,7 +33,7 @@ public sealed record AssignmentResultDto(long CourseId, IReadOnlyList<long> Enro
     IReadOnlyList<long> AlreadyEnrolled);
 
 public sealed record AssignmentDto(long EnrollmentId, long UserId, string? FullName, long? BranchId, string? BranchCode,
-    long CourseId, string CourseTitle, DateOnly? DueDate, int ProgressPercent, AssignmentStatus Status,
+    long CourseId, string CourseTitle, DateOnly? DueDate, int ProgressPercent, AssignmentStage Stage, bool IsOverdue,
     EnrollmentState EnrollmentState);
 
 /// <summary>
@@ -50,23 +52,23 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
         .Add("progressPercent", e => e.ProgressPercent);
 
     public async Task<PagedResult<AssignmentDto>> ListAsync(PageQuery paging, long? branchId, long? courseId,
-        string? status, CancellationToken cancellationToken)
+        string? stage, bool? overdue, CancellationToken cancellationToken)
     {
-        var statusFilter = PagingExtensions.ParseFilter<AssignmentStatus>(status, "status");
+        var stageFilter = PagingExtensions.ParseFilter<AssignmentStage>(stage, "stage");
 
         var query = db.Enrollments.AsNoTracking().Include(e => e.User).Include(e => e.Modules)
-            .Include(e => e.PracticalEvaluations).AsQueryable();
+            .Include(e => e.QuizAttempts).Include(e => e.PracticalEvaluations).AsQueryable();
         if (branchId is not null) query = query.Where(e => e.User.BranchId == branchId);
         if (courseId is not null) query = query.Where(e => e.CourseId == courseId);
 
-        if (statusFilter is null)
+        if (stageFilter is null && overdue is null)
         {
             var page = await query.ToPagedAsync(paging, Sorting, e => e, cancellationToken);
             return new PagedResult<AssignmentDto>(await ToDtosAsync(page.Items, cancellationToken), page.Page, page.Size,
                 page.Total);
         }
 
-        // The status is derived from the enrolment, so it cannot be filtered in the database.
+        // Stage and overdue are derived from the enrolment, so they cannot be filtered in the database.
         // The caller's sort and page bounds are still honoured: validate and order exactly as the
         // unfiltered branch does, then derive, filter and page the rows in memory.
         new FieldErrors()
@@ -74,7 +76,9 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
             .Check(paging.Size is >= 1 and <= PageQuery.MaxSize, "size", $"must be between 1 and {PageQuery.MaxSize}")
             .ThrowIfAny();
         var ordered = await Sorting.Apply(query, paging.Sort).ToListAsync(cancellationToken);
-        var matching = (await ToDtosAsync(ordered, cancellationToken)).Where(a => a.Status == statusFilter).ToList();
+        var matching = (await ToDtosAsync(ordered, cancellationToken))
+            .Where(a => (stageFilter is null || a.Stage == stageFilter) && (overdue is null || a.IsOverdue == overdue))
+            .ToList();
         return new PagedResult<AssignmentDto>(
             [.. matching.Skip((paging.Page - 1) * paging.Size).Take(paging.Size)], paging.Page, paging.Size, matching.Count);
     }
@@ -186,31 +190,42 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
             .ToDictionaryAsync(b => b.Id, b => b.BranchCode, cancellationToken);
         var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
 
-        return [.. enrollments.Select(e => new AssignmentDto(e.Id, e.UserId, e.User.FullName, e.User.BranchId,
-            e.User.BranchId is { } b ? codes.GetValueOrDefault(b) : null, e.CourseId,
-            titles.GetValueOrDefault(e.CourseId) ?? "", e.DueDate, e.ProgressPercent,
-            StatusOf(e, certified.Contains((e.UserId, e.CourseId)), scheduled.Contains(e.Id), today), e.State))];
+        return [.. enrollments.Select(e =>
+        {
+            var stage = StageOf(e, certified.Contains((e.UserId, e.CourseId)), scheduled.Contains(e.Id));
+            // Overdue is a separate flag, and only while the work is still outstanding.
+            var isOverdue = e.DueDate is { } due && due < today
+                && stage is not (AssignmentStage.Completed or AssignmentStage.Closed or AssignmentStage.Locked);
+            return new AssignmentDto(e.Id, e.UserId, e.User.FullName, e.User.BranchId,
+                e.User.BranchId is { } b ? codes.GetValueOrDefault(b) : null, e.CourseId,
+                titles.GetValueOrDefault(e.CourseId) ?? "", e.DueDate, e.ProgressPercent, stage, isOverdue, e.State);
+        })];
     }
 
     /// <summary>
-    /// COMPLETED once a certificate stands; otherwise OVERDUE past the deadline; otherwise the stage of the
-    /// enrolment. A passed quiz is QUIZ_PASSED until a practical is booked or has been failed, then PRACTICAL_PENDING.
+    /// The stage of an assignment, read from the enrolment and the CURRENT training cycle only: a reset
+    /// starts a fresh cycle, so quiz attempts, appointments and practicals from before it do not count.
+    /// COMPLETED once a certificate stands; CLOSED and LOCKED follow the domain state; otherwise the
+    /// progress through the cycle. A passed quiz is QUIZ_PASSED until a practical is booked or has been
+    /// failed this cycle, then PRACTICAL_PENDING. Being past the deadline is reported by isOverdue, not
+    /// here, so it never hides the real stage; a cancelled appointment is not a booking, and completing
+    /// one is not passing the practical.
     /// </summary>
-    internal static AssignmentStatus StatusOf(Enrollment e, bool certified, bool practicalBooked, DateOnly today)
+    internal static AssignmentStage StageOf(Enrollment e, bool certified, bool practicalBooked)
     {
-        if (certified) return AssignmentStatus.Completed;
-        if (e.State == EnrollmentState.Closed) return AssignmentStatus.Closed;
-        if (e.State == EnrollmentState.Locked) return AssignmentStatus.Locked;
-        if (e.DueDate is { } due && due < today) return AssignmentStatus.Overdue;
+        if (certified) return AssignmentStage.Completed;
+        if (e.State == EnrollmentState.Closed) return AssignmentStage.Closed;
+        if (e.State == EnrollmentState.Locked) return AssignmentStage.Locked;
 
         return e.State switch
         {
-            EnrollmentState.Assigned => AssignmentStatus.Assigned,
-            EnrollmentState.InProgress => AssignmentStatus.InProgress,
-            EnrollmentState.Eligible => AssignmentStatus.TheoryCompleted,
-            _ => practicalBooked || e.PracticalEvaluations.Any(p => !p.Passed)
-                ? AssignmentStatus.PracticalPending
-                : AssignmentStatus.QuizPassed,
+            EnrollmentState.Assigned => AssignmentStage.Assigned,
+            EnrollmentState.InProgress => AssignmentStage.InProgress,
+            EnrollmentState.Eligible when !e.HasPassedQuiz => AssignmentStage.TheoryCompleted,
+            EnrollmentState.Eligible when practicalBooked || e.LatestPractical() is { Passed: false }
+                => AssignmentStage.PracticalPending,
+            EnrollmentState.Eligible => AssignmentStage.QuizPassed,
+            _ => AssignmentStage.Completed,   // PASSED without a certificate on record: the course is done.
         };
     }
 }

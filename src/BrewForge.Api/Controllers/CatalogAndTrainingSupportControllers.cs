@@ -86,11 +86,12 @@ public sealed class QuestionBankController(QuestionBankService bank) : Controlle
 [Route("api/v1/assignments")]
 public sealed class AssignmentsController(AssignmentService assignments) : ControllerBase
 {
-    /// <summary><c>?branchId=&amp;courseId=&amp;status=ASSIGNED|IN_PROGRESS|THEORY_COMPLETED|QUIZ_PASSED|PRACTICAL_PENDING|COMPLETED|OVERDUE</c></summary>
+    /// <summary><c>?branchId=&amp;courseId=&amp;stage=ASSIGNED|IN_PROGRESS|THEORY_COMPLETED|QUIZ_PASSED|PRACTICAL_PENDING|COMPLETED|LOCKED|CLOSED&amp;overdue=true|false</c></summary>
     [HttpGet, AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager, RoleName.BranchManager)]
     public Task<PagedResult<AssignmentDto>> List([FromQuery] PageQuery paging, [FromQuery] long? branchId,
-        [FromQuery] long? courseId, [FromQuery] string? status, CancellationToken cancellationToken) =>
-        assignments.ListAsync(paging, branchId, courseId, status, cancellationToken);
+        [FromQuery] long? courseId, [FromQuery] string? stage, [FromQuery] bool? overdue,
+        CancellationToken cancellationToken) =>
+        assignments.ListAsync(paging, branchId, courseId, stage, overdue, cancellationToken);
 
     [HttpPost, AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager)]
     public async Task<ActionResult<AssignmentResultDto>> Assign(AssignmentRequest request, CancellationToken cancellationToken) =>

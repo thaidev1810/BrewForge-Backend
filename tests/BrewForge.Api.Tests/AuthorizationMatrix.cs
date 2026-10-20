@@ -54,6 +54,8 @@ public static class AuthorizationMatrix
 
         // 3. Master data
         new("GET", "/users", AdminOnly),
+        new("GET", "/users/lookup",
+            [RoleName.Admin, RoleName.Trainer, RoleName.TrainingManager, RoleName.QualityAuditor, RoleName.BranchManager]),
         new("POST", "/users", AdminOnly),
         new("GET", "/users/{id}", AdminOnly),
         new("PUT", "/users/{id}", AdminOnly),
@@ -94,6 +96,7 @@ public static class AuthorizationMatrix
         new("PUT", "/settings/{key}", AdminOnly),
         new("POST", "/branch-audits/evidence", [RoleName.QualityAuditor]),
         new("GET", "/branch-audits/evidence/{key}", AuditReaders),
+        new("GET", "/corrective-actions/{id}/retraining-options", [RoleName.QualityAuditor]),
         new("POST", "/corrective-actions/{id}/assign-retraining", [RoleName.QualityAuditor]),
 
         // Branch audits and corrective actions: see QualityController.
@@ -162,6 +165,7 @@ public static class AuthorizationMatrix
         new("POST", "/courses", TrainerOnly),
         new("GET", "/courses/{id}", [RoleName.Trainer, RoleName.TrainingManager]),
         new("GET", "/courses/{id}/modules", [RoleName.Trainer, RoleName.TrainingManager]),
+        new("GET", "/courses/{id}/eligible-trainers", [RoleName.Trainer, RoleName.TrainingManager]),
         new("PUT", "/course-modules/{id}", TrainerOnly),
         new("POST", "/course-modules/{id}/regenerate", TrainerOnly),
         new("GET", "/course-modules/{id}/lessons", TrainerOnly),
