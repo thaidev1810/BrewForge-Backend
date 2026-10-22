@@ -7,6 +7,7 @@ using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.Quality;
 using BrewForge.Domain.Recipes;
+using BrewForge.Domain.Training;
 using Microsoft.EntityFrameworkCore;
 
 namespace BrewForge.Application.Quality;
@@ -98,6 +99,7 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
         CancellationToken cancellationToken)
     {
         var action = await FindAsync(id, cancellationToken);
+        await EnsureRetrainingPassedAsync(action, cancellationToken);
         action.Close(currentUser.RequireUserId(), clock.GetUtcNow(), request.Note);
         db.Audit(AuditEntities.CorrectiveAction, () => action.Id, AuditActions.Close, new { request.Note });
         await db.SaveChangesAsync(cancellationToken);
@@ -171,6 +173,42 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
         return new RetrainingResultDto(action.Id, course.Id, results,
             [.. results.Where(r => r.Outcome == RetrainingOutcome.Assigned).Select(r => r.EnrollmentId!.Value)],
             [.. results.Where(r => r.Outcome == RetrainingOutcome.AlreadyEnrolled).Select(r => r.EmployeeId)]);
+    }
+
+    /// <summary>
+    /// G-19: an action that required retraining is closed only once every employee it still obliges has
+    /// passed it. Staff who left the branch or were deactivated — the ones assign-retraining skips — are
+    /// not counted, so a departure cannot hold an action open for ever. An already-closed action is left
+    /// to <see cref="CorrectiveAction.Close"/> to refuse (BR-37), not gated here.
+    /// </summary>
+    private async Task EnsureRetrainingPassedAsync(CorrectiveAction action, CancellationToken cancellationToken)
+    {
+        if (action.Status == CorrectiveActionStatus.Closed || !action.RetrainingRequired || action.EmployeeIds.Length == 0)
+        {
+            return;
+        }
+
+        // The employees the action still obliges: named, active, and at its branch. The rest are the ones
+        // assign-retraining would skip, so they do not hold the close open.
+        var obliged = await db.Users.IgnoreQueryFilters()
+            .Where(u => action.EmployeeIds.Contains(u.Id) && u.Status == UserStatus.Active && u.BranchId == action.BranchId)
+            .Select(u => u.Id).ToListAsync(cancellationToken);
+        if (obliged.Count == 0) return;
+
+        var (_, _, courses) = await RetrainingCoursesAsync(action, cancellationToken);
+        var courseIds = courses.Select(c => c.CourseId).ToList();
+        var passed = await db.Enrollments.IgnoreQueryFilters()
+            .Where(e => obliged.Contains(e.UserId) && courseIds.Contains(e.CourseId) && e.State == EnrollmentState.Passed)
+            .Select(e => e.UserId).Distinct().ToListAsync(cancellationToken);
+
+        var pending = obliged.Where(userId => !passed.Contains(userId)).ToList();
+        if (pending.Count > 0)
+        {
+            throw DomainException.RuleViolation("RETRAINING_INCOMPLETE",
+                "The action requires retraining: close it only after every named employee still at the branch has passed it.",
+                details: [.. pending.Select(userId => new ErrorDetail("employeeIds",
+                    $"employee {userId} has not passed the retraining"))]);
+        }
     }
 
     /// <summary>
