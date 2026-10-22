@@ -67,7 +67,9 @@ public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
                     continue;
                 }
 
-                var mapped = entity.GetProperties().Select(p => p.GetColumnName()).ToList();
+                // xmin is a Postgres system column (the row version used as a concurrency token);
+                // it is a real column but information_schema.columns never lists it, so leave it out.
+                var mapped = entity.GetProperties().Select(p => p.GetColumnName()).Where(c => c != "xmin").ToList();
                 found.AddRange(mapped.Except(actual).Select(c => $"{table}.{c}: mapped by {entity.ClrType.Name} but not in the schema"));
                 found.AddRange(actual.Except(mapped).Select(c => $"{table}.{c}: in the schema but not mapped by {entity.ClrType.Name}"));
             }

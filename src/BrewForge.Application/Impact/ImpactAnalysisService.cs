@@ -106,7 +106,17 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
         var run = ImpactRun.Resume(header.RunId, trigger, affected, rows, clock.GetUtcNow());
         run.Commit(rows);
         header.MarkCommitted();
-        await ApplyAsync(run, cancellationToken);
+        try
+        {
+            // The header is flipped to committed in the same SaveChanges as the flags and audit.
+            // If another commit of this run won the race, xmin no longer matches and EF rejects
+            // the update, rolling the whole batch back: no double flagging, no duplicate notices.
+            await ApplyAsync(run, cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw DomainException.RuleViolation("IMPACT_ALREADY_COMMITTED", "This impact analysis has already been committed.");
+        }
         return await ToDtoAsync(run.RunId, trigger, affected, committed: true, cancellationToken);
     }
 

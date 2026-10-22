@@ -381,8 +381,17 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         });
 
         modelBuilder.Entity<ChangeImpact>();
-        // The run header is keyed by its run id, not an identity column.
-        modelBuilder.Entity<ImpactRunHeader>().HasKey(h => h.RunId);
+        modelBuilder.Entity<ImpactRunHeader>(header =>
+        {
+            // The run header is keyed by its run id, not an identity column.
+            header.HasKey(h => h.RunId);
+            // Committing a run is a one-time flip of this header. xmin (Postgres' per-row system
+            // column that changes on every update) is the concurrency token: of two commits that
+            // both read the header uncommitted, one wins the update and the other's SaveChanges
+            // finds no matching xmin and is rejected, so a race cannot commit the same run twice.
+            header.Property<uint>("xmin").HasColumnName("xmin").HasColumnType("xid")
+                .ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
+        });
 
         modelBuilder.Entity<Notification>();
         modelBuilder.Entity<PushSubscription>(subscription =>
