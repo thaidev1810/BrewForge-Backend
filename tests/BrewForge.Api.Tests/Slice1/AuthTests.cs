@@ -143,6 +143,30 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Two_refreshes_of_the_same_token_at_once_yield_one_new_session_and_one_401()
+    {
+        using var client = factory.CreateClient();
+        var session = await factory.LoginAsync(TestUsers.Trainer);
+
+        // The same refresh token is presented twice at the same moment (a double-submit or a retry).
+        var responses = await Task.WhenAll(
+            client.PostAsJsonAsync(Refresh, new { refreshToken = session.RefreshToken }),
+            client.PostAsJsonAsync(Refresh, new { refreshToken = session.RefreshToken }));
+
+        // Single-use holds under the race: exactly one gets a new pair, the other is refused.
+        var statuses = responses.Select(r => r.StatusCode).OrderBy(s => s).ToArray();
+        Assert.Equal([HttpStatusCode.OK, HttpStatusCode.Unauthorized], statuses);
+        Assert.False(string.IsNullOrEmpty((await responses.Single(r => r.StatusCode == HttpStatusCode.OK).JsonAsync())
+            .GetProperty("refreshToken").GetString()));
+        await responses.Single(r => r.StatusCode == HttpStatusCode.Unauthorized)
+            .ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+
+        // The token is spent either way: presenting it a third time is still refused.
+        await (await client.PostAsJsonAsync(Refresh, new { refreshToken = session.RefreshToken }))
+            .ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    [Fact]
     public async Task Logout_revokes_the_refresh_token()
     {
         var session = await factory.LoginAsync(TestUsers.Auditor);

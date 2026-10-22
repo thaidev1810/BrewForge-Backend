@@ -73,9 +73,32 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
         var issued = tokens.Issue(user);
         db.Audit(AuditEntities.RefreshToken, () => claims.TokenId, AuditActions.Revoke,
             new { reason = "ROTATED", replacedBy = issued.RefreshTokenId }, actorUserId: user.Id);
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            // Revoking the presented token is what makes the refresh single-use. A unique index
+            // over this revocation lets only one of two concurrent refreshes of the same token
+            // commit; the loser lands here and is refused exactly like a token already spent.
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (IsRefreshRotationRace(exception))
+        {
+            throw DomainException.Unauthenticated("The refresh token is invalid, expired or revoked.");
+        }
 
         return new LoginResponse(issued.AccessToken, issued.RefreshToken, UserDto.From(user));
+    }
+
+    // The partial unique index of migration 015; its name reaches here in the exception message,
+    // so the race is recognised without this layer taking a dependency on the database provider.
+    private const string SingleRevokeIndex = "ux_refresh_token_single_revoke";
+
+    private static bool IsRefreshRotationRace(DbUpdateException exception)
+    {
+        for (Exception? error = exception; error is not null; error = error.InnerException)
+        {
+            if (error.Message.Contains(SingleRevokeIndex, StringComparison.Ordinal)) return true;
+        }
+        return false;
     }
 
     /// <summary>Revokes the caller's refresh token. Safe to repeat.</summary>
