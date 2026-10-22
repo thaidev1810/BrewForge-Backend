@@ -282,4 +282,33 @@ public sealed class PosImportApiTests(BrewForgeApiFactory factory)
         Assert.False(theirs.GetProperty("replayed").GetBoolean());
         Assert.NotEqual(original.GetProperty("jobId").GetString(), theirs.GetProperty("jobId").GetString());
     }
+
+    [Fact]
+    public async Task Two_imports_under_the_same_key_at_once_import_once_and_replay_once()
+    {
+        var drink = await factory.NewLiveDrinkAsync();
+        var day = Today.AddDays(-1);
+        var key = Guid.NewGuid().ToString();
+        var file = Csv(Line(drink, day, 100));
+
+        // The same upload is sent twice at the same moment (a retry fired before the first answered).
+        var responses = await Task.WhenAll(
+            factory.ImportAsync(file, idempotencyKey: key),
+            factory.ImportAsync(file, idempotencyKey: key));
+        var results = new List<JsonElement>();
+        foreach (var response in responses) results.Add(await response.ShouldBeAsync(HttpStatusCode.OK));
+
+        // Both answer 200 for the one job, but only one did the import and the other replayed it.
+        Assert.Single(results.Select(r => r.GetProperty("jobId").GetString()).Distinct());
+        Assert.Equal(1, results.Count(r => !r.GetProperty("replayed").GetBoolean()));
+        Assert.Equal(1, results.Count(r => r.GetProperty("replayed").GetBoolean()));
+
+        // The day was applied once, and one job and one key claim are stored for it.
+        Assert.Equal(100, await factory.WithDbAsync(db => db.SalesRecords.Where(s => s.RecipeId == drink.RecipeId)
+            .Select(s => s.CupsSold).SingleAsync()));
+        Assert.Equal(1, await factory.WithDbAsync(db => db.PosImportIdempotencies.CountAsync(i => i.IdempotencyKey == key)));
+        Assert.Equal(1, await factory.WithDbAsync(async db => (await db.AuditLogs
+            .Where(a => a.EntityType == "SalesImport" && a.Action == "POS_IMPORT").Select(a => a.PayloadJson).ToListAsync())
+            .Count(payload => payload!.Contains(key))));
+    }
 }

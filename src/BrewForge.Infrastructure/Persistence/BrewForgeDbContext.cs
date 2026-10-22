@@ -57,6 +57,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<Certificate> Certificates => Set<Certificate>();
     public DbSet<BranchLaunchStatus> BranchLaunchStatuses => Set<BranchLaunchStatus>();
     public DbSet<SalesRecord> SalesRecords => Set<SalesRecord>();
+    public DbSet<PosImportIdempotency> PosImportIdempotencies => Set<PosImportIdempotency>();
     public DbSet<PilotProgram> PilotPrograms => Set<PilotProgram>();
     public DbSet<ChangeImpact> ChangeImpacts => Set<ChangeImpact>();
     public DbSet<ImpactRunHeader> ImpactRuns => Set<ImpactRunHeader>();
@@ -410,6 +411,14 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             sales.HasIndex(s => new { s.BranchId, s.RecipeId, s.TradingDate }).IsUnique();
             // A store-level caller sees the sales of its own branch.
             sales.HasQueryFilter(s => BranchScope == null || s.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<PosImportIdempotency>(idempotency =>
+        {
+            // One import per key per user: the primary key lets the database refuse a second,
+            // so a retried upload (concurrent or later) replays instead of importing twice.
+            idempotency.HasKey(i => new { i.UserId, i.IdempotencyKey });
+            idempotency.Property(i => i.IdempotencyKey).HasMaxLength(200);
         });
 
         modelBuilder.Entity<ModuleProgress>(progress =>

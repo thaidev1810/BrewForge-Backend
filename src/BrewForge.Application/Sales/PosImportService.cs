@@ -52,6 +52,11 @@ public sealed class PosImportService(IBrewForgeDbContext db, IPosFileReader read
     {
         var userId = currentUser.RequireUserId();
         idempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey.Trim();
+        if (idempotencyKey is { Length: > 200 })
+        {
+            throw DomainException.Validation("The Idempotency-Key is too long.",
+                new ErrorDetail("Idempotency-Key", "must be at most 200 characters"));
+        }
         if (idempotencyKey is not null && await FindReplayAsync(userId, idempotencyKey, cancellationToken) is { } replay)
         {
             return replay;
@@ -142,7 +147,25 @@ public sealed class PosImportService(IBrewForgeDbContext db, IPosFileReader read
             [.. errors.OrderBy(error => error.Row)], now);
         db.Audit(AuditEntities.SalesImport, () => jobNumber, AuditActions.PosImport,
             new StoredImport(result, idempotencyKey, currentUser.RestrictedToBranchId));
-        await db.SaveChangesAsync(cancellationToken);
+        // The key is claimed in the same save as the sales it applied, so the two stand or fall
+        // together: a concurrent retry that loses the claim has its sales rolled back with it.
+        if (idempotencyKey is not null)
+        {
+            db.PosImportIdempotencies.Add(new PosImportIdempotency(userId, idempotencyKey, jobNumber, now));
+        }
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException) when (idempotencyKey is not null)
+        {
+            // A concurrent import under the same key committed first (its idempotency claim, or the
+            // sales day it had already written, collided with ours) and rolled this whole batch back,
+            // so nothing was imported twice. Answer with the winner's result as a replay.
+            var winner = await FindReplayAsync(userId, idempotencyKey, cancellationToken);
+            if (winner is null) throw;
+            return winner;
+        }
         return result;
     }
 
@@ -222,18 +245,22 @@ public sealed class PosImportService(IBrewForgeDbContext db, IPosFileReader read
 
     /// <summary>
     /// The original result of an import this user already made under this
-    /// Idempotency-Key, so that a retried upload does not import twice.
+    /// Idempotency-Key, so that a retried upload does not import twice. The key
+    /// is looked up in its own ledger, so it is found however long ago it was used.
     /// </summary>
     private async Task<PosImportResultDto?> FindReplayAsync(long userId, string idempotencyKey,
         CancellationToken cancellationToken)
     {
-        var imports = await db.AuditLogs.AsNoTracking()
-            .Where(a => a.EntityType == AuditEntities.SalesImport && a.Action == AuditActions.PosImport && a.UserId == userId)
-            .OrderByDescending(a => a.Id).Select(a => a.PayloadJson).Take(200).ToListAsync(cancellationToken);
+        var jobNumber = await db.PosImportIdempotencies.AsNoTracking()
+            .Where(i => i.UserId == userId && i.IdempotencyKey == idempotencyKey)
+            .Select(i => (long?)i.JobNumber).FirstOrDefaultAsync(cancellationToken);
+        if (jobNumber is null) return null;
 
-        var original = imports.OfType<string>()
-            .Select(payload => JsonSerializer.Deserialize<StoredImport>(payload, StoredFormat))
-            .FirstOrDefault(import => import?.IdempotencyKey == idempotencyKey);
+        var payload = await db.AuditLogs.AsNoTracking()
+            .Where(a => a.EntityType == AuditEntities.SalesImport && a.EntityId == jobNumber.Value
+                        && a.Action == AuditActions.PosImport)
+            .Select(a => a.PayloadJson).FirstOrDefaultAsync(cancellationToken);
+        var original = payload is null ? null : JsonSerializer.Deserialize<StoredImport>(payload, StoredFormat);
         return original is null ? null : original.Result with { Replayed = true };
     }
 }

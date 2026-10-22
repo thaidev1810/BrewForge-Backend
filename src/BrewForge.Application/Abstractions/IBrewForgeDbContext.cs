@@ -59,6 +59,9 @@ public interface IBrewForgeDbContext
     DbSet<BranchLaunchStatus> BranchLaunchStatuses { get; }
     DbSet<SalesRecord> SalesRecords { get; }
 
+    /// <summary>The idempotency ledger that makes a retried POS import a replay, not a second import.</summary>
+    DbSet<PosImportIdempotency> PosImportIdempotencies { get; }
+
     /// <summary>The aggregate root. Pilot branches and the launch decision are reached through it.</summary>
     DbSet<PilotProgram> PilotPrograms { get; }
     DbSet<ChangeImpact> ChangeImpacts { get; }
