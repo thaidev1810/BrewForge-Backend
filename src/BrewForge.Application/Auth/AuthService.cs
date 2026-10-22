@@ -16,6 +16,9 @@ public sealed record LoginResponse(string AccessToken, string RefreshToken, User
 public sealed record MeResponse(long Id, string Username, string Email, string FullName, RoleName Role,
     long? BranchId, UserStatus Status, IReadOnlyList<string> Permissions);
 
+/// <summary>A role and the permission codes it carries, for the client to build menus and role screens (G-06).</summary>
+public sealed record RoleDto(RoleName Role, IReadOnlyList<string> Permissions);
+
 /// <summary>SF-02: login, token refresh with rotation, logout and the caller's own profile.</summary>
 public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, ITokenService tokens,
     ICurrentUser currentUser)
@@ -128,6 +131,16 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
 
         return new MeResponse(user.Id, user.Username, user.Email, user.FullName, user.Role.RoleName,
             user.BranchId, user.Status, user.Role.Permissions);
+    }
+
+    /// <summary>
+    /// Every role with its permission set, so the client can build menus and role screens (G-06).
+    /// The server still authorizes each endpoint on the role itself and never trusts the client (SE-03).
+    /// </summary>
+    public async Task<IReadOnlyList<RoleDto>> RolesAsync(CancellationToken cancellationToken)
+    {
+        var roles = await db.Roles.AsNoTracking().OrderBy(r => r.RoleName).ToListAsync(cancellationToken);
+        return [.. roles.Select(r => new RoleDto(r.RoleName, r.Permissions))];
     }
 
     private Task<bool> IsRevokedAsync(long tokenId, CancellationToken cancellationToken) =>

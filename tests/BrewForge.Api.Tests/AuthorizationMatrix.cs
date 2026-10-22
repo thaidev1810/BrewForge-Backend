@@ -56,6 +56,7 @@ public static class AuthorizationMatrix
         new("POST", "/auth/refresh", Nobody, Anonymous: true),
         new("POST", "/auth/logout", Everyone),
         new("GET", "/auth/me", Everyone),
+        new("GET", "/roles", Everyone),
 
         // 3. Master data
         new("GET", "/users", AdminOnly),

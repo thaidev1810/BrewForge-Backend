@@ -93,6 +93,22 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Roles_lists_every_role_with_its_permissions_to_any_authenticated_caller()
+    {
+        // A trainee is the least-privileged role: that it can read confirms the catalogue is open to all.
+        using var client = await factory.ClientForAsync(TestUsers.Trainee);
+
+        var body = await (await client.GetAsync("/api/v1/roles")).ShouldBeAsync(HttpStatusCode.OK);
+
+        var roles = body.EnumerateArray().ToDictionary(r => r.GetProperty("role").GetString()!,
+            r => r.GetProperty("permissions").EnumerateArray().Select(p => p.GetString()).ToList());
+        Assert.Equal(8, roles.Count);
+        Assert.Contains("users.manage", roles["ADMIN"]);
+        Assert.Contains("recipes.release", roles["RD_MANAGER"]);
+        Assert.Equal(["branches.read", "learning.own"], roles["TRAINEE"].Order());
+    }
+
+    [Fact]
     public async Task Request_without_a_token_is_401_in_the_error_envelope()
     {
         using var client = factory.CreateClient();
