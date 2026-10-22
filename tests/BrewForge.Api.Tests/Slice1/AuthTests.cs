@@ -238,6 +238,51 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
         Assert.Equal(hashes.Count, hashes.Distinct().Count());
     }
 
+    [Fact]
+    public async Task G_11_a_locked_account_is_refused_at_once_even_with_a_still_valid_access_token()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var newcomer = await NewTraineeAsync(admin);
+
+        var token = (await factory.LoginAsync(newcomer.Username, newcomer.Password)).AccessToken;
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        await (await client.GetAsync(Me)).ShouldBeAsync(HttpStatusCode.OK);
+
+        // The token still has fifteen minutes to run, but deactivating the account refuses the next request.
+        await (await admin.PostAsync($"/api/v1/users/{newcomer.Id}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+        await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    [Fact]
+    public async Task G_11_a_role_change_invalidates_a_token_minted_with_the_old_role()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var newcomer = await NewTraineeAsync(admin);
+
+        var token = (await factory.LoginAsync(newcomer.Username, newcomer.Password)).AccessToken;
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        await (await client.GetAsync(Me)).ShouldBeAsync(HttpStatusCode.OK);
+
+        // The account's role changes; a token minted as TRAINEE no longer matches and is refused.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
+            $"UPDATE app_user SET role_id = (SELECT id FROM role WHERE role_name = 'TRAINER') WHERE id = {newcomer.Id}"));
+        await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    private async Task<(long Id, string Username, string Password)> NewTraineeAsync(HttpClient admin)
+    {
+        var name = $"g11{Guid.NewGuid():N}"[..14];
+        const string password = "Another-Test-Passw0rd";
+        var created = await (await admin.PostAsJsonAsync("/api/v1/users", new
+        {
+            username = name, email = $"{name}@brewforge.local", password, fullName = "Session Test",
+            role = "TRAINEE", branchId = await factory.BranchIdAsync("B01"),
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        return (created.GetProperty("id").GetInt64(), name, password);
+    }
+
     private static JsonElement DecodePayload(string jwt) =>
         JsonSerializer.Deserialize<JsonElement>(Base64Url(jwt.Split('.')[1]));
 

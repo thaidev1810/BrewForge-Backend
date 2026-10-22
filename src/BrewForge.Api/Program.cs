@@ -63,6 +63,8 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
             NameClaimType = BrewForgeClaims.Username,
             RoleClaimType = BrewForgeClaims.Role,
         };
+        // G-11: re-check every access token against the live account, so a lock or role change bites at once.
+        bearer.Events = new JwtBearerEvents { OnTokenValidated = AccessTokenValidator.ValidateAsync };
     });
 builder.Services.AddAuthorization(Policies.Configure);
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, EnvelopeAuthorizationResultHandler>();
