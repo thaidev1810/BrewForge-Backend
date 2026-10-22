@@ -71,10 +71,16 @@ const string frontendCors = "frontend";
 builder.Services.AddCors(cors => cors.AddPolicy(frontendCors, policy =>
 {
     var origins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
-    policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod();
+    policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod()
+        // The browser can read the download filename and the range headers a media player needs.
+        .WithExposedHeaders("Content-Disposition", "Content-Range", "Accept-Ranges", "Content-Length");
 }));
 
-builder.Services.AddOpenApi(options => options.AddDocumentTransformer<BearerSecuritySchemeTransformer>());
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
+    options.AddOperationTransformer<AnonymousOperationTransformer>();
+});
 
 var app = builder.Build();
 
