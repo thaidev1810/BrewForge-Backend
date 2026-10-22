@@ -44,7 +44,7 @@ public sealed record AssignmentDto(long EnrollmentId, long UserId, string? FullN
 /// an ordinary enrolment, outside any class; the status shown is derived from it.
 /// </summary>
 public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluator evaluator, CourseService courses,
-    TimeProvider clock)
+    LearningPathService learningPath, TimeProvider clock)
 {
     public const int MaxReasonLength = 255;
 
@@ -105,7 +105,11 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
         }
 
         var users = await RosterAsync(branchId, request, cancellationToken);
-        var outcomes = await AssignToAsync(course, users, request.Deadline, reason, cancellationToken);
+        // G-09: a course is taken after its prerequisite is passed, the same as when a class is opened.
+        // Named employees who have not are refused by name; of a whole branch, those who qualify go on.
+        var named = request.EmployeeIds is { Count: > 0 };
+        var eligible = await learningPath.OnlyWithPrerequisiteAsync([.. users], course.CourseType, named, cancellationToken);
+        var outcomes = await AssignToAsync(course, eligible, request.Deadline, reason, cancellationToken);
         return new AssignmentResultDto(course.Id,
             [.. outcomes.Where(o => !o.AlreadyEnrolled).Select(o => o.EnrollmentId)],
             [.. outcomes.Where(o => o.AlreadyEnrolled).Select(o => o.UserId)]);
