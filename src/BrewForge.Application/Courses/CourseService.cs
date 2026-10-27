@@ -68,9 +68,10 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
     /// The active trainers, with whether each may teach a session of this course (BR-34): a trainer
     /// must hold a VALID certificate on the recipe version the course is bound to. A course built from
     /// no recipe has no version to be certified on, so every active trainer is eligible. Being a TRAINER
-    /// is not enough on its own; the reason says why one is not eligible.
+    /// is not enough on its own; the reason says why one is not eligible. Given the branch of the
+    /// class, a trainer who belongs to another branch is not eligible either: they could not see it.
     /// </summary>
-    public async Task<IReadOnlyList<TrainerOptionDto>> EligibleTrainersAsync(long courseId,
+    public async Task<IReadOnlyList<TrainerOptionDto>> EligibleTrainersAsync(long courseId, long? branchId,
         CancellationToken cancellationToken)
     {
         var versionId = await db.Courses.AsNoTracking().Where(c => c.Id == courseId)
@@ -93,9 +94,10 @@ public sealed class CourseService(IBrewForgeDbContext db, CourseRenderer rendere
 
         return [.. trainers.Select(t =>
         {
-            var eligible = versionId is null || certified.Contains(t.Id);
-            return new TrainerOptionDto(t.Id, t.FullName, t.BranchId, eligible,
-                eligible ? null : $"not certified on recipe version {versionId}");
+            var reason = branchId is not null && t.BranchId is { } own && own != branchId ? "belongs to another branch"
+                : versionId is null || certified.Contains(t.Id) ? null
+                : $"not certified on recipe version {versionId}";
+            return new TrainerOptionDto(t.Id, t.FullName, t.BranchId, reason is null, reason);
         })];
     }
 

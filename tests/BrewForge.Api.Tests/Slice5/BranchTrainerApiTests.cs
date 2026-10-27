@@ -53,6 +53,47 @@ public sealed class BranchTrainerApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task A_session_is_taught_by_a_trainer_of_the_class_branch_or_of_the_whole_chain()
+    {
+        using var chainTrainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var atB01 = await factory.NewClassAsync(branchCode: "B01");
+        var ofB01 = await factory.UserIdAsync(TrainerOfB01);
+        var ofB02 = await factory.UserIdAsync("trainer2");
+        var ofChain = await factory.UserIdAsync(TestUsers.Trainer);
+        foreach (var id in new[] { ofB01, ofB02, ofChain })
+        {
+            await factory.CertifyAsync(id, atB01.CourseId, atB01.RecipeVersionId);
+        }
+
+        // Offered for a class at B01: the trainer of B02 is not eligible, and says why.
+        var b01 = await factory.BranchIdAsync("B01");
+        var options = (await (await chainTrainer.GetAsync($"/api/v1/courses/{atB01.CourseId}/eligible-trainers?branchId={b01}"))
+            .ShouldBeAsync(HttpStatusCode.OK)).EnumerateArray().ToDictionary(t => t.Id());
+        Assert.True(options[ofB01].GetProperty("eligible").GetBoolean());
+        Assert.True(options[ofChain].GetProperty("eligible").GetBoolean());
+        Assert.False(options[ofB02].GetProperty("eligible").GetBoolean());
+        Assert.Equal("belongs to another branch", options[ofB02].GetProperty("reason").GetString());
+
+        // Without a branch, certification alone decides.
+        var anywhere = (await (await chainTrainer.GetAsync($"/api/v1/courses/{atB01.CourseId}/eligible-trainers"))
+            .ShouldBeAsync(HttpStatusCode.OK)).EnumerateArray().Single(t => t.Id() == ofB02);
+        Assert.True(anywhere.GetProperty("eligible").GetBoolean());
+
+        // Scheduling follows the same rule: the trainer of B02 could not see the class to run it.
+        var refused = await factory.AddSessionAsync(atB01.ClassId, expected: HttpStatusCode.BadRequest, trainerId: ofB02);
+        Assert.Contains("trainerId", refused.DetailFields());
+        await factory.AddSessionAsync(atB01.ClassId, dayOffset: 1, trainerId: ofB01);
+        var session = await factory.AddSessionAsync(atB01.ClassId, dayOffset: 2, trainerId: ofChain);
+
+        // Nor can a session be moved to them.
+        await (await chainTrainer.PutAsJsonAsync($"{Sessions}/{session.Id()}", new
+            {
+                scheduledDate = Today.AddDays(2), startTime = "09:00", durationMinutes = 120, trainerId = ofB02,
+            }))
+            .ShouldBeErrorAsync(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
     public async Task Branch_trainer_sees_the_learners_of_their_own_branch_only()
     {
         using var branchTrainer = await factory.ClientForAsync(TrainerOfB01);

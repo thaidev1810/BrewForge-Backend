@@ -353,6 +353,12 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
             throw DomainException.Validation("The trainer must be an active user with the TRAINER role.",
                 new ErrorDetail("trainerId", $"user {trainerId} is not an active trainer"));
         }
+        // A trainer of another branch could not see the class, so could not run the session.
+        if (trainer.BranchId is { } own && own != trainingClass.BranchId)
+        {
+            throw DomainException.Validation("The trainer belongs to another branch than the class.",
+                new ErrorDetail("trainerId", $"user {trainerId} belongs to another branch"));
+        }
 
         var course = await courses.FindAsync(trainingClass.CourseId, cancellationToken);
         var certificates = await db.Certificates.AsNoTracking()

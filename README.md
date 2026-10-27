@@ -885,7 +885,11 @@ assigned to their own branch). A trainer may be given a branch. Without one
 B01, `trainer2` at B02) they are scoped like the store-level roles: classes,
 enrolments, learners, learning paths and the training-progress dashboard of
 other branches do not exist for them, and a class can be opened at their own
-branch alone. Courses stay chain-wide, since a course follows a recipe.
+branch alone. Courses stay chain-wide, since a course follows a recipe. A
+session is taught by a trainer of the class's branch or by one of the whole
+chain, as another branch's trainer could not see the class;
+`GET /courses/{id}/eligible-trainers?branchId=` flags the others "belongs to
+another branch".
 
 ## Known gaps
 
