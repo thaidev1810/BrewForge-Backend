@@ -179,7 +179,9 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
         var soon = today.AddDays(DueSoonDays);
         var open = await db.Enrollments.IgnoreQueryFilters().AsNoTracking()
             .Where(e => (e.State == EnrollmentState.Assigned || e.State == EnrollmentState.InProgress
-                         || e.State == EnrollmentState.Eligible) && e.DueDate != null && e.DueDate <= soon)
+                         || e.State == EnrollmentState.Eligible) && e.DueDate != null && e.DueDate <= soon
+                        // Somebody who has left cannot read a reminder, and their managers need no alarm.
+                        && e.User.Status == UserStatus.Active)
             .Select(e => new { e.Id, e.UserId, e.CourseId, DueDate = e.DueDate!.Value, e.EnrolledAt })
             .ToListAsync(cancellationToken);
         if (open.Count == 0) return new ReminderResult(0, 0);

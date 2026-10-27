@@ -176,6 +176,24 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Staff_who_left_are_neither_reminded_nor_reported_overdue()
+    {
+        var staff = await NewTraineeAsync("B03");
+        var induction = await InductionCourseIdAsync();
+        var enrollmentId = await factory.WithDbAsync(db => db.Enrollments
+            .Where(e => e.UserId == staff.Id && e.CourseId == induction).Select(e => e.Id).SingleAsync());
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        await (await admin.PostAsync($"/api/v1/users/{staff.Id}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+
+        await DueInAsync(enrollmentId, days: -1);
+        await factory.Services.GetRequiredService<TrainingReminderScheduler>().RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(0, await factory.WithDbAsync(db => db.Notifications.CountAsync(n =>
+            (n.UserId == staff.Id && (n.Subject == "Course due soon" || n.Subject == "Course overdue"))
+            || n.Message.Contains($"Enrolment {enrollmentId} "))));
+    }
+
+    [Fact]
     public async Task Path_of_a_role_with_nothing_mandatory_is_empty_and_an_unknown_user_has_none()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
