@@ -57,6 +57,9 @@ public static class BrewForgeClaims
     public const string Role = "role";
     public const string BranchId = "branchId";
     public const string TokenId = "jti";
+
+    /// <summary>The account's security version at the time the access token was minted (G-11).</summary>
+    public const string SecurityVersion = "sv";
 }
 
 public sealed class JwtTokenService(IOptions<JwtOptions> options, TimeProvider clock) : ITokenService
@@ -76,6 +79,7 @@ public sealed class JwtTokenService(IOptions<JwtOptions> options, TimeProvider c
             [BrewForgeClaims.Subject] = subject,
             [BrewForgeClaims.Username] = user.Username,
             [BrewForgeClaims.Role] = user.Role.RoleName.Code(),
+            [BrewForgeClaims.SecurityVersion] = user.SecurityVersion,
         };
         // Absent for head-office roles, which the contract describes as null.
         if (user.BranchId is { } branchId) accessClaims[BrewForgeClaims.BranchId] = branchId;

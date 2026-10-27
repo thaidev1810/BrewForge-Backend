@@ -243,11 +243,7 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
     {
         using var admin = await factory.ClientForAsync(TestUsers.Admin);
         var newcomer = await NewTraineeAsync(admin);
-
-        var token = (await factory.LoginAsync(newcomer.Username, newcomer.Password)).AccessToken;
-        using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        await (await client.GetAsync(Me)).ShouldBeAsync(HttpStatusCode.OK);
+        using var client = await AuthedClientAsync(newcomer);
 
         // The token still has fifteen minutes to run, but deactivating the account refuses the next request.
         await (await admin.PostAsync($"/api/v1/users/{newcomer.Id}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
@@ -259,15 +255,46 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
     {
         using var admin = await factory.ClientForAsync(TestUsers.Admin);
         var newcomer = await NewTraineeAsync(admin);
+        using var client = await AuthedClientAsync(newcomer);
 
-        var token = (await factory.LoginAsync(newcomer.Username, newcomer.Password)).AccessToken;
-        using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        await (await client.GetAsync(Me)).ShouldBeAsync(HttpStatusCode.OK);
+        // The admin changes the account's role (to a head-office one, so its branch clears too).
+        await (await admin.PutAsJsonAsync($"/api/v1/users/{newcomer.Id}", new
+        {
+            email = $"{newcomer.Username}@brewforge.local", fullName = "Session Test", role = "TRAINER",
+            branchId = (long?)null,
+        })).ShouldBeAsync(HttpStatusCode.OK);
+        await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
 
-        // The account's role changes; a token minted as TRAINEE no longer matches and is refused.
-        await factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
-            $"UPDATE app_user SET role_id = (SELECT id FROM role WHERE role_name = 'TRAINER') WHERE id = {newcomer.Id}"));
+    [Fact]
+    public async Task G_11_a_branch_change_invalidates_a_token_minted_for_the_old_branch()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var newcomer = await NewTraineeAsync(admin);
+        using var client = await AuthedClientAsync(newcomer);
+
+        // The trainee is moved to another branch; the token minted for B01 no longer matches.
+        await (await admin.PutAsJsonAsync($"/api/v1/users/{newcomer.Id}", new
+        {
+            email = $"{newcomer.Username}@brewforge.local", fullName = "Session Test", role = "TRAINEE",
+            branchId = await factory.BranchIdAsync("B02"),
+        })).ShouldBeAsync(HttpStatusCode.OK);
+        await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    [Fact]
+    public async Task G_11_a_password_reset_ends_the_old_sessions()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var newcomer = await NewTraineeAsync(admin);
+        using var client = await AuthedClientAsync(newcomer);
+
+        // Role and branch are unchanged; only the password is reset, which still ends the session.
+        await (await admin.PutAsJsonAsync($"/api/v1/users/{newcomer.Id}", new
+        {
+            email = $"{newcomer.Username}@brewforge.local", fullName = "Session Test", role = "TRAINEE",
+            branchId = await factory.BranchIdAsync("B01"), password = "A-New-Test-Passw0rd",
+        })).ShouldBeAsync(HttpStatusCode.OK);
         await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
     }
 
@@ -281,6 +308,16 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
             role = "TRAINEE", branchId = await factory.BranchIdAsync("B01"),
         })).ShouldBeAsync(HttpStatusCode.Created);
         return (created.GetProperty("id").GetInt64(), name, password);
+    }
+
+    // A client bearing the newcomer's access token, confirmed working before the change under test.
+    private async Task<HttpClient> AuthedClientAsync((long Id, string Username, string Password) newcomer)
+    {
+        var token = (await factory.LoginAsync(newcomer.Username, newcomer.Password)).AccessToken;
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        await (await client.GetAsync(Me)).ShouldBeAsync(HttpStatusCode.OK);
+        return client;
     }
 
     private static JsonElement DecodePayload(string jwt) =>

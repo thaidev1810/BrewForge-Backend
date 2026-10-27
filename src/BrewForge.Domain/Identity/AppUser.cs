@@ -27,6 +27,13 @@ public sealed class AppUser : INeverDeleted
     public UserStatus Status { get; private set; } = UserStatus.Active;
     public DateTimeOffset CreatedAt { get; private set; }
 
+    /// <summary>
+    /// G-11: bumped whenever the account changes in a way that makes the claims in a live access token
+    /// stale — deactivation, reactivation, a role or branch change, a password reset. Each access token
+    /// carries the version it was minted with; a token whose version no longer matches is refused at once.
+    /// </summary>
+    public int SecurityVersion { get; private set; }
+
     public bool IsActive => Status == UserStatus.Active;
 
     string INeverDeleted.RetentionRule => "BR-16";
@@ -46,19 +53,35 @@ public sealed class AppUser : INeverDeleted
         return user;
     }
 
-    public void Update(string email, string fullName, Role role, long? branchId) =>
+    public void Update(string email, string fullName, Role role, long? branchId)
+    {
+        var (previousRoleId, previousBranchId) = (RoleId, BranchId);
         SetProfile(email, fullName, role, branchId);
+        // A role or branch change makes a live access token's claims stale: end its sessions (G-11).
+        if (RoleId != previousRoleId || BranchId != previousBranchId) BumpSecurityVersion();
+    }
 
     public void ChangePasswordHash(string passwordHash)
     {
         new FieldErrors().Required("passwordHash", passwordHash).ThrowIfAny();
         PasswordHash = passwordHash;
+        BumpSecurityVersion();   // a password reset must not leave old sessions alive (G-11)
     }
 
     /// <summary>A user is never deleted, only made inactive (BR-16).</summary>
-    public void Deactivate() => Status = UserStatus.Inactive;
+    public void Deactivate()
+    {
+        Status = UserStatus.Inactive;
+        BumpSecurityVersion();
+    }
 
-    public void Reactivate() => Status = UserStatus.Active;
+    public void Reactivate()
+    {
+        Status = UserStatus.Active;
+        BumpSecurityVersion();
+    }
+
+    private void BumpSecurityVersion() => SecurityVersion++;
 
     private void SetProfile(string email, string fullName, Role role, long? branchId)
     {
