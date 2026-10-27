@@ -78,6 +78,22 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
         return (prerequisite, [.. userIds.Where(id => !passed.Contains(id))]);
     }
 
+    /// <summary>Those on the roster who meet the prerequisite and those who do not, kept apart so the caller
+    /// can enrol the first and report the second with a reason (the prerequisite type, when there is one).</summary>
+    public sealed record PrerequisiteSplit(List<AppUser> Eligible, IReadOnlyList<AppUser> Missing, CourseType? Prerequisite);
+
+    /// <summary>Splits a roster into those who have passed the prerequisite of a course type and those who have not.</summary>
+    public async Task<PrerequisiteSplit> SplitByPrerequisiteAsync(List<AppUser> roster, CourseType courseType,
+        CancellationToken cancellationToken)
+    {
+        var (prerequisite, missing) = await MissingPrerequisiteAsync(courseType, [.. roster.Select(u => u.Id)],
+            cancellationToken);
+        return prerequisite is null || missing.Count == 0
+            ? new PrerequisiteSplit([.. roster], [], prerequisite)
+            : new PrerequisiteSplit([.. roster.Where(u => !missing.Contains(u.Id))],
+                [.. roster.Where(u => missing.Contains(u.Id))], prerequisite);
+    }
+
     /// <summary>
     /// The roster of a class with those left out who have not passed the
     /// prerequisite of its course. Somebody named for the class is refused

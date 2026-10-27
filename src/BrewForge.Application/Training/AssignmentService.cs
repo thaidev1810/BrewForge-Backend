@@ -29,8 +29,11 @@ public enum AssignmentStage
 public sealed record AssignmentRequest(long? CourseId, long? BranchId, IReadOnlyList<long>? EmployeeIds,
     bool? AllTrainees, DateOnly? Deadline, string? Reason);
 
+/// <summary>A user left out of a whole-branch assignment, with the reason (e.g. the prerequisite is unmet).</summary>
+public sealed record SkippedAssignment(long UserId, string Reason);
+
 public sealed record AssignmentResultDto(long CourseId, IReadOnlyList<long> EnrollmentIds,
-    IReadOnlyList<long> AlreadyEnrolled);
+    IReadOnlyList<long> AlreadyEnrolled, IReadOnlyList<SkippedAssignment> Skipped);
 
 /// <summary>What became of one named user in an assignment: a fresh enrolment, or the open one they already had.</summary>
 public sealed record AssignmentOutcome(long UserId, long EnrollmentId, bool AlreadyEnrolled);
@@ -105,14 +108,23 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
         }
 
         var users = await RosterAsync(branchId, request, cancellationToken);
-        // G-09: a course is taken after its prerequisite is passed, the same as when a class is opened.
-        // Named employees who have not are refused by name; of a whole branch, those who qualify go on.
-        var named = request.EmployeeIds is { Count: > 0 };
-        var eligible = await learningPath.OnlyWithPrerequisiteAsync([.. users], course.CourseType, named, cancellationToken);
-        var outcomes = await AssignToAsync(course, eligible, request.Deadline, reason, cancellationToken);
+        // G-09: a course is taken after its prerequisite is passed. A named employee who has not is
+        // refused by name; a whole-branch assignment goes on with those who qualify and reports the
+        // rest as skipped, with the reason.
+        var split = await learningPath.SplitByPrerequisiteAsync([.. users], course.CourseType, cancellationToken);
+        if (request.EmployeeIds is { Count: > 0 } && split.Missing.Count > 0)
+        {
+            throw DomainException.RuleViolation(LearningPathService.PrerequisiteRule,
+                $"A {course.CourseType.Code()} course is taken after a {split.Prerequisite!.Value.Code()} course has been passed.",
+                details: [.. split.Missing.Select(u =>
+                    new ErrorDetail("traineeIds", $"user {u.Id} has not passed a {split.Prerequisite!.Value.Code()} course"))]);
+        }
+
+        var outcomes = await AssignToAsync(course, split.Eligible, request.Deadline, reason, cancellationToken);
         return new AssignmentResultDto(course.Id,
             [.. outcomes.Where(o => !o.AlreadyEnrolled).Select(o => o.EnrollmentId)],
-            [.. outcomes.Where(o => o.AlreadyEnrolled).Select(o => o.UserId)]);
+            [.. outcomes.Where(o => o.AlreadyEnrolled).Select(o => o.UserId)],
+            [.. split.Missing.Select(u => new SkippedAssignment(u.Id, LearningPathService.PrerequisiteRule))]);
     }
 
     /// <summary>Enrols the users on the course, skipping those who already hold an open enrolment on it.</summary>

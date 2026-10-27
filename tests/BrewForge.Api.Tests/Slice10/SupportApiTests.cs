@@ -213,9 +213,14 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
         await factory.PassInductionAsync(ready);            // qualifies
         var newbie = await NewTraineeAsync(admin, branch);  // no induction
 
-        // The whole branch is assigned: the one without the induction is left out, not a 409.
-        await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+        // The whole branch is assigned: the one without the induction is left out, not a 409,
+        // and is reported as skipped with the reason (G-09).
+        var result = await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
             { courseId, branchId = branch, allTrainees = true })).ShouldBeAsync(HttpStatusCode.Created);
+        var skipped = result.GetProperty("skipped").EnumerateArray()
+            .ToDictionary(s => s.GetProperty("userId").GetInt64(), s => s.GetProperty("reason").GetString());
+        Assert.Equal("PREREQUISITE", skipped[newbie]);
+        Assert.DoesNotContain(ready, skipped.Keys);
 
         var enrolled = await factory.WithDbAsync(db => db.Enrollments.IgnoreQueryFilters()
             .Where(e => e.CourseId == courseId).Select(e => e.UserId).ToListAsync());
