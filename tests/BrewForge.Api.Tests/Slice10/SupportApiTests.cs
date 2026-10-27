@@ -115,7 +115,7 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
 
         var list = await (await trainer.GetAsync($"/api/v1/assignments?courseId={course.Id()}")).ShouldBeAsync(HttpStatusCode.OK);
         var row = Assert.Single(list.GetProperty("items").EnumerateArray());
-        Assert.Equal("ASSIGNED", row.GetProperty("status").GetString());
+        Assert.Equal("ASSIGNED", row.GetProperty("stage").GetString());
         Assert.Equal(deadline.ToString("yyyy-MM-dd"), row.GetProperty("dueDate").GetString());
 
         var again = await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
@@ -166,7 +166,7 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
             { courseId = course.Id(), branchId = b01, employeeIds = new[] { t2 }, deadline = far }))
             .ShouldBeAsync(HttpStatusCode.Created);
 
-        var baseUrl = $"/api/v1/assignments?courseId={course.Id()}&status=ASSIGNED";
+        var baseUrl = $"/api/v1/assignments?courseId={course.Id()}&stage=ASSIGNED";
         var asc = await DueDatesAsync(trainer, $"{baseUrl}&sort=dueDate,asc");
         var desc = await DueDatesAsync(trainer, $"{baseUrl}&sort=dueDate,desc");
 
@@ -189,6 +189,44 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
     {
         var list = await (await client.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
         return [.. list.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("dueDate").GetString()!)];
+    }
+
+    [Fact]
+    public async Task Assignment_stage_follows_the_cycle_and_overdue_is_a_separate_flag()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var url = $"/api/v1/assignments?courseId={learner.Setup.CourseId}&size=100";
+
+        async Task<JsonElement> RowAsync()
+        {
+            var list = await (await trainer.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
+            return list.GetProperty("items").EnumerateArray()
+                .Single(a => a.GetProperty("enrollmentId").GetInt64() == learner.EnrollmentId);
+        }
+
+        // Eligible, but the quiz is not passed yet.
+        Assert.Equal("THEORY_COMPLETED", (await RowAsync()).GetProperty("stage").GetString());
+
+        // The quiz is passed: the stage is QUIZ_PASSED while the enrolment stays ELIGIBLE underneath.
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        var passed = await RowAsync();
+        Assert.Equal("QUIZ_PASSED", passed.GetProperty("stage").GetString());
+        Assert.Equal("ELIGIBLE", passed.GetProperty("enrollmentState").GetString());
+
+        // A practical is booked: PRACTICAL_PENDING.
+        await (await trainer.PostAsJsonAsync($"/api/v1/enrollments/{learner.EnrollmentId}/practical-schedules",
+                new { scheduledAt = DateTimeOffset.UtcNow.AddDays(2), location = "B01 counter" }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        Assert.Equal("PRACTICAL_PENDING", (await RowAsync()).GetProperty("stage").GetString());
+
+        // Past the deadline: isOverdue is its own flag and does not hide the real stage.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlRawAsync(
+            "UPDATE enrollment SET due_date = {0} WHERE id = {1}",
+            DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-1), learner.EnrollmentId));
+        var overdue = await RowAsync();
+        Assert.True(overdue.GetProperty("isOverdue").GetBoolean());
+        Assert.Equal("PRACTICAL_PENDING", overdue.GetProperty("stage").GetString());
     }
 
     [Fact]

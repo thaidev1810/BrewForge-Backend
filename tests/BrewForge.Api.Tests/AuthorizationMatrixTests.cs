@@ -99,7 +99,7 @@ public sealed partial class AuthorizationMatrixTests(BrewForgeApiFactory factory
         return client.SendAsync(request);
     }
 
-    // "api/v1/users/{id:long}" -> "/users/{id}"
+    // "api/v1/users/{id:long}" -> "/users/{id}"; "api/v1/.../{**key}" -> "/.../{key}"
     private static string Normalize(string rawRoute) =>
         RouteConstraint().Replace(rawRoute["api/v1".Length..], "{$1}");
 

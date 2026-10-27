@@ -42,6 +42,11 @@ public sealed class CoursesController(CourseService courses) : ControllerBase
     public Task<IReadOnlyList<CourseModuleDto>> Modules(long id, CancellationToken cancellationToken) =>
         courses.GetModulesAsync(id, cancellationToken);
 
+    /// <summary>The active trainers for a session, each flagged eligible (BR-34) or with the reason they are not.</summary>
+    [HttpGet("{id:long}/eligible-trainers"), AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager)]
+    public Task<IReadOnlyList<TrainerOptionDto>> EligibleTrainers(long id, CancellationToken cancellationToken) =>
+        courses.EligibleTrainersAsync(id, cancellationToken);
+
     [HttpGet("{id:long}/quiz"), Authorize(Policy = Policies.Trainer)]
     public Task<QuizDto> GetQuiz(long id, CancellationToken cancellationToken) =>
         courses.GetQuizAsync(id, cancellationToken);
