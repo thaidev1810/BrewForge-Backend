@@ -257,18 +257,17 @@ public sealed class PosImportApiTests(BrewForgeApiFactory factory)
         var key = Guid.NewGuid().ToString();
 
         var original = await (await factory.ImportAsync(Csv(Line(drink, day, 100)), idempotencyKey: key)).ShouldBeAsync(HttpStatusCode.OK);
-        // The retry, and a different file sent under the same key by mistake: neither is acted on.
+        // The retry with the same file replays the original and imports nothing twice.
         var retry = await (await factory.ImportAsync(Csv(Line(drink, day, 100)), idempotencyKey: key)).ShouldBeAsync(HttpStatusCode.OK);
-        var other = await (await factory.ImportAsync(Csv(Line(drink, day, 999)), idempotencyKey: key)).ShouldBeAsync(HttpStatusCode.OK);
+        // A different file sent under the same key by mistake is refused, not silently replayed (G-23).
+        await (await factory.ImportAsync(Csv(Line(drink, day, 999)), idempotencyKey: key))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IDEMPOTENCY_KEY_MISMATCH");
 
         Assert.False(original.GetProperty("replayed").GetBoolean());
-        Assert.All(new[] { retry, other }, replay =>
-        {
-            Assert.True(replay.GetProperty("replayed").GetBoolean());
-            Assert.Equal(original.GetProperty("jobId").GetString(), replay.GetProperty("jobId").GetString());
-            Assert.Equal(original.GetProperty("importedAt").GetString(), replay.GetProperty("importedAt").GetString());
-            Assert.Equal(1, replay.GetProperty("accepted").GetInt32());
-        });
+        Assert.True(retry.GetProperty("replayed").GetBoolean());
+        Assert.Equal(original.GetProperty("jobId").GetString(), retry.GetProperty("jobId").GetString());
+        Assert.Equal(original.GetProperty("importedAt").GetString(), retry.GetProperty("importedAt").GetString());
+        Assert.Equal(1, retry.GetProperty("accepted").GetInt32());
         Assert.Equal(100, await factory.WithDbAsync(db => db.SalesRecords.Where(s => s.RecipeId == drink.RecipeId)
             .Select(s => s.CupsSold).SingleAsync()));
         Assert.Equal(1, await factory.WithDbAsync(async db => (await db.AuditLogs

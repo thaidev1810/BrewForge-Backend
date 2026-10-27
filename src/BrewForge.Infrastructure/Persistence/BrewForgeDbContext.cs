@@ -419,6 +419,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             // so a retried upload (concurrent or later) replays instead of importing twice.
             idempotency.HasKey(i => new { i.UserId, i.IdempotencyKey });
             idempotency.Property(i => i.IdempotencyKey).HasMaxLength(200);
+            idempotency.Property(i => i.PayloadHash).HasMaxLength(64);
         });
 
         modelBuilder.Entity<ModuleProgress>(progress =>

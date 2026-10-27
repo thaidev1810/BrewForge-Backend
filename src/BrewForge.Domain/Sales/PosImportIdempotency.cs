@@ -11,11 +11,13 @@ public sealed class PosImportIdempotency
 {
     private PosImportIdempotency() { }
 
-    public PosImportIdempotency(long userId, string idempotencyKey, long jobNumber, DateTimeOffset createdAt)
+    public PosImportIdempotency(long userId, string idempotencyKey, long jobNumber, string? payloadHash,
+        DateTimeOffset createdAt)
     {
         UserId = userId;
         IdempotencyKey = idempotencyKey;
         JobNumber = jobNumber;
+        PayloadHash = payloadHash;
         CreatedAt = createdAt;
     }
 
@@ -24,5 +26,11 @@ public sealed class PosImportIdempotency
 
     /// <summary>The import job that owns this key; its result lives in the audit log under this number.</summary>
     public long JobNumber { get; private set; }
+
+    /// <summary>
+    /// A fingerprint of the file imported under this key. A retry with the same key must carry the same
+    /// file to replay; a different file under a reused key is refused. Null for rows made before this was added.
+    /// </summary>
+    public string? PayloadHash { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
 }
