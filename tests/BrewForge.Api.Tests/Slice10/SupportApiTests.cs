@@ -259,6 +259,58 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Closing_the_enrolment_cancels_its_practical_and_tells_the_learner()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        var id = await ScheduleAsync(learner);
+
+        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+        await (await manager.PostAsync($"/api/v1/enrollments/{learner.EnrollmentId}/close", null))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        await AssertCancelledAndToldAsync(learner, id);
+    }
+
+    [Fact]
+    public async Task Cancelling_the_class_cancels_the_practicals_of_its_learners()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        var id = await ScheduleAsync(learner);
+
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        await (await trainer.PostAsync($"/api/v1/training-classes/{learner.Setup.ClassId}/cancel", null))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        await AssertCancelledAndToldAsync(learner, id);
+        // The trainer's agenda no longer holds it as open.
+        var agenda = await (await trainer.GetAsync("/api/v1/practical-schedules?status=SCHEDULED&size=100"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.DoesNotContain(agenda.GetProperty("items").EnumerateArray(), s => s.GetProperty("id").GetInt64() == id);
+    }
+
+    private async Task<long> ScheduleAsync(EligibleLearner learner)
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var created = await (await trainer.PostAsJsonAsync($"/api/v1/enrollments/{learner.EnrollmentId}/practical-schedules",
+            new { scheduledAt = DateTimeOffset.UtcNow.AddDays(2), location = "B01 counter" })).ShouldBeAsync(HttpStatusCode.Created);
+        return created.GetProperty("id").GetInt64();
+    }
+
+    private async Task AssertCancelledAndToldAsync(EligibleLearner learner, long scheduleId)
+    {
+        var status = await factory.WithDbAsync(db =>
+            db.PracticalSchedules.Where(s => s.Id == scheduleId).Select(s => s.Status).SingleAsync());
+        Assert.Equal(BrewForge.Domain.Training.ScheduleStatus.Cancelled, status);
+
+        using var trainee = await factory.ClientForAsync(learner.Username);
+        var inbox = await (await trainee.GetAsync("/api/v1/me/notifications?size=50")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Contains(inbox.GetProperty("items").EnumerateArray(),
+            n => n.GetProperty("subject").GetString() == "Practical cancelled");
+    }
+
+    [Fact]
     public async Task Schedule_must_be_in_the_future()
     {
         var learner = await factory.NewEligibleLearnerAsync();

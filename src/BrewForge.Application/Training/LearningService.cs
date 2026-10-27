@@ -106,6 +106,7 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
         var enrollment = await FindAsync(id, ownerOnly: false, cancellationToken);
         enrollment.Close();
         db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Close);
+        await PracticalScheduleService.CancelOpenAsync(db, [enrollment], clock.GetUtcNow(), cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return (await ToDtosAsync([enrollment], cancellationToken))[0];
     }

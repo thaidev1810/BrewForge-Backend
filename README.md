@@ -875,7 +875,9 @@ in the application, whatever became of its e-mail and push.
 **Cancelling a class.** `POST /training-classes/{id}/cancel`, with an
 optional `{ reason }`, takes a PLANNED or RUNNING class to CANCELLED, as the
 state model gives the Trainer. The enrolments of the class still being
-studied are closed and their learners notified with the reason; a passed or
+studied are closed and their learners notified with the reason (closing an
+enrolment, this way or by `POST /enrollments/{id}/close`, also cancels its
+open practical appointment and tells the learner); a passed or
 locked enrolment stays as it is, and recorded attendance is kept. Not in the
 contract table.
 

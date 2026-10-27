@@ -246,6 +246,7 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
                 $"The class '{trainingClass.Name}' of '{title}' was cancelled." + (reason is null ? "" : $" {reason}"), now,
                 new { trainingClassId = classId, enrollmentId = enrollment.Id });
         }
+        await PracticalScheduleService.CancelOpenAsync(db, open, now, cancellationToken);
 
         db.Audit(AuditEntities.TrainingClass, () => trainingClass.Id, AuditActions.Cancel,
             new { reason, closedEnrollments = open.Select(e => e.Id) });

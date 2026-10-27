@@ -93,6 +93,30 @@ public sealed class PracticalScheduleService(IBrewForgeDbContext db, LearningSer
         return (await ToDtosAsync([schedule], cancellationToken))[0];
     }
 
+    /// <summary>
+    /// Cancels the open appointments of enrolments being closed and tells their learners, so no trainer
+    /// keeps a practical for a course nobody studies any more. The appointments stay as history; the
+    /// caller saves.
+    /// </summary>
+    internal static async Task CancelOpenAsync(IBrewForgeDbContext db, IReadOnlyCollection<Enrollment> closed,
+        DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var learners = closed.ToDictionary(e => e.Id, e => e.UserId);
+        var ids = learners.Keys.ToList();
+        var open = await db.PracticalSchedules
+            .Where(s => ids.Contains(s.EnrollmentId) && s.Status == ScheduleStatus.Scheduled)
+            .ToListAsync(cancellationToken);
+        foreach (var schedule in open)
+        {
+            schedule.Cancel();
+            db.Audit(AuditEntities.PracticalSchedule, () => schedule.Id, AuditActions.Cancel,
+                new { reason = "ENROLLMENT_CLOSED", schedule.EnrollmentId });
+            db.Notify(learners[schedule.EnrollmentId], "Practical cancelled",
+                $"Your practical assessment on {schedule.ScheduledAt:yyyy-MM-dd HH:mm} UTC is cancelled: the enrolment was closed.",
+                now, new { enrollmentId = schedule.EnrollmentId, practicalScheduleId = schedule.Id });
+        }
+    }
+
     public Task<PracticalScheduleDto> CancelAsync(long id, CancellationToken cancellationToken) =>
         ChangeAsync(id, s => s.Cancel(), AuditActions.Cancel, cancellationToken);
 
