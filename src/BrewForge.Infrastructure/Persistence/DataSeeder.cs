@@ -312,8 +312,16 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
         var existing = await db.Roles.ToDictionaryAsync(r => r.RoleName, cancellationToken);
         foreach (var name in Enum.GetValues<RoleName>())
         {
-            if (existing.ContainsKey(name)) continue;
-            var role = new Role(name, Permissions.DefaultsFor(name));
+            var defaults = Permissions.DefaultsFor(name);
+            if (existing.TryGetValue(name, out var role))
+            {
+                // G-06: keep an existing role's permission set in step with the code. This runs on every
+                // start, so a database created before a capability was added is brought up to date here,
+                // idempotently (only written when it actually differs), not just when the database is new.
+                if (!role.Permissions.SequenceEqual(defaults)) role.SyncPermissions(defaults);
+                continue;
+            }
+            role = new Role(name, defaults);
             db.Roles.Add(role);
             existing[name] = role;
         }

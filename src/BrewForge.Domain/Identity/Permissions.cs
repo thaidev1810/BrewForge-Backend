@@ -30,6 +30,14 @@ public static class Permissions
     public const string CertificatesRead = "certificates.read";
     public const string SalesRead = "sales.read";
     public const string SalesRecord = "sales.record";
+    public const string AssignmentsRead = "assignments.read";
+    public const string AssignmentsManage = "assignments.manage";
+    public const string SchedulesManageOwn = "schedules.manage-own";
+    public const string QuestionBankManage = "questionbank.manage";
+    public const string ProductsManage = "products.manage";
+    public const string SkillsRead = "skills.read";
+    public const string SettingsManage = "settings.manage";
+    public const string QualityAct = "quality.act";
     public const string PilotsRead = "pilots.read";
     public const string PilotsManage = "pilots.manage";
     public const string ImpactAnalyze = "impact.analyze";
@@ -45,11 +53,11 @@ public static class Permissions
         RoleName.Admin =>
         [
             UsersManage, BranchesRead, BranchesManage, CatalogRead, CatalogManage, RecipesRead,
-            RegulationsRead, AuditRead,
+            RegulationsRead, AuditRead, SettingsManage,
         ],
         RoleName.RdSpecialist =>
         [
-            BranchesRead, CatalogRead, RecipesRead, RecipesAuthor, RecipesValidate,
+            BranchesRead, CatalogRead, RecipesRead, RecipesAuthor, RecipesValidate, ProductsManage,
         ],
         RoleName.RdManager =>
         [
@@ -61,24 +69,25 @@ public static class Permissions
         [
             BranchesRead, CatalogRead, RecipesRead, CoursesRead, CoursesAuthor, ClassesManage,
             AttendanceRecord, PracticalEvaluate, CertificatesRead, DashboardTraining,
+            AssignmentsRead, AssignmentsManage, SchedulesManageOwn, QuestionBankManage, SkillsRead, LearningOwn,
         ],
         RoleName.Trainee =>
         [
-            BranchesRead, LearningOwn,
+            BranchesRead, LearningOwn, SkillsRead,
         ],
         RoleName.QualityAuditor =>
         [
             BranchesRead, CatalogRead, RecipesRead, CertificatesRead, SalesRead, DashboardTraining,
-            DashboardBranch, AuditRead, ReportsCompliance,
+            DashboardBranch, AuditRead, ReportsCompliance, QualityAct,
         ],
         RoleName.BranchManager =>
         [
-            BranchesRead, SalesRead, SalesRecord, PilotsRead, DashboardTraining, DashboardBranch,
+            BranchesRead, SalesRead, SalesRecord, PilotsRead, DashboardTraining, DashboardBranch, AssignmentsRead,
         ],
         RoleName.TrainingManager =>
         [
             BranchesRead, CatalogRead, RecipesRead, CoursesRead, CoursesApprove, RegulationsRead,
-            RegulationsManage, SalesRead, DashboardCourse,
+            RegulationsManage, SalesRead, DashboardCourse, AssignmentsRead, AssignmentsManage,
         ],
         _ => [],
     };

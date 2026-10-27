@@ -17,5 +17,9 @@ public sealed class Role : INeverDeleted
     public RoleName RoleName { get; private set; }
     public List<string> Permissions { get; private set; } = [];
 
+    /// <summary>Brings the role's permission set up to the current catalogue (G-06); the resource scope on
+    /// the server is unchanged, this is only what the client is told the role can do.</summary>
+    public void SyncPermissions(IEnumerable<string> permissions) => Permissions = [.. permissions];
+
     string INeverDeleted.RetentionRule => "BR-16";
 }

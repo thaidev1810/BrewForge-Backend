@@ -105,7 +105,7 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
         Assert.Equal(8, roles.Count);
         Assert.Contains("users.manage", roles["ADMIN"]);
         Assert.Contains("recipes.release", roles["RD_MANAGER"]);
-        Assert.Equal(["branches.read", "learning.own"], roles["TRAINEE"].Order());
+        Assert.Equal(["branches.read", "learning.own", "skills.read"], roles["TRAINEE"].Order());
     }
 
     [Fact]
