@@ -89,6 +89,18 @@ the `json_schema` and `strict: true`. Configure `Llm:ApiKey` and `Llm:Model`
 (environment variables `Llm__ApiKey`, `Llm__Model`). Without them the two
 endpoints answer `422 LLM_NOT_CONFIGURED` and everything else works.
 
+Any OpenAI-compatible provider works. One without Structured Outputs, such as
+DeepSeek, takes `Llm:JsonMode = JsonObject`: it is asked for plain JSON with
+the schema written into the system prompt, and the parser holds the answer to
+the schema as always (BR-07). For DeepSeek:
+
+```
+Llm__BaseUrl=https://api.deepseek.com
+Llm__Model=deepseek-chat
+Llm__JsonMode=JsonObject
+Llm__ApiKey=<your key>
+```
+
 ## Test it
 
 ```bash
