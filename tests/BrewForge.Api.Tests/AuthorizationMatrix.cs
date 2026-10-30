@@ -255,6 +255,11 @@ public static class AuthorizationMatrix
         new("GET", "/sales/import/{jobId}", [RoleName.BranchManager]),
         new("GET", "/sales/aggregate", [RoleName.RdManager, RoleName.TrainingManager]),
 
+        // Periodic stock and ingredient loss control. Not in the contract.
+        new("POST", "/stock/receipts", [RoleName.BranchManager]),
+        new("POST", "/stock/counts", [RoleName.BranchManager]),
+        new("GET", "/stock/loss-report", [RoleName.BranchManager, RoleName.RdManager, RoleName.Admin]),
+
         // 10. Pilot and rollout
         new("GET", "/pilots", Manager),
         new("POST", "/pilots", Manager),

@@ -139,6 +139,8 @@ public static class AuditEntities
     public const string QuestionBank = "QuestionBankItem";
     public const string PracticalSchedule = "PracticalSchedule";
     public const string SystemSetting = "SystemSetting";
+    public const string StockReceipt = "StockReceipt";
+    public const string StockCount = "StockCount";
 
     /// <summary>
     /// One POS import, identified by its job number. The schema has no table

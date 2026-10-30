@@ -2,6 +2,7 @@ using BrewForge.Domain.Audit;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.Impact;
+using BrewForge.Domain.Inventory;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Notifications;
@@ -61,6 +62,12 @@ public interface IBrewForgeDbContext
 
     /// <summary>The idempotency ledger that makes a retried POS import a replay, not a second import.</summary>
     DbSet<PosImportIdempotency> PosImportIdempotencies { get; }
+
+    /// <summary>Ingredient received into a branch's store (UC: stock loss control).</summary>
+    DbSet<StockReceipt> StockReceipts { get; }
+
+    /// <summary>A physical count of a branch's ingredient on hand, bracketing a loss-report period.</summary>
+    DbSet<StockCount> StockCounts { get; }
 
     /// <summary>The aggregate root. Pilot branches and the launch decision are reached through it.</summary>
     DbSet<PilotProgram> PilotPrograms { get; }

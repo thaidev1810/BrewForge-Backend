@@ -6,6 +6,7 @@ using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.Impact;
+using BrewForge.Domain.Inventory;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Notifications;
@@ -58,6 +59,8 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<BranchLaunchStatus> BranchLaunchStatuses => Set<BranchLaunchStatus>();
     public DbSet<SalesRecord> SalesRecords => Set<SalesRecord>();
     public DbSet<PosImportIdempotency> PosImportIdempotencies => Set<PosImportIdempotency>();
+    public DbSet<StockReceipt> StockReceipts => Set<StockReceipt>();
+    public DbSet<StockCount> StockCounts => Set<StockCount>();
     public DbSet<PilotProgram> PilotPrograms => Set<PilotProgram>();
     public DbSet<ChangeImpact> ChangeImpacts => Set<ChangeImpact>();
     public DbSet<ImpactRunHeader> ImpactRuns => Set<ImpactRunHeader>();
@@ -411,6 +414,19 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             sales.HasIndex(s => new { s.BranchId, s.RecipeId, s.TradingDate }).IsUnique();
             // A store-level caller sees the sales of its own branch.
             sales.HasQueryFilter(s => BranchScope == null || s.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<StockReceipt>(receipt =>
+        {
+            receipt.Property(r => r.Quantity).HasPrecision(14, 3);
+            // A store-level caller records and sees only the stock of its own branch.
+            receipt.HasQueryFilter(r => BranchScope == null || r.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<StockCount>(count =>
+        {
+            count.Property(c => c.Quantity).HasPrecision(14, 3);
+            count.HasQueryFilter(c => BranchScope == null || c.BranchId == BranchScope);
         });
 
         modelBuilder.Entity<PosImportIdempotency>(idempotency =>
