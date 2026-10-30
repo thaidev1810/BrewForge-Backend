@@ -230,4 +230,149 @@ public sealed class BranchAuditApiTests(BrewForgeApiFactory factory)
         Assert.Contains(options.GetProperty("courses").EnumerateArray(),
             c => c.GetProperty("courseId").GetInt64() == course.Id());
     }
+
+    [Fact]
+    public async Task Retraining_can_only_be_assigned_on_a_course_tied_to_the_audited_sop()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        var trainee = await factory.UserIdAsync(TestUsers.Trainee);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+
+        // A fresh released SOP with its published course, and an unrelated published course on another recipe.
+        var sop = await factory.NewPublishedCourseAsync();
+        var sopVersion = sop.GetProperty("recipeVersionId").GetInt64();
+        var sopCourse = sop.Id();
+        var otherCourse = (await factory.NewPublishedCourseAsync()).Id();
+
+        var audit = await (await auditor.PostAsJsonAsync(Audits, new
+        {
+            branchId = branch, recipeVersionId = sopVersion, retrainingRequired = true, employeeIds = new[] { trainee },
+            items = new[] { Item("Sugar quantity", false) },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        var actionId = audit.GetProperty("correctiveActionId").GetInt64();
+
+        // A course on a different recipe is refused server-side, even when sent directly.
+        await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/assign-retraining", new { courseId = otherCourse }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_COURSE_NOT_ALLOWED");
+
+        // The course tied to the audited SOP is accepted.
+        var result = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/assign-retraining", new { courseId = sopCourse }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Single(result.GetProperty("enrollmentIds").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task Retraining_reports_each_employee_and_skips_an_inactive_one()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+
+        async Task<long> NewB01TraineeAsync()
+        {
+            var name = $"t{Guid.NewGuid():N}"[..12];
+            var created = await (await admin.PostAsJsonAsync("/api/v1/users", new
+            {
+                username = name, email = $"{name}@brewforge.local", password = "Another-Test-Passw0rd",
+                fullName = "Audit Trainee", role = "TRAINEE", branchId = branch,
+            })).ShouldBeAsync(HttpStatusCode.Created);
+            return created.GetProperty("id").GetInt64();
+        }
+
+        var keep = await NewB01TraineeAsync();
+        var gone = await NewB01TraineeAsync();
+        var sop = await factory.NewPublishedCourseAsync();
+        var sopCourse = sop.Id();
+
+        var audit = await (await auditor.PostAsJsonAsync(Audits, new
+        {
+            branchId = branch, recipeVersionId = sop.GetProperty("recipeVersionId").GetInt64(),
+            retrainingRequired = true, employeeIds = new[] { keep, gone }, items = new[] { Item("Shaking", false) },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        var actionId = audit.GetProperty("correctiveActionId").GetInt64();
+
+        // One named employee is deactivated before retraining is assigned: it is reported, not dropped.
+        await (await admin.PostAsync($"/api/v1/users/{gone}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+
+        var result = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/assign-retraining", new { courseId = sopCourse }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        var results = result.GetProperty("results").EnumerateArray().ToList();
+        var keepItem = results.Single(r => r.GetProperty("employeeId").GetInt64() == keep);
+        var goneItem = results.Single(r => r.GetProperty("employeeId").GetInt64() == gone);
+        Assert.Equal("ASSIGNED", keepItem.GetProperty("outcome").GetString());
+        Assert.True(keepItem.GetProperty("enrollmentId").GetInt64() > 0);
+        Assert.Equal("SKIPPED", goneItem.GetProperty("outcome").GetString());
+        Assert.Equal("INACTIVE", goneItem.GetProperty("reasonCode").GetString());
+        Assert.Single(result.GetProperty("enrollmentIds").EnumerateArray());   // only the active one
+    }
+
+    [Fact]
+    public async Task G_19_an_action_requiring_retraining_closes_only_after_every_named_employee_has_passed()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+        var trainee = await NewB01TraineeAsync(admin, branch);
+        var sop = await factory.NewPublishedCourseAsync();
+
+        var audit = await (await auditor.PostAsJsonAsync(Audits, new
+        {
+            branchId = branch, recipeVersionId = sop.GetProperty("recipeVersionId").GetInt64(),
+            retrainingRequired = true, employeeIds = new[] { trainee }, items = new[] { Item("Sugar quantity", false) },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        var actionId = audit.GetProperty("correctiveActionId").GetInt64();
+
+        // Retraining is required and nobody has passed it: the action cannot be closed.
+        await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_INCOMPLETE");
+
+        // It is assigned, and still cannot close while the enrolment is only in progress.
+        var result = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/assign-retraining", new { courseId = sop.Id() }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        var enrollmentId = result.GetProperty("enrollmentIds").EnumerateArray().Single().GetInt64();
+        await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_INCOMPLETE");
+
+        // Once the retraining is passed, the action closes.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlAsync($"UPDATE enrollment SET state = 'PASSED' WHERE id = {enrollmentId}"));
+        var closed = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { note = "Retrained" }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal("CLOSED", closed.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task G_19_a_named_employee_who_left_the_branch_does_not_hold_the_action_open()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+        var trainee = await NewB01TraineeAsync(admin, branch);
+        var sop = await factory.NewPublishedCourseAsync();
+
+        var audit = await (await auditor.PostAsJsonAsync(Audits, new
+        {
+            branchId = branch, recipeVersionId = sop.GetProperty("recipeVersionId").GetInt64(),
+            retrainingRequired = true, employeeIds = new[] { trainee }, items = new[] { Item("Sugar quantity", false) },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        var actionId = audit.GetProperty("correctiveActionId").GetInt64();
+
+        // The only named employee is deactivated: assign-retraining would skip them, so they do not
+        // count towards the close gate, and the action can be closed without anyone passing.
+        await (await admin.PostAsync($"/api/v1/users/{trainee}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+        var closed = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal("CLOSED", closed.GetProperty("status").GetString());
+    }
+
+    private static async Task<long> NewB01TraineeAsync(HttpClient admin, long branch)
+    {
+        var name = $"t{Guid.NewGuid():N}"[..12];
+        var created = await (await admin.PostAsJsonAsync("/api/v1/users", new
+        {
+            username = name, email = $"{name}@brewforge.local", password = "Another-Test-Passw0rd",
+            fullName = "Audit Trainee", role = "TRAINEE", branchId = branch,
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        return created.GetProperty("id").GetInt64();
+    }
 }

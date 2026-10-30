@@ -2,7 +2,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using BrewForge.Api.Tests.Infrastructure;
+using BrewForge.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using static BrewForge.Api.Tests.Infrastructure.CourseScenario;
 using static BrewForge.Api.Tests.Infrastructure.ImpactScenario;
 
@@ -34,7 +36,7 @@ public sealed class ImpactApiTests(BrewForgeApiFactory factory)
         Assert.Equal(
             before.Where(table => table.Key is not ("change_impact" or "impact_run_header")),
             after.Where(table => table.Key is not ("change_impact" or "impact_run_header")));
-        Assert.Equal(51, after.Count);
+        Assert.Equal(54, after.Count);
 
         var runId = Guid.Parse(result.GetProperty("runId").GetString()!);
         var rows = await factory.WithDbAsync(db => db.ChangeImpacts.AsNoTracking().Where(r => r.AnalysisRunId == runId).ToListAsync());
@@ -143,6 +145,58 @@ public sealed class ImpactApiTests(BrewForgeApiFactory factory)
 
         // A run that was never created is still a 404.
         await (await manager.GetAsync($"{Impact}/{Guid.NewGuid():N}")).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Two_commits_of_the_same_run_race_and_only_one_wins()
+    {
+        // An empty run: committing it flips the header and nothing else, so the two commits
+        // race on that one row with no affected course or certificate to deadlock on. xmin on
+        // the header lets one update win and rejects the other, which the API reports as 409.
+        var (_, versionId) = await factory.NewReleasedRecipeAsync();
+        var runId = (await factory.AnalyzeAsync("RecipeVersion", versionId)).GetProperty("runId").GetString()!;
+
+        var responses = await Task.WhenAll(factory.CommitAsync(runId), factory.CommitAsync(runId));
+
+        var statuses = responses.Select(r => r.StatusCode).OrderBy(s => s).ToArray();
+        Assert.Equal([HttpStatusCode.OK, HttpStatusCode.Conflict], statuses);
+        Assert.True((await responses.Single(r => r.StatusCode == HttpStatusCode.OK).JsonAsync())
+            .GetProperty("committed").GetBoolean());
+        await responses.Single(r => r.StatusCode == HttpStatusCode.Conflict)
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IMPACT_ALREADY_COMMITTED");
+
+        // The run is committed, once.
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
+        Assert.True((await (await manager.GetAsync($"{Impact}/{runId}")).ShouldBeAsync(HttpStatusCode.OK))
+            .GetProperty("committed").GetBoolean());
+    }
+
+    [Fact]
+    public async Task A_run_from_before_the_header_table_is_backfilled_and_reads_back()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var runId = (await factory.AnalyzeAsync("Ingredient", drink.IngredientId)).GetProperty("runId").GetString()!;
+        var id = Guid.Parse(runId);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
+
+        // Simulate a run created before migration 006: its change_impact rows remain, its header is gone,
+        // so it reads back as a 404 (the header is the only thing that says a run exists).
+        await factory.WithDbAsync(db => db.ImpactRuns.Where(h => h.RunId == id).ExecuteDeleteAsync());
+        await (await manager.GetAsync($"{Impact}/{runId}")).ShouldBeErrorAsync(HttpStatusCode.NotFound);
+
+        // Re-applying the schema runs migration 014, which rebuilds the header from the rows that are left.
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<DatabaseInitializer>().ApplySchemaAsync();
+        }
+
+        var header = await factory.WithDbAsync(db => db.ImpactRuns.AsNoTracking().SingleOrDefaultAsync(h => h.RunId == id));
+        Assert.NotNull(header);
+        // The trigger comes from the rows, and the run is uncommitted because its rows are.
+        Assert.Equal(("Ingredient", drink.IngredientId, false), (header!.TriggerEntity, header.TriggerId, header.Committed));
+        var reread = await (await manager.GetAsync($"{Impact}/{runId}")).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(runId, reread.GetProperty("runId").GetString());
+        Assert.False(reread.GetProperty("committed").GetBoolean());
     }
 
     // ---------------------------------------------------------------- BR-15: the commit

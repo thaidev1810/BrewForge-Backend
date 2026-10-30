@@ -29,6 +29,11 @@ public static class AuthorizationMatrix
 
     private static readonly RoleName[] Learners = [RoleName.Trainee, RoleName.Trainer];
 
+    /// <summary>Who may READ an enrolment: the learner and their trainer, plus the managers who act on it —
+    /// the training manager (reset/close) and the branch manager (own-branch staff, confined by the filter).</summary>
+    private static readonly RoleName[] EnrollmentReaders =
+        [RoleName.Trainee, RoleName.Trainer, RoleName.TrainingManager, RoleName.BranchManager];
+
     /// <summary>"All head-office roles" in the contract: every role not confined to a branch.</summary>
     private static readonly RoleName[] HeadOffice =
     [
@@ -51,6 +56,7 @@ public static class AuthorizationMatrix
         new("POST", "/auth/refresh", Nobody, Anonymous: true),
         new("POST", "/auth/logout", Everyone),
         new("GET", "/auth/me", Everyone),
+        new("GET", "/roles", Everyone),
 
         // 3. Master data
         new("GET", "/users", AdminOnly),
@@ -163,8 +169,8 @@ public static class AuthorizationMatrix
         // 5. Course authoring
         new("GET", "/courses", [RoleName.Trainer, RoleName.TrainingManager, RoleName.RdManager]),
         new("POST", "/courses", TrainerOnly),
-        new("GET", "/courses/{id}", [RoleName.Trainer, RoleName.TrainingManager]),
-        new("GET", "/courses/{id}/modules", [RoleName.Trainer, RoleName.TrainingManager]),
+        new("GET", "/courses/{id}", [RoleName.Trainer, RoleName.TrainingManager, RoleName.RdManager]),
+        new("GET", "/courses/{id}/modules", [RoleName.Trainer, RoleName.TrainingManager, RoleName.RdManager]),
         new("GET", "/courses/{id}/eligible-trainers", [RoleName.Trainer, RoleName.TrainingManager]),
         new("PUT", "/course-modules/{id}", TrainerOnly),
         new("POST", "/course-modules/{id}/regenerate", TrainerOnly),
@@ -207,16 +213,16 @@ public static class AuthorizationMatrix
 
         // 8. Learning. "Own" endpoints admit a trainer too: see EnrollmentsController.
         new("GET", "/me/enrollments", Learners),
-        new("GET", "/enrollments/{id}", Learners),
-        new("GET", "/enrollments/{id}/modules", Learners),
+        new("GET", "/enrollments/{id}", EnrollmentReaders),
+        new("GET", "/enrollments/{id}/modules", EnrollmentReaders),
         new("POST", "/enrollments/{id}/modules/{moduleId}/complete", Learners),
         new("POST", "/enrollments/{id}/lessons/{lessonId}/complete", Learners),
-        new("GET", "/enrollments/{id}/eligibility", Learners),
+        new("GET", "/enrollments/{id}/eligibility", EnrollmentReaders),
         new("POST", "/enrollments/{id}/close", [RoleName.TrainingManager]),
         new("POST", "/enrollments/{id}/reset", [RoleName.TrainingManager]),
         new("GET", "/enrollments/{id}/quiz", Learners),
         new("POST", "/enrollments/{id}/quiz-attempts", Learners),
-        new("GET", "/enrollments/{id}/quiz-attempts", Learners),
+        new("GET", "/enrollments/{id}/quiz-attempts", EnrollmentReaders),
         new("POST", "/enrollments/{id}/practical-videos", TrainerOnly),
         new("GET", "/enrollments/{id}/practical-videos", Learners),
         new("GET", "/practical-videos/{id}",
@@ -248,6 +254,11 @@ public static class AuthorizationMatrix
         new("POST", "/sales/import", [RoleName.BranchManager]),
         new("GET", "/sales/import/{jobId}", [RoleName.BranchManager]),
         new("GET", "/sales/aggregate", [RoleName.RdManager, RoleName.TrainingManager]),
+
+        // Periodic stock and ingredient loss control. Not in the contract.
+        new("POST", "/stock/receipts", [RoleName.BranchManager]),
+        new("POST", "/stock/counts", [RoleName.BranchManager]),
+        new("GET", "/stock/loss-report", [RoleName.BranchManager, RoleName.RdManager, RoleName.Admin]),
 
         // 10. Pilot and rollout
         new("GET", "/pilots", Manager),

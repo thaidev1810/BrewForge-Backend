@@ -145,12 +145,14 @@ public sealed class EnrollmentsController(LearningService learning) : Controller
     public Task<IReadOnlyList<EnrollmentDto>> Mine(CancellationToken cancellationToken) =>
         learning.MyEnrollmentsAsync(cancellationToken);
 
-    [HttpGet("enrollments/{id:long}"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
+    [HttpGet("enrollments/{id:long}"),
+     AuthorizeRoles(RoleName.Trainee, RoleName.Trainer, RoleName.TrainingManager, RoleName.BranchManager)]
     public Task<EnrollmentDto> Get(long id, CancellationToken cancellationToken) =>
         learning.GetAsync(id, cancellationToken);
 
     /// <summary>Module progress, with each lesson rendered for the lesson viewer.</summary>
-    [HttpGet("enrollments/{id:long}/modules"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
+    [HttpGet("enrollments/{id:long}/modules"),
+     AuthorizeRoles(RoleName.Trainee, RoleName.Trainer, RoleName.TrainingManager, RoleName.BranchManager)]
     public Task<IReadOnlyList<EnrollmentModuleDto>> Modules(long id, CancellationToken cancellationToken) =>
         learning.GetModulesAsync(id, cancellationToken);
 
@@ -169,7 +171,8 @@ public sealed class EnrollmentsController(LearningService learning) : Controller
         learning.CompleteLessonAsync(id, lessonId, cancellationToken);
 
     /// <summary><c>{ eligible, missingModules[], attendancePct, retakesLeft }</c> (BR-32).</summary>
-    [HttpGet("enrollments/{id:long}/eligibility"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
+    [HttpGet("enrollments/{id:long}/eligibility"),
+     AuthorizeRoles(RoleName.Trainee, RoleName.Trainer, RoleName.TrainingManager, RoleName.BranchManager)]
     public Task<EligibilityDto> Eligibility(long id, CancellationToken cancellationToken) =>
         learning.EligibilityAsync(id, cancellationToken);
 
@@ -190,7 +193,8 @@ public sealed class EnrollmentsController(LearningService learning) : Controller
         assessment.AttemptQuizAsync(id, request, cancellationToken);
 
     /// <summary>Every attempt, each with its per-module breakdown.</summary>
-    [HttpGet("enrollments/{id:long}/quiz-attempts"), AuthorizeRoles(RoleName.Trainee, RoleName.Trainer)]
+    [HttpGet("enrollments/{id:long}/quiz-attempts"),
+     AuthorizeRoles(RoleName.Trainee, RoleName.Trainer, RoleName.TrainingManager, RoleName.BranchManager)]
     public Task<IReadOnlyList<QuizAttemptResultDto>> QuizAttempts(long id, [FromServices] AssessmentService assessment,
         CancellationToken cancellationToken) =>
         assessment.ListAttemptsAsync(id, cancellationToken);

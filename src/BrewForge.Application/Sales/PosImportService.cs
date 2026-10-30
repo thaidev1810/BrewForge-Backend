@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json;
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
@@ -52,9 +53,26 @@ public sealed class PosImportService(IBrewForgeDbContext db, IPosFileReader read
     {
         var userId = currentUser.RequireUserId();
         idempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey.Trim();
-        if (idempotencyKey is not null && await FindReplayAsync(userId, idempotencyKey, cancellationToken) is { } replay)
+        if (idempotencyKey is { Length: > 200 })
         {
-            return replay;
+            throw DomainException.Validation("The Idempotency-Key is too long.",
+                new ErrorDetail("Idempotency-Key", "must be at most 200 characters"));
+        }
+        string? payloadHash = null;
+        if (idempotencyKey is not null)
+        {
+            // Fingerprint the file so a retry under the same key can be told from a reused key on a
+            // different file; buffer it (bounded by the request size limit) and parse the copy.
+            var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, cancellationToken);
+            var bytes = buffer.ToArray();
+            payloadHash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            content = new MemoryStream(bytes);
+
+            if (await FindClaimAsync(userId, idempotencyKey, cancellationToken) is { } claim)
+            {
+                return ReplayOrConflict(claim, payloadHash);
+            }
         }
 
         fileName = Path.GetFileName(fileName ?? "");
@@ -142,7 +160,26 @@ public sealed class PosImportService(IBrewForgeDbContext db, IPosFileReader read
             [.. errors.OrderBy(error => error.Row)], now);
         db.Audit(AuditEntities.SalesImport, () => jobNumber, AuditActions.PosImport,
             new StoredImport(result, idempotencyKey, currentUser.RestrictedToBranchId));
-        await db.SaveChangesAsync(cancellationToken);
+        // The key is claimed in the same save as the sales it applied, so the two stand or fall
+        // together: a concurrent retry that loses the claim has its sales rolled back with it.
+        if (idempotencyKey is not null)
+        {
+            db.PosImportIdempotencies.Add(new PosImportIdempotency(userId, idempotencyKey, jobNumber, payloadHash, now));
+        }
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException) when (idempotencyKey is not null)
+        {
+            // A concurrent import under the same key committed first (its idempotency claim, or the
+            // sales day it had already written, collided with ours) and rolled this whole batch back,
+            // so nothing was imported twice. Answer with the winner's result, or 409 if that winner
+            // was a different file.
+            var winner = await FindClaimAsync(userId, idempotencyKey, cancellationToken);
+            if (winner is null) throw;
+            return ReplayOrConflict(winner.Value, payloadHash!);
+        }
         return result;
     }
 
@@ -221,19 +258,39 @@ public sealed class PosImportService(IBrewForgeDbContext db, IPosFileReader read
     }
 
     /// <summary>
-    /// The original result of an import this user already made under this
-    /// Idempotency-Key, so that a retried upload does not import twice.
+    /// The claim an import this user already made under this Idempotency-Key left: the fingerprint of the
+    /// file it carried and its stored result. The key is looked up in its own ledger, so it is found however
+    /// long ago it was used.
     /// </summary>
-    private async Task<PosImportResultDto?> FindReplayAsync(long userId, string idempotencyKey,
-        CancellationToken cancellationToken)
+    private async Task<(string? PayloadHash, PosImportResultDto Result)?> FindClaimAsync(long userId,
+        string idempotencyKey, CancellationToken cancellationToken)
     {
-        var imports = await db.AuditLogs.AsNoTracking()
-            .Where(a => a.EntityType == AuditEntities.SalesImport && a.Action == AuditActions.PosImport && a.UserId == userId)
-            .OrderByDescending(a => a.Id).Select(a => a.PayloadJson).Take(200).ToListAsync(cancellationToken);
+        var claim = await db.PosImportIdempotencies.AsNoTracking()
+            .Where(i => i.UserId == userId && i.IdempotencyKey == idempotencyKey)
+            .Select(i => new { i.JobNumber, i.PayloadHash }).FirstOrDefaultAsync(cancellationToken);
+        if (claim is null) return null;
 
-        var original = imports.OfType<string>()
-            .Select(payload => JsonSerializer.Deserialize<StoredImport>(payload, StoredFormat))
-            .FirstOrDefault(import => import?.IdempotencyKey == idempotencyKey);
-        return original is null ? null : original.Result with { Replayed = true };
+        var payload = await db.AuditLogs.AsNoTracking()
+            .Where(a => a.EntityType == AuditEntities.SalesImport && a.EntityId == claim.JobNumber
+                        && a.Action == AuditActions.PosImport)
+            .Select(a => a.PayloadJson).FirstOrDefaultAsync(cancellationToken);
+        var original = payload is null ? null : JsonSerializer.Deserialize<StoredImport>(payload, StoredFormat);
+        return original is null ? null : (claim.PayloadHash, original.Result);
+    }
+
+    /// <summary>
+    /// A key already used: replay its result when the file matches, or refuse with 409 when the same key
+    /// is sent with a different file. A legacy claim with no fingerprint is replayed without the check.
+    /// </summary>
+    private static PosImportResultDto ReplayOrConflict((string? PayloadHash, PosImportResultDto Result) claim,
+        string payloadHash)
+    {
+        if (claim.PayloadHash is not null && claim.PayloadHash != payloadHash)
+        {
+            throw DomainException.RuleViolation("IDEMPOTENCY_KEY_MISMATCH",
+                "This Idempotency-Key was already used for a different file. Use a new key, or resend the original file.",
+                details: new ErrorDetail("Idempotency-Key", "reused with a different payload"));
+        }
+        return claim.Result with { Replayed = true };
     }
 }

@@ -6,6 +6,7 @@ using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.Impact;
+using BrewForge.Domain.Inventory;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Notifications;
@@ -57,6 +58,9 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<Certificate> Certificates => Set<Certificate>();
     public DbSet<BranchLaunchStatus> BranchLaunchStatuses => Set<BranchLaunchStatus>();
     public DbSet<SalesRecord> SalesRecords => Set<SalesRecord>();
+    public DbSet<PosImportIdempotency> PosImportIdempotencies => Set<PosImportIdempotency>();
+    public DbSet<StockReceipt> StockReceipts => Set<StockReceipt>();
+    public DbSet<StockCount> StockCounts => Set<StockCount>();
     public DbSet<PilotProgram> PilotPrograms => Set<PilotProgram>();
     public DbSet<ChangeImpact> ChangeImpacts => Set<ChangeImpact>();
     public DbSet<ImpactRunHeader> ImpactRuns => Set<ImpactRunHeader>();
@@ -381,8 +385,17 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         });
 
         modelBuilder.Entity<ChangeImpact>();
-        // The run header is keyed by its run id, not an identity column.
-        modelBuilder.Entity<ImpactRunHeader>().HasKey(h => h.RunId);
+        modelBuilder.Entity<ImpactRunHeader>(header =>
+        {
+            // The run header is keyed by its run id, not an identity column.
+            header.HasKey(h => h.RunId);
+            // Committing a run is a one-time flip of this header. xmin (Postgres' per-row system
+            // column that changes on every update) is the concurrency token: of two commits that
+            // both read the header uncommitted, one wins the update and the other's SaveChanges
+            // finds no matching xmin and is rejected, so a race cannot commit the same run twice.
+            header.Property<uint>("xmin").HasColumnName("xmin").HasColumnType("xid")
+                .ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
+        });
 
         modelBuilder.Entity<Notification>();
         modelBuilder.Entity<PushSubscription>(subscription =>
@@ -401,6 +414,28 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             sales.HasIndex(s => new { s.BranchId, s.RecipeId, s.TradingDate }).IsUnique();
             // A store-level caller sees the sales of its own branch.
             sales.HasQueryFilter(s => BranchScope == null || s.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<StockReceipt>(receipt =>
+        {
+            receipt.Property(r => r.Quantity).HasPrecision(14, 3);
+            // A store-level caller records and sees only the stock of its own branch.
+            receipt.HasQueryFilter(r => BranchScope == null || r.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<StockCount>(count =>
+        {
+            count.Property(c => c.Quantity).HasPrecision(14, 3);
+            count.HasQueryFilter(c => BranchScope == null || c.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<PosImportIdempotency>(idempotency =>
+        {
+            // One import per key per user: the primary key lets the database refuse a second,
+            // so a retried upload (concurrent or later) replays instead of importing twice.
+            idempotency.HasKey(i => new { i.UserId, i.IdempotencyKey });
+            idempotency.Property(i => i.IdempotencyKey).HasMaxLength(200);
+            idempotency.Property(i => i.PayloadHash).HasMaxLength(64);
         });
 
         modelBuilder.Entity<ModuleProgress>(progress =>

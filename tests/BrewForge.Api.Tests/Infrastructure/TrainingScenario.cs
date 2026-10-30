@@ -29,6 +29,14 @@ public static class TrainingScenario
             $"INSERT INTO certificate (user_id, course_id, recipe_version_id) VALUES ({userId}, {courseId}, {recipeVersionId})"));
 
     /// <summary>
+    /// Marks a user as having passed the induction, the prerequisite of a PRODUCT course: a certificate
+    /// on the seeded INDUCTION course, which is what the prerequisite check looks for (no version needed).
+    /// </summary>
+    public static Task PassInductionAsync(this BrewForgeApiFactory factory, long userId) =>
+        factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
+            $"INSERT INTO certificate (user_id, course_id) SELECT {userId}, id FROM course WHERE course_type = 'INDUCTION' ORDER BY id LIMIT 1"));
+
+    /// <summary>
     /// A PUBLISHED course and a PLANNED class for it, with the given number
     /// of sessions taught by the seeded trainer, who is certified first.
     /// </summary>
