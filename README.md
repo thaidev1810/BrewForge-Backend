@@ -44,7 +44,9 @@ dotnet run --project src/BrewForge.Api
 
 The API listens on `http://localhost:5113`. On its first start in the
 Development environment it applies the scripts of `db/migrations` and seeds
-the reference data. The OpenAPI document is at `/openapi/v1.json`.
+the reference data. The OpenAPI document is at `/openapi/v1.json`. What changed
+in the API, for the frontend, is in `docs/API_CHANGELOG.md`: a change to the API
+adds an entry there in the same commit.
 
 Without Docker, on Windows, `scripts/start-db.ps1` starts a portable
 PostgreSQL 16 from `%LOCALAPPDATA%\BrewForge` with the same credentials, and
