@@ -66,6 +66,7 @@ public sealed class PermissionCatalogTests(BrewForgeApiFactory factory)
         { Permissions.RecipesRelease, "POST", "/recipe-versions/{id}/release" },
         { Permissions.RecipesAuthor, "POST", "/recipes" },
         { Permissions.ClassesManage, "POST", "/training-classes" },
+        { Permissions.CoursesApprove, "POST", "/courses/{id}/approve" },
         { Permissions.RegulationsManage, "POST", "/training-regulations" },
         { Permissions.SalesRecord, "POST", "/sales" },
     };

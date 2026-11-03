@@ -62,7 +62,7 @@ public static class Permissions
         RoleName.RdManager =>
         [
             BranchesRead, CatalogRead, RecipesRead, RecipesValidate, RecipesReview, RecipesRelease,
-            CoursesRead, SalesRead, PilotsRead, PilotsManage, ImpactAnalyze, DashboardTraining,
+            CoursesRead, CoursesApprove, SalesRead, PilotsRead, PilotsManage, ImpactAnalyze, DashboardTraining,
             DashboardBranch, DashboardCourse, AuditRead, ReportsCompliance,
         ],
         RoleName.Trainer =>
@@ -86,7 +86,7 @@ public static class Permissions
         ],
         RoleName.TrainingManager =>
         [
-            BranchesRead, CatalogRead, RecipesRead, CoursesRead, CoursesApprove, RegulationsRead,
+            BranchesRead, CatalogRead, RecipesRead, CoursesRead, RegulationsRead,
             RegulationsManage, SalesRead, DashboardCourse, AssignmentsRead, AssignmentsManage,
         ],
         _ => [],

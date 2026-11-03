@@ -121,7 +121,7 @@ public sealed class CourseWithoutRecipeApiTests(BrewForgeApiFactory factory)
     private async Task<(JsonElement Course, EligibleLearner Learner)> NewEligibleLearnerOnInductionAsync()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
         var course = await NewInductionCourseAsync(Techniques);
         await (await trainer.PostAsync($"{Courses}/{course.Id()}/submit", null)).ShouldBeAsync(HttpStatusCode.OK);
         await (await manager.PostAsync($"{Courses}/{course.Id()}/approve", null)).ShouldBeAsync(HttpStatusCode.OK);

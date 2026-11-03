@@ -82,12 +82,12 @@ public sealed class CoursesController(CourseService courses) : ControllerBase
         courses.SubmitAsync(id, cancellationToken);
 
     /// <summary>UC-28. PENDING_APPROVAL to PUBLISHED.</summary>
-    [HttpPost("{id:long}/approve"), Authorize(Policy = Policies.TrainingManager)]
+    [HttpPost("{id:long}/approve"), Authorize(Policy = Policies.RdManager)]
     public Task<CourseDetailDto> Approve(long id, CancellationToken cancellationToken) =>
         courses.ApproveAsync(id, cancellationToken);
 
     /// <summary>UC-28. <c>{ comment }</c>. Back to DRAFT.</summary>
-    [HttpPost("{id:long}/return"), Authorize(Policy = Policies.TrainingManager)]
+    [HttpPost("{id:long}/return"), Authorize(Policy = Policies.RdManager)]
     public Task<CourseDetailDto> Return(long id, ReturnCourseRequest request, CancellationToken cancellationToken) =>
         courses.ReturnAsync(id, request, cancellationToken);
 

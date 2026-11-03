@@ -187,8 +187,8 @@ public static class AuthorizationMatrix
         new("POST", "/courses/{id}/quiz/questions", TrainerOnly),
         new("PUT", "/courses/{id}/practical-checklist", TrainerOnly),
         new("POST", "/courses/{id}/submit", TrainerOnly),
-        new("POST", "/courses/{id}/approve", [RoleName.TrainingManager]),
-        new("POST", "/courses/{id}/return", [RoleName.TrainingManager]),
+        new("POST", "/courses/{id}/approve", [RoleName.RdManager]),
+        new("POST", "/courses/{id}/return", [RoleName.RdManager]),
         new("POST", "/courses/{id}/rebuild", TrainerOnly),
 
         // 6. Training regulation

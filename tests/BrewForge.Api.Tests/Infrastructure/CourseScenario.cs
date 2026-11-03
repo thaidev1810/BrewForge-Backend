@@ -100,7 +100,7 @@ public static class CourseScenario
         long? recipeVersionId = null)
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
 
         var courseId = (await factory.NewCourseAsync(recipeVersionId)).Id();
         await factory.CompleteAuthoringAsync(courseId);

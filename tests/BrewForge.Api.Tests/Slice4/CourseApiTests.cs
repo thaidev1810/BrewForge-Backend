@@ -407,11 +407,11 @@ public sealed class CourseApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
-    public async Task Complete_course_is_submitted_then_approved_by_the_training_manager()
+    public async Task Complete_course_is_submitted_then_approved_by_the_rd_manager()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
-        var managerId = await factory.UserIdAsync(TestUsers.TrainingManager);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
+        var managerId = await factory.UserIdAsync(TestUsers.RdManager);
         var courseId = (await factory.NewCourseAsync()).Id();
         await factory.CompleteAuthoringAsync(courseId);
 
@@ -424,8 +424,14 @@ public sealed class CourseApiTests(BrewForgeApiFactory factory)
         var queue = await (await manager.GetAsync($"{Courses}?state=PENDING_APPROVAL&size=100")).ShouldBeAsync(HttpStatusCode.OK);
         Assert.Contains(queue.GetProperty("items").EnumerateArray(), c => c.Id() == courseId);
 
-        // The trainer cannot approve, and cannot edit while it is pending.
+        // Approval moved to the R&D manager: neither the trainer nor the training manager may approve,
+        // and the trainer cannot edit while it is pending.
         await (await trainer.PostAsync($"{Courses}/{courseId}/approve", null)).ShouldBeErrorAsync(HttpStatusCode.Forbidden, "MSG-E01");
+        using (var trainingManager = await factory.ClientForAsync(TestUsers.TrainingManager))
+        {
+            await (await trainingManager.PostAsync($"{Courses}/{courseId}/approve", null))
+                .ShouldBeErrorAsync(HttpStatusCode.Forbidden, "MSG-E01");
+        }
         await (await trainer.PutAsJsonAsync($"{Courses}/{courseId}/quiz", new { passScore = 50 }))
             .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "STATE_TRANSITION");
 
@@ -446,7 +452,7 @@ public sealed class CourseApiTests(BrewForgeApiFactory factory)
     public async Task Returned_course_goes_back_to_draft_and_the_comment_is_kept_in_the_audit_log()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
         var courseId = (await factory.NewCourseAsync()).Id();
         await factory.CompleteAuthoringAsync(courseId);
         await (await trainer.PostAsync($"{Courses}/{courseId}/submit", null)).ShouldBeAsync(HttpStatusCode.OK);
