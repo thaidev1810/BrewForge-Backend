@@ -11,7 +11,8 @@ public interface IPasswordHasher
 
 public sealed record IssuedTokens(string AccessToken, string RefreshToken, long RefreshTokenId);
 
-public sealed record RefreshTokenClaims(long UserId, long TokenId);
+/// <param name="SecurityVersion">The account's security version when the token was minted (G-11).</param>
+public sealed record RefreshTokenClaims(long UserId, long TokenId, int SecurityVersion);
 
 public interface ITokenService
 {

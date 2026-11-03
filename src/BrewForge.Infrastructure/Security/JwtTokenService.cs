@@ -89,6 +89,8 @@ public sealed class JwtTokenService(IOptions<JwtOptions> options, TimeProvider c
         {
             [BrewForgeClaims.Subject] = subject,
             [BrewForgeClaims.TokenId] = refreshTokenId.ToString(CultureInfo.InvariantCulture),
+            // G-11: the session ends on a password reset, role/branch change or deactivation, refresh included.
+            [BrewForgeClaims.SecurityVersion] = user.SecurityVersion,
         };
 
         return new IssuedTokens(
@@ -119,7 +121,9 @@ public sealed class JwtTokenService(IOptions<JwtOptions> options, TimeProvider c
                && long.TryParse(sub?.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var userId)
                && result.Claims.TryGetValue(BrewForgeClaims.TokenId, out var jti)
                && long.TryParse(jti?.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var tokenId)
-            ? new RefreshTokenClaims(userId, tokenId)
+               && result.Claims.TryGetValue(BrewForgeClaims.SecurityVersion, out var sv)
+               && int.TryParse(sv?.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var securityVersion)
+            ? new RefreshTokenClaims(userId, tokenId, securityVersion)
             : null;
     }
 

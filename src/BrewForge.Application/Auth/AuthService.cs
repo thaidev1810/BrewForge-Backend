@@ -72,6 +72,11 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
         {
             throw DomainException.Unauthenticated("The account is no longer active.");
         }
+        // G-11: a password reset or a role/branch change since the token was minted ends the session.
+        if (claims.SecurityVersion != user.SecurityVersion)
+        {
+            throw DomainException.Unauthenticated("The refresh token is invalid, expired or revoked.");
+        }
 
         var issued = tokens.Issue(user);
         db.Audit(AuditEntities.RefreshToken, () => claims.TokenId, AuditActions.Revoke,
