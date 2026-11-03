@@ -47,11 +47,20 @@ public sealed class UsersController(UserService users) : ControllerBase
 [Route("api/v1/users/lookup")]
 public sealed class UserLookupController(UserService users) : ControllerBase
 {
-    /// <summary><c>?q=&amp;role=&amp;branchId=&amp;includeInactive=&amp;page=&amp;size=&amp;sort=</c>. Active only unless includeInactive=true.</summary>
+    /// <summary>
+    /// <c>?q=&amp;role=&amp;branchId=&amp;includeInactive=&amp;page=&amp;size=&amp;sort=</c>, active only unless includeInactive=true;
+    /// or <c>?ids=1,2,3</c> to resolve stored IDs to labels (branch scope still applies; inactive are included).
+    /// </summary>
     [HttpGet, AuthorizeRoles(RoleName.Admin, RoleName.Trainer, RoleName.TrainingManager, RoleName.QualityAuditor,
         RoleName.BranchManager)]
     public Task<PagedResult<UserLookupDto>> Lookup([FromQuery] PageQuery paging, [FromQuery] string? q,
-        [FromQuery] string? role, [FromQuery] long? branchId, [FromQuery] bool includeInactive,
-        CancellationToken cancellationToken) =>
-        users.LookupAsync(paging, q, role, branchId, includeInactive, cancellationToken);
+        [FromQuery] string? role, [FromQuery] long? branchId, [FromQuery] bool includeInactive, [FromQuery] string? ids,
+        CancellationToken cancellationToken)
+    {
+        var idList = string.IsNullOrWhiteSpace(ids)
+            ? null
+            : ids.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(s => long.TryParse(s, out var v) ? v : (long?)null).OfType<long>().ToList();
+        return users.LookupAsync(paging, q, role, branchId, includeInactive, idList, cancellationToken);
+    }
 }

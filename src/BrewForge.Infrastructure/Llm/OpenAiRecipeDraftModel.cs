@@ -17,17 +17,35 @@ public sealed class LlmOptions
     /// <summary>Supplied by configuration or the environment. Never committed, never sent to the browser (SE-01).</summary>
     public string ApiKey { get; set; } = "";
 
-    /// <summary>A model that supports Structured Outputs.</summary>
+    /// <summary>A model that supports the chosen <see cref="JsonMode"/>.</summary>
     public string Model { get; set; } = "";
+
+    /// <summary>How the answer is held to the schema; see <see cref="LlmJsonMode"/>.</summary>
+    public LlmJsonMode JsonMode { get; set; } = LlmJsonMode.StructuredOutput;
 
     /// <summary>MSG-E05: the call is abandoned after this long.</summary>
     public int TimeoutSeconds { get; set; } = 30;
 }
 
+/// <summary>How the provider is asked for an answer of the schema's shape.</summary>
+public enum LlmJsonMode
+{
+    /// <summary>The schema as a strict <c>json_schema</c> response format (OpenAI Structured Outputs).</summary>
+    StructuredOutput,
+
+    /// <summary>
+    /// Plain JSON mode (<c>json_object</c>) with the schema written into the system prompt, for providers
+    /// without Structured Outputs, such as DeepSeek. The provider then does not enforce the shape; the
+    /// application's parser does, as it always does (BR-07).
+    /// </summary>
+    JsonObject,
+}
+
 /// <summary>
-/// The adapter behind <see cref="IRecipeDraftModel"/>: one call to the
-/// Structured Outputs endpoint, with <c>recipe-draft.schema.json</c> as the
-/// <c>json_schema</c> and <c>strict: true</c>. It returns the text of the
+/// The adapter behind <see cref="IRecipeDraftModel"/>: one call to an
+/// OpenAI-compatible chat endpoint (OpenAI, DeepSeek, a self-hosted server),
+/// with <c>recipe-draft.schema.json</c> as a strict <c>json_schema</c>, or in
+/// the prompt under plain JSON mode. It returns the text of the
 /// answer and nothing more; whether that text conforms is decided by the
 /// application layer, which does not take the provider's word for it.
 /// </summary>
@@ -45,22 +63,28 @@ public sealed class OpenAiRecipeDraftModel(HttpClient http, IOptions<LlmOptions>
                 $"{LlmOptions.Section}:ApiKey and {LlmOptions.Section}:Model must be configured.");
         }
 
+        var structured = _options.JsonMode == LlmJsonMode.StructuredOutput;
+        var system = structured
+            ? request.SystemPrompt
+            : $"{request.SystemPrompt}\n\nAnswer with one JSON object and nothing else. It must be valid against this JSON Schema:\n{request.JsonSchema}";
         var body = new JsonObject
         {
             ["model"] = _options.Model,
             ["messages"] = new JsonArray(
-                new JsonObject { ["role"] = "system", ["content"] = request.SystemPrompt },
+                new JsonObject { ["role"] = "system", ["content"] = system },
                 new JsonObject { ["role"] = "user", ["content"] = request.UserPrompt }),
-            ["response_format"] = new JsonObject
-            {
-                ["type"] = "json_schema",
-                ["json_schema"] = new JsonObject
+            ["response_format"] = structured
+                ? new JsonObject
                 {
-                    ["name"] = RecipeDraftSchema.Name,
-                    ["strict"] = true,
-                    ["schema"] = JsonNode.Parse(request.JsonSchema),
-                },
-            },
+                    ["type"] = "json_schema",
+                    ["json_schema"] = new JsonObject
+                    {
+                        ["name"] = RecipeDraftSchema.Name,
+                        ["strict"] = true,
+                        ["schema"] = JsonNode.Parse(request.JsonSchema),
+                    },
+                }
+                : new JsonObject { ["type"] = "json_object" },
         };
 
         using var message = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl.TrimEnd('/')}/chat/completions");

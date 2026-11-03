@@ -7,6 +7,7 @@ using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
 using BrewForge.Domain.Quality;
 using BrewForge.Domain.Recipes;
+using BrewForge.Domain.Training;
 using Microsoft.EntityFrameworkCore;
 
 namespace BrewForge.Application.Quality;
@@ -23,6 +24,28 @@ public sealed record RetrainingRequest(long? CourseId, DateOnly? Deadline);
 /// <summary>A published course tied to the audited SOP, offered as a retraining option.</summary>
 public sealed record RetrainingCourseOption(long CourseId, string Title, CourseType CourseType, long RecipeVersionId,
     bool CurrentVersion);
+
+/// <summary>What became of one named employee when retraining was assigned.</summary>
+public enum RetrainingOutcome
+{
+    /// <summary>A fresh enrolment on the retraining course was created.</summary>
+    Assigned,
+    /// <summary>The employee already holds an open enrolment on the course; a second is not created.</summary>
+    AlreadyEnrolled,
+    /// <summary>Left out, for the reason in <c>ReasonCode</c> (inactive, moved branch, ...).</summary>
+    Skipped,
+}
+
+/// <summary>The result for one employee named on the action.</summary>
+public sealed record RetrainingResultItem(long EmployeeId, RetrainingOutcome Outcome, long? EnrollmentId,
+    string? ReasonCode);
+
+/// <summary>
+/// The result of assigning retraining, reported per employee so a partial outcome is never shown as a
+/// whole success. <c>EnrollmentIds</c> and <c>AlreadyEnrolled</c> are kept for the old contract.
+/// </summary>
+public sealed record RetrainingResultDto(long CorrectiveActionId, long CourseId,
+    IReadOnlyList<RetrainingResultItem> Results, IReadOnlyList<long> EnrollmentIds, IReadOnlyList<long> AlreadyEnrolled);
 
 /// <summary>
 /// What an auditor needs to assign retraining after a failed audit: the staff the action already names,
@@ -76,6 +99,7 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
         CancellationToken cancellationToken)
     {
         var action = await FindAsync(id, cancellationToken);
+        await EnsureRetrainingPassedAsync(action, cancellationToken);
         action.Close(currentUser.RequireUserId(), clock.GetUtcNow(), request.Note);
         db.Audit(AuditEntities.CorrectiveAction, () => action.Id, AuditActions.Close, new { request.Note });
         await db.SaveChangesAsync(cancellationToken);
@@ -86,7 +110,7 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
     /// Enrols the staff named on the action on a published course. Those who already hold an open
     /// enrolment on it are reported, not enrolled twice.
     /// </summary>
-    public async Task<AssignmentResultDto> AssignRetrainingAsync(long id, RetrainingRequest request,
+    public async Task<RetrainingResultDto> AssignRetrainingAsync(long id, RetrainingRequest request,
         CancellationToken cancellationToken)
     {
         var action = await FindAsync(id, cancellationToken);
@@ -97,17 +121,94 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
         }
         new FieldErrors().Check(request.CourseId is not null, "courseId", "is required").ThrowIfAny();
 
-        var course = await courses.FindAsync(request.CourseId!.Value, cancellationToken);
-        var ids = action.EmployeeIds;
-        var users = await db.Users.Include(u => u.Role)
-            .Where(u => ids.Contains(u.Id) && u.Status == UserStatus.Active).ToListAsync(cancellationToken);
+        // Enforce the same rule the GET options uses, server-side: the course must be a published one
+        // tied to the audited SOP. The client cannot substitute an unrelated course, and stale options
+        // (the course was archived or the SOP moved on) are refused with a clear conflict.
+        var (_, _, validCourses) = await RetrainingCoursesAsync(action, cancellationToken);
+        if (validCourses.All(c => c.CourseId != request.CourseId!.Value))
+        {
+            throw DomainException.RuleViolation("RETRAINING_COURSE_NOT_ALLOWED",
+                "That course is not a retraining option for this action: it must be published and tied to the audited SOP.",
+                details: new ErrorDetail("courseId",
+                    $"{request.CourseId} is not among the current retraining options; reload them"));
+        }
 
-        var result = await assignments.AssignToAsync(course, users, request.Deadline,
-            $"Retraining after audit {action.BranchAuditId}", cancellationToken);
-        db.Audit(AuditEntities.CorrectiveAction, () => action.Id, AuditActions.Assign,
-            new { course.Id, enrolled = result.EnrollmentIds, skipped = result.AlreadyEnrolled });
+        var course = await courses.FindAsync(request.CourseId!.Value, cancellationToken);
+        var named = await db.Users.IgnoreQueryFilters().Include(u => u.Role)
+            .Where(u => action.EmployeeIds.Contains(u.Id)).ToListAsync(cancellationToken);
+        var byId = named.ToDictionary(u => u.Id);
+
+        // Sort each named employee into "retrain" or "skipped with a reason": an inactive one or one who
+        // moved to another branch is reported, never silently dropped.
+        var skipped = new Dictionary<long, string>();
+        var eligible = new List<AppUser>();
+        foreach (var employeeId in action.EmployeeIds)
+        {
+            if (!byId.TryGetValue(employeeId, out var user)) skipped[employeeId] = "NOT_FOUND";
+            else if (user.Status != UserStatus.Active) skipped[employeeId] = "INACTIVE";
+            else if (user.BranchId != action.BranchId) skipped[employeeId] = "WRONG_BRANCH";
+            else eligible.Add(user);
+        }
+
+        var outcomes = eligible.Count > 0
+            ? await assignments.AssignToAsync(course, eligible, request.Deadline,
+                $"Retraining after audit {action.BranchAuditId}", cancellationToken)
+            : [];
+        var byUser = outcomes.ToDictionary(o => o.UserId);
+
+        var results = action.EmployeeIds.Select(employeeId =>
+            skipped.TryGetValue(employeeId, out var reason)
+                ? new RetrainingResultItem(employeeId, RetrainingOutcome.Skipped, null, reason)
+                : new RetrainingResultItem(employeeId,
+                    byUser[employeeId].AlreadyEnrolled ? RetrainingOutcome.AlreadyEnrolled : RetrainingOutcome.Assigned,
+                    byUser[employeeId].EnrollmentId, null)).ToList();
+
+        db.Audit(AuditEntities.CorrectiveAction, () => action.Id, AuditActions.Assign, new
+        {
+            course.Id,
+            results = results.Select(r => new { r.EmployeeId, outcome = r.Outcome.ToString(), r.EnrollmentId, r.ReasonCode }),
+        });
         await db.SaveChangesAsync(cancellationToken);
-        return result;
+
+        return new RetrainingResultDto(action.Id, course.Id, results,
+            [.. results.Where(r => r.Outcome == RetrainingOutcome.Assigned).Select(r => r.EnrollmentId!.Value)],
+            [.. results.Where(r => r.Outcome == RetrainingOutcome.AlreadyEnrolled).Select(r => r.EmployeeId)]);
+    }
+
+    /// <summary>
+    /// G-19: an action that required retraining is closed only once every employee it still obliges has
+    /// passed it. Staff who left the branch or were deactivated — the ones assign-retraining skips — are
+    /// not counted, so a departure cannot hold an action open for ever. An already-closed action is left
+    /// to <see cref="CorrectiveAction.Close"/> to refuse (BR-37), not gated here.
+    /// </summary>
+    private async Task EnsureRetrainingPassedAsync(CorrectiveAction action, CancellationToken cancellationToken)
+    {
+        if (action.Status == CorrectiveActionStatus.Closed || !action.RetrainingRequired || action.EmployeeIds.Length == 0)
+        {
+            return;
+        }
+
+        // The employees the action still obliges: named, active, and at its branch. The rest are the ones
+        // assign-retraining would skip, so they do not hold the close open.
+        var obliged = await db.Users.IgnoreQueryFilters()
+            .Where(u => action.EmployeeIds.Contains(u.Id) && u.Status == UserStatus.Active && u.BranchId == action.BranchId)
+            .Select(u => u.Id).ToListAsync(cancellationToken);
+        if (obliged.Count == 0) return;
+
+        var (_, _, courses) = await RetrainingCoursesAsync(action, cancellationToken);
+        var courseIds = courses.Select(c => c.CourseId).ToList();
+        var passed = await db.Enrollments.IgnoreQueryFilters()
+            .Where(e => obliged.Contains(e.UserId) && courseIds.Contains(e.CourseId) && e.State == EnrollmentState.Passed)
+            .Select(e => e.UserId).Distinct().ToListAsync(cancellationToken);
+
+        var pending = obliged.Where(userId => !passed.Contains(userId)).ToList();
+        if (pending.Count > 0)
+        {
+            throw DomainException.RuleViolation("RETRAINING_INCOMPLETE",
+                "The action requires retraining: close it only after every named employee still at the branch has passed it.",
+                details: [.. pending.Select(userId => new ErrorDetail("employeeIds",
+                    $"employee {userId} has not passed the retraining"))]);
+        }
     }
 
     /// <summary>
@@ -119,7 +220,18 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
     public async Task<RetrainingOptionsDto> RetrainingOptionsAsync(long id, CancellationToken cancellationToken)
     {
         var action = await FindAsync(id, cancellationToken);
+        var (auditedVersionId, _, courses) = await RetrainingCoursesAsync(action, cancellationToken);
+        return new RetrainingOptionsDto(action.Id, action.BranchAuditId, auditedVersionId, action.EmployeeIds, courses);
+    }
 
+    /// <summary>
+    /// The one rule for which courses an action may retrain on, used by both the GET options and the POST
+    /// assignment so they can never diverge: published courses bound to the audited SOP version, or the
+    /// recipe's current released version if the audited one was superseded (G-19).
+    /// </summary>
+    private async Task<(long AuditedVersionId, long? CurrentVersionId, List<RetrainingCourseOption> Courses)>
+        RetrainingCoursesAsync(CorrectiveAction action, CancellationToken cancellationToken)
+    {
         var auditedVersionId = await db.BranchAudits.AsNoTracking().Where(a => a.Id == action.BranchAuditId)
             .Select(a => a.RecipeVersionId).SingleAsync(cancellationToken);
         var recipeId = await db.RecipeVersions.AsNoTracking().Where(v => v.Id == auditedVersionId)
@@ -139,7 +251,7 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
                 c.RecipeVersionId == currentVersionId))
             .ToListAsync(cancellationToken);
 
-        return new RetrainingOptionsDto(action.Id, action.BranchAuditId, auditedVersionId, action.EmployeeIds, courses);
+        return (auditedVersionId, currentVersionId, courses);
     }
 
     private async Task<CorrectiveAction> FindAsync(long id, CancellationToken cancellationToken) =>

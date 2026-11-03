@@ -52,9 +52,15 @@ public sealed record PracticalEvaluationDto(long Id, long EnrollmentId, long Eva
 
 // ---------------------------------------------------------------- certificates
 
+/// <summary>
+/// A certificate as it is shown. Nobody issues one by hand: <c>issuedBy</c> is always <c>SYSTEM</c>, and
+/// the person who decided it is the trainer who passed the practical (<c>assessedBy</c>), on the
+/// enrolment it was earned through.
+/// </summary>
 public sealed record CertificateDto(long Id, long UserId, string FullName, long? BranchId, long CourseId,
     string CourseTitle, long? RecipeVersionId, string? RecipeCode, string? RecipeName, int? VersionNo,
-    DateTimeOffset IssuedAt, CertificateStatus Status, long? SupersededBy);
+    DateTimeOffset IssuedAt, CertificateStatus Status, long? SupersededBy, string IssuedBy, long? EnrollmentId,
+    long? AssessedById, string? AssessedByName);
 
 /// <summary>
 /// UC-15 to UC-17. A certificate is never requested here: it is issued by
@@ -64,6 +70,9 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
     EnrollmentEvaluator evaluator, LaunchReadinessService readiness, LearningPathService learningPath,
     IPracticalVideoStorage videos, ICurrentUser currentUser, TimeProvider clock)
 {
+    /// <summary>Who issues every certificate: the system, the moment the last condition is met (BR-21).</summary>
+    public const string IssuedBySystem = "SYSTEM";
+
     /// <summary>
     /// The quiz as the learner takes it. Behind the same gate as the attempt
     /// itself, so the questions cannot be read before the course is done.
@@ -365,14 +374,32 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
             .Join(db.Recipes, v => v.RecipeId, r => r.Id, (v, r) => new { v.Id, v.VersionNo, r.RecipeCode, r.Name })
             .ToDictionaryAsync(v => v.Id, cancellationToken);
 
+        // The practical passes of the holders on these courses: the latest one before a certificate was
+        // issued is the assessment that earned it. Read past the branch scope, as the holder's name is.
+        var holders = rows.Select(r => r.Certificate.UserId).Distinct().ToList();
+        var courseIds = rows.Select(r => r.Certificate.CourseId).Distinct().ToList();
+        var passes = await db.Enrollments.IgnoreQueryFilters().AsNoTracking()
+            .Where(e => holders.Contains(e.UserId) && courseIds.Contains(e.CourseId))
+            .SelectMany(e => e.PracticalEvaluations.Where(p => p.Passed),
+                (e, p) => new { EnrollmentId = e.Id, e.UserId, e.CourseId, p.EvaluatedBy, p.EvaluatedAt })
+            .ToListAsync(cancellationToken);
+        var assessorIds = passes.Select(p => p.EvaluatedBy).Distinct().ToList();
+        var assessors = await db.Users.IgnoreQueryFilters().AsNoTracking().Where(u => assessorIds.Contains(u.Id))
+            .ToDictionaryAsync(u => u.Id, u => u.FullName, cancellationToken);
+
         return
         [
             .. rows.Select(r =>
             {
-                var version = r.Certificate.RecipeVersionId is { } id ? versions.GetValueOrDefault(id) : null;
-                return new CertificateDto(r.Certificate.Id, r.Certificate.UserId, r.FullName, r.BranchId,
-                    r.Certificate.CourseId, r.Title, r.Certificate.RecipeVersionId, version?.RecipeCode, version?.Name,
-                    version?.VersionNo, r.Certificate.IssuedAt, r.Certificate.Status, r.Certificate.SupersededBy);
+                var c = r.Certificate;
+                var version = c.RecipeVersionId is { } id ? versions.GetValueOrDefault(id) : null;
+                var pass = passes
+                    .Where(p => p.UserId == c.UserId && p.CourseId == c.CourseId && p.EvaluatedAt <= c.IssuedAt)
+                    .MaxBy(p => p.EvaluatedAt);
+                return new CertificateDto(c.Id, c.UserId, r.FullName, r.BranchId,
+                    c.CourseId, r.Title, c.RecipeVersionId, version?.RecipeCode, version?.Name,
+                    version?.VersionNo, c.IssuedAt, c.Status, c.SupersededBy, IssuedBySystem, pass?.EnrollmentId,
+                    pass?.EvaluatedBy, pass is null ? null : assessors.GetValueOrDefault(pass.EvaluatedBy));
             }),
         ];
     }

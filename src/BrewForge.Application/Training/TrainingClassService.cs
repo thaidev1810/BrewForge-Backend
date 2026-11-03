@@ -246,6 +246,7 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
                 $"The class '{trainingClass.Name}' of '{title}' was cancelled." + (reason is null ? "" : $" {reason}"), now,
                 new { trainingClassId = classId, enrollmentId = enrollment.Id });
         }
+        await PracticalScheduleService.CancelOpenAsync(db, open, now, cancellationToken);
 
         db.Audit(AuditEntities.TrainingClass, () => trainingClass.Id, AuditActions.Cancel,
             new { reason, closedEnrollments = open.Select(e => e.Id) });
@@ -352,6 +353,12 @@ public sealed class TrainingClassService(IBrewForgeDbContext db, CourseService c
         {
             throw DomainException.Validation("The trainer must be an active user with the TRAINER role.",
                 new ErrorDetail("trainerId", $"user {trainerId} is not an active trainer"));
+        }
+        // A trainer of another branch could not see the class, so could not run the session.
+        if (trainer.BranchId is { } own && own != trainingClass.BranchId)
+        {
+            throw DomainException.Validation("The trainer belongs to another branch than the class.",
+                new ErrorDetail("trainerId", $"user {trainerId} belongs to another branch"));
         }
 
         var course = await courses.FindAsync(trainingClass.CourseId, cancellationToken);

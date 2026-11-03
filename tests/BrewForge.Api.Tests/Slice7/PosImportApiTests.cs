@@ -257,18 +257,17 @@ public sealed class PosImportApiTests(BrewForgeApiFactory factory)
         var key = Guid.NewGuid().ToString();
 
         var original = await (await factory.ImportAsync(Csv(Line(drink, day, 100)), idempotencyKey: key)).ShouldBeAsync(HttpStatusCode.OK);
-        // The retry, and a different file sent under the same key by mistake: neither is acted on.
+        // The retry with the same file replays the original and imports nothing twice.
         var retry = await (await factory.ImportAsync(Csv(Line(drink, day, 100)), idempotencyKey: key)).ShouldBeAsync(HttpStatusCode.OK);
-        var other = await (await factory.ImportAsync(Csv(Line(drink, day, 999)), idempotencyKey: key)).ShouldBeAsync(HttpStatusCode.OK);
+        // A different file sent under the same key by mistake is refused, not silently replayed (G-23).
+        await (await factory.ImportAsync(Csv(Line(drink, day, 999)), idempotencyKey: key))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IDEMPOTENCY_KEY_MISMATCH");
 
         Assert.False(original.GetProperty("replayed").GetBoolean());
-        Assert.All(new[] { retry, other }, replay =>
-        {
-            Assert.True(replay.GetProperty("replayed").GetBoolean());
-            Assert.Equal(original.GetProperty("jobId").GetString(), replay.GetProperty("jobId").GetString());
-            Assert.Equal(original.GetProperty("importedAt").GetString(), replay.GetProperty("importedAt").GetString());
-            Assert.Equal(1, replay.GetProperty("accepted").GetInt32());
-        });
+        Assert.True(retry.GetProperty("replayed").GetBoolean());
+        Assert.Equal(original.GetProperty("jobId").GetString(), retry.GetProperty("jobId").GetString());
+        Assert.Equal(original.GetProperty("importedAt").GetString(), retry.GetProperty("importedAt").GetString());
+        Assert.Equal(1, retry.GetProperty("accepted").GetInt32());
         Assert.Equal(100, await factory.WithDbAsync(db => db.SalesRecords.Where(s => s.RecipeId == drink.RecipeId)
             .Select(s => s.CupsSold).SingleAsync()));
         Assert.Equal(1, await factory.WithDbAsync(async db => (await db.AuditLogs
@@ -281,5 +280,34 @@ public sealed class PosImportApiTests(BrewForgeApiFactory factory)
             .ShouldBeAsync(HttpStatusCode.OK);
         Assert.False(theirs.GetProperty("replayed").GetBoolean());
         Assert.NotEqual(original.GetProperty("jobId").GetString(), theirs.GetProperty("jobId").GetString());
+    }
+
+    [Fact]
+    public async Task Two_imports_under_the_same_key_at_once_import_once_and_replay_once()
+    {
+        var drink = await factory.NewLiveDrinkAsync();
+        var day = Today.AddDays(-1);
+        var key = Guid.NewGuid().ToString();
+        var file = Csv(Line(drink, day, 100));
+
+        // The same upload is sent twice at the same moment (a retry fired before the first answered).
+        var responses = await Task.WhenAll(
+            factory.ImportAsync(file, idempotencyKey: key),
+            factory.ImportAsync(file, idempotencyKey: key));
+        var results = new List<JsonElement>();
+        foreach (var response in responses) results.Add(await response.ShouldBeAsync(HttpStatusCode.OK));
+
+        // Both answer 200 for the one job, but only one did the import and the other replayed it.
+        Assert.Single(results.Select(r => r.GetProperty("jobId").GetString()).Distinct());
+        Assert.Equal(1, results.Count(r => !r.GetProperty("replayed").GetBoolean()));
+        Assert.Equal(1, results.Count(r => r.GetProperty("replayed").GetBoolean()));
+
+        // The day was applied once, and one job and one key claim are stored for it.
+        Assert.Equal(100, await factory.WithDbAsync(db => db.SalesRecords.Where(s => s.RecipeId == drink.RecipeId)
+            .Select(s => s.CupsSold).SingleAsync()));
+        Assert.Equal(1, await factory.WithDbAsync(db => db.PosImportIdempotencies.CountAsync(i => i.IdempotencyKey == key)));
+        Assert.Equal(1, await factory.WithDbAsync(async db => (await db.AuditLogs
+            .Where(a => a.EntityType == "SalesImport" && a.Action == "POS_IMPORT").Select(a => a.PayloadJson).ToListAsync())
+            .Count(payload => payload!.Contains(key))));
     }
 }

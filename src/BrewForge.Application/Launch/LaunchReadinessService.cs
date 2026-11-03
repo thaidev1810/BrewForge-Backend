@@ -43,7 +43,12 @@ public sealed class LaunchReadinessService(IBrewForgeDbContext db, LaunchHistory
             .Where(l => l.BranchId == branchId && l.RecipeId == recipeId).ToListAsync(cancellationToken);
         foreach (var row in rows)
         {
+            var before = row.Status;
             row.RecomputeCoverage(await CertifiedCountAsync(branchId, row.RecipeVersionId, cancellationToken));
+            if (before != LaunchStatus.Ready && row.Status == LaunchStatus.Ready)
+            {
+                await AnnounceReadyAsync(row, cancellationToken);
+            }
         }
 
         // A pilot keeps its own record of how far each branch is through the gate.
@@ -113,7 +118,36 @@ public sealed class LaunchReadinessService(IBrewForgeDbContext db, LaunchHistory
         launch.RecomputeCoverage(await CertifiedCountAsync(branchId, recipeVersionId, cancellationToken));
         db.Audit(AuditEntities.BranchLaunchStatus, () => launch.Id, AuditActions.Plan,
             new { branchId, recipeId, recipeVersionId, minCertifiedStaff, status = launch.Status.Code() });
+        if (launch.Status == LaunchStatus.Ready) await AnnounceReadyAsync(launch, cancellationToken);
+        else await AnnounceTrainingNeededAsync(launch, cancellationToken);
         return launch;
+    }
+
+    /// <summary>
+    /// A drink is planned at a branch that has too few certified staff: the training manager and the
+    /// branch manager are told, since courses reach staff only when someone assigns them or opens a class.
+    /// </summary>
+    private async Task AnnounceTrainingNeededAsync(BranchLaunchStatus launch, CancellationToken cancellationToken)
+    {
+        var drink = await LaunchNotices.DrinkAsync(db, launch.RecipeId, launch.RecipeVersionId, cancellationToken);
+        var branch = await LaunchNotices.BranchAsync(db, launch.BranchId, cancellationToken);
+        var recipients = (await LaunchNotices.HoldersOfAsync(db, RoleName.TrainingManager, cancellationToken))
+            .Concat(await LaunchNotices.BranchManagersOfAsync(db, launch.BranchId, cancellationToken));
+        LaunchNotices.Tell(db, recipients, "Training needed for a drink",
+            $"'{drink}' is planned at {branch}, which has {launch.CertifiedCount} of the {launch.MinCertifiedStaff} "
+            + "certified staff it needs to open it. Assign its course or open a class.",
+            clock.GetUtcNow(), new { branchId = launch.BranchId, launch.RecipeId, launch.RecipeVersionId });
+    }
+
+    /// <summary>A branch has reached its threshold: the R&amp;D managers, who open it for sale, are told.</summary>
+    private async Task AnnounceReadyAsync(BranchLaunchStatus launch, CancellationToken cancellationToken)
+    {
+        var drink = await LaunchNotices.DrinkAsync(db, launch.RecipeId, launch.RecipeVersionId, cancellationToken);
+        var branch = await LaunchNotices.BranchAsync(db, launch.BranchId, cancellationToken);
+        LaunchNotices.Tell(db, await LaunchNotices.HoldersOfAsync(db, RoleName.RdManager, cancellationToken),
+            "Branch ready to open a drink",
+            $"{branch} has {launch.CertifiedCount} certified staff for '{drink}' and can be opened for sale.",
+            clock.GetUtcNow(), new { branchId = launch.BranchId, launch.RecipeId, launch.RecipeVersionId });
     }
 
     /// <summary>

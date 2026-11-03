@@ -221,7 +221,7 @@ public sealed class RecertificationApiTests(BrewForgeApiFactory factory)
     private async Task<JsonElement> PublishAsync(JsonElement course)
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
         await factory.CompleteAuthoringAsync(course.Id());
         await (await trainer.PostAsync($"{Courses}/{course.Id()}/submit", null)).ShouldBeAsync(HttpStatusCode.OK);
         return await (await manager.PostAsync($"{Courses}/{course.Id()}/approve", null)).ShouldBeAsync(HttpStatusCode.OK);

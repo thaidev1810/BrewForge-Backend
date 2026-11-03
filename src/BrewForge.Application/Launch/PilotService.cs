@@ -2,6 +2,7 @@ using System.Text.Json;
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Domain.Common;
+using BrewForge.Domain.Identity;
 using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Sales;
@@ -217,6 +218,12 @@ public sealed class PilotService(IBrewForgeDbContext db, LaunchReadinessService 
             pilotId = pilot.Id, branchId, recipeId, recipeVersionId = pilot.RecipeVersionId, certifiedCount = certified,
             pilot.MinCertifiedStaff,
         });
+        var drink = await LaunchNotices.DrinkAsync(db, recipeId, pilot.RecipeVersionId, cancellationToken);
+        LaunchNotices.Tell(db, await LaunchNotices.BranchManagersOfAsync(db, branchId, cancellationToken),
+            "Drink on sale",
+            $"'{drink}' is on sale at your branch from {TradingCalendar.DateOf(now):yyyy-MM-dd}. "
+            + "Enter the cups sold every day: the pilot is judged on them.",
+            now, new { pilotId = pilot.Id, branchId, recipeId, recipeVersionId = pilot.RecipeVersionId });
         await db.SaveChangesAsync(cancellationToken);
         return (await ToDtosAsync([pilot], cancellationToken))[0];
     }
@@ -263,6 +270,7 @@ public sealed class PilotService(IBrewForgeDbContext db, LaunchReadinessService 
             {
                 launch.Withdraw();
                 history.RecordWithdrawal(launch);
+                await LaunchNotices.AnnounceWithdrawalAsync(db, launch, clock.GetUtcNow(), cancellationToken);
             }
         }
 
@@ -287,12 +295,72 @@ public sealed class PilotService(IBrewForgeDbContext db, LaunchReadinessService 
         var today = Today;
         var due = await db.PilotPrograms.IgnoreQueryFilters()
             .Where(p => p.State == PilotState.Running && p.EndDate < today).ToListAsync(cancellationToken);
+        if (due.Count == 0) return;
+
+        // The R&D managers decide what follows a pilot, so they are told it is their turn.
+        var managers = await LaunchNotices.HoldersOfAsync(db, RoleName.RdManager, cancellationToken);
         foreach (var pilot in due.Where(pilot => pilot.EndIfDue(today)))
         {
             db.Audit(AuditEntities.PilotProgram, () => pilot.Id, AuditActions.End,
                 new { pilot.EndDate, trigger = "end_date passed" });
+            LaunchNotices.Tell(db, managers, "Pilot ended",
+                $"The pilot '{pilot.Name}' ended on {pilot.EndDate:yyyy-MM-dd}. Review its evaluation and record a decision.",
+                clock.GetUtcNow(), new { pilotId = pilot.Id });
         }
-        if (due.Count > 0) await db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Reminds the branch managers of a running pilot's live branches of the trading days, up to
+    /// yesterday, that have no cups sold entered: a branch with a missing day is left out of the
+    /// evaluation. Once per branch and trading day, listing every day still missing.
+    /// </summary>
+    public async Task RemindMissingSalesAsync(CancellationToken cancellationToken)
+    {
+        var now = clock.GetUtcNow();
+        var today = Today;
+        var startOfToday = new DateTimeOffset(today.ToDateTime(TimeOnly.MinValue), TradingCalendar.Offset).ToUniversalTime();
+        var pilots = await db.PilotPrograms.IgnoreQueryFilters().Include(p => p.Branches)
+            .Where(p => p.State == PilotState.Running).ToListAsync(cancellationToken);
+
+        foreach (var pilot in pilots)
+        {
+            var recipeId = await RecipeIdOfAsync(pilot, cancellationToken);
+            foreach (var branch in pilot.Branches.Where(b => b.WentLiveAt is not null))
+            {
+                var launch = await db.BranchLaunchStatuses.IgnoreQueryFilters().SingleOrDefaultAsync(
+                    l => l.BranchId == branch.BranchId && l.RecipeId == recipeId, cancellationToken);
+                if (launch is not { IsLive: true }) continue;
+
+                var from = TradingCalendar.DateOf(branch.WentLiveAt!.Value);
+                if (from < pilot.StartDate) from = pilot.StartDate;
+                var to = today.AddDays(-1) < pilot.EndDate ? today.AddDays(-1) : pilot.EndDate;
+                if (from > to) continue;
+
+                var entered = await db.SalesRecords.IgnoreQueryFilters()
+                    .Where(s => s.BranchId == branch.BranchId && s.RecipeId == recipeId
+                                && s.TradingDate >= from && s.TradingDate <= to)
+                    .Select(s => s.TradingDate).ToListAsync(cancellationToken);
+                var missing = Enumerable.Range(0, to.DayNumber - from.DayNumber + 1)
+                    .Select(from.AddDays).Where(day => !entered.Contains(day)).ToList();
+                if (missing.Count == 0) continue;
+
+                var remindedToday = await db.AuditLogs.AnyAsync(a =>
+                    a.EntityType == AuditEntities.BranchLaunchStatus && a.EntityId == launch.Id
+                    && a.Action == AuditActions.RemindSales && a.CreatedAt >= startOfToday, cancellationToken);
+                if (remindedToday) continue;
+
+                var drink = await LaunchNotices.DrinkAsync(db, recipeId, pilot.RecipeVersionId, cancellationToken);
+                db.Audit(AuditEntities.BranchLaunchStatus, () => launch.Id, AuditActions.RemindSales,
+                    new { pilotId = pilot.Id, branchId = branch.BranchId, missing });
+                LaunchNotices.Tell(db, await LaunchNotices.BranchManagersOfAsync(db, branch.BranchId, cancellationToken),
+                    "Sales missing",
+                    $"'{drink}' has no cups sold entered for {string.Join(", ", missing.Select(d => d.ToString("yyyy-MM-dd")))}. "
+                    + $"The pilot '{pilot.Name}' cannot score a branch with missing days.",
+                    now, new { pilotId = pilot.Id, branchId = branch.BranchId, recipeId });
+            }
+        }
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<PilotEvaluation> EvaluateAsync(PilotProgram pilot, CancellationToken cancellationToken)

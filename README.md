@@ -44,7 +44,9 @@ dotnet run --project src/BrewForge.Api
 
 The API listens on `http://localhost:5113`. On its first start in the
 Development environment it applies the scripts of `db/migrations` and seeds
-the reference data. The OpenAPI document is at `/openapi/v1.json`.
+the reference data. The OpenAPI document is at `/openapi/v1.json`. What changed
+in the API, for the frontend, is in `docs/API_CHANGELOG.md`: a change to the API
+adds an entry there in the same commit.
 
 Without Docker, on Windows, `scripts/start-db.ps1` starts a portable
 PostgreSQL 16 from `%LOCALAPPDATA%\BrewForge` with the same credentials, and
@@ -88,6 +90,18 @@ Structured Outputs endpoint with `docs/reference/recipe-draft.schema.json` as
 the `json_schema` and `strict: true`. Configure `Llm:ApiKey` and `Llm:Model`
 (environment variables `Llm__ApiKey`, `Llm__Model`). Without them the two
 endpoints answer `422 LLM_NOT_CONFIGURED` and everything else works.
+
+Any OpenAI-compatible provider works. One without Structured Outputs, such as
+DeepSeek, takes `Llm:JsonMode = JsonObject`: it is asked for plain JSON with
+the schema written into the system prompt, and the parser holds the answer to
+the schema as always (BR-07). For DeepSeek:
+
+```
+Llm__BaseUrl=https://api.deepseek.com
+Llm__Model=deepseek-chat
+Llm__JsonMode=JsonObject
+Llm__ApiKey=<your key>
+```
 
 ## Test it
 
@@ -318,6 +332,12 @@ trainee of the class's branch, or the users named in an optional
 certified on a version before teaching it (BR-34), which is also why the
 "TRAINEE (own)" endpoints of the contract admit a TRAINER acting on their own
 enrolment.
+
+**Who issued a certificate.** Nobody does by hand (BR-21), so a certificate
+reads `issuedBy: "SYSTEM"`. Who decided it is the trainer who passed the
+practical: `assessedById` and `assessedByName`, with the `enrollmentId` it was
+earned through. They are read from the practical evaluations, not stored on
+the certificate, so the schema is unchanged.
 
 **Enrolment close and reset** (`POST /enrollments/{id}/close`, `/reset`) are
 not in the contract table. The state model gives both to the Training Manager
@@ -875,7 +895,9 @@ in the application, whatever became of its e-mail and push.
 **Cancelling a class.** `POST /training-classes/{id}/cancel`, with an
 optional `{ reason }`, takes a PLANNED or RUNNING class to CANCELLED, as the
 state model gives the Trainer. The enrolments of the class still being
-studied are closed and their learners notified with the reason; a passed or
+studied are closed and their learners notified with the reason (closing an
+enrolment, this way or by `POST /enrollments/{id}/close`, also cancels its
+open practical appointment and tells the learner); a passed or
 locked enrolment stays as it is, and recorded attendance is kept. Not in the
 contract table.
 
@@ -885,7 +907,11 @@ assigned to their own branch). A trainer may be given a branch. Without one
 B01, `trainer2` at B02) they are scoped like the store-level roles: classes,
 enrolments, learners, learning paths and the training-progress dashboard of
 other branches do not exist for them, and a class can be opened at their own
-branch alone. Courses stay chain-wide, since a course follows a recipe.
+branch alone. Courses stay chain-wide, since a course follows a recipe. A
+session is taught by a trainer of the class's branch or by one of the whole
+chain, as another branch's trainer could not see the class;
+`GET /courses/{id}/eligible-trainers?branchId=` flags the others "belongs to
+another branch".
 
 ## Known gaps
 

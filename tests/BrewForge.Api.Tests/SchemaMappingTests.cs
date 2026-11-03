@@ -16,7 +16,7 @@ namespace BrewForge.Api.Tests;
 public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
 {
     [Fact]
-    public async Task Migrations_create_the_51_tables_97_foreign_keys_and_5_triggers()
+    public async Task Migrations_create_the_54_tables_104_foreign_keys_and_5_triggers()
     {
         var (tables, foreignKeys, triggers) = await factory.WithDbAsync(async db => (
             await ScalarAsync(db, """SELECT count(*)::int AS "Value" FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"""),
@@ -29,9 +29,11 @@ public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
         // settings (005: 4 tables, 8 foreign keys); the impact run header (006: 1 table, no foreign key);
         // the variants of a version and their ingredients, frozen by two triggers of their own (008); the
         // pictures of a lesson (009); feedback on a recipe (011); progress per lesson (012: 1 table, 3
-        // foreign keys). 007 and 010 only add columns.
-        Assert.Equal(51, tables);
-        Assert.Equal(97, foreignKeys);
+        // foreign keys). 007 and 010 only add columns. The POS import idempotency ledger, keyed by user
+        // and key, with a foreign key to the user (016: 1 table, 1 foreign key). Stock receipts and counts
+        // for ingredient loss control, each with three foreign keys (019: 2 tables, 6 foreign keys).
+        Assert.Equal(54, tables);
+        Assert.Equal(104, foreignKeys);
         Assert.Equal(5, triggers);
     }
 
@@ -67,7 +69,9 @@ public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
                     continue;
                 }
 
-                var mapped = entity.GetProperties().Select(p => p.GetColumnName()).ToList();
+                // xmin is a Postgres system column (the row version used as a concurrency token);
+                // it is a real column but information_schema.columns never lists it, so leave it out.
+                var mapped = entity.GetProperties().Select(p => p.GetColumnName()).Where(c => c != "xmin").ToList();
                 found.AddRange(mapped.Except(actual).Select(c => $"{table}.{c}: mapped by {entity.ClrType.Name} but not in the schema"));
                 found.AddRange(actual.Except(mapped).Select(c => $"{table}.{c}: in the schema but not mapped by {entity.ClrType.Name}"));
             }

@@ -4,6 +4,7 @@ using BrewForge.Application.Recipes.Drafting;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
 using BrewForge.Infrastructure.Llm;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using static BrewForge.Api.Tests.Infrastructure.RecipeScenario;
 
@@ -242,6 +243,46 @@ public sealed class RecipeDraftParserTests
         Assert.True(format.GetProperty("json_schema").GetProperty("strict").GetBoolean());
         Assert.Equal("BrewForgeRecipeDraft", format.GetProperty("json_schema").GetProperty("name").GetString());
         Assert.False(format.GetProperty("json_schema").GetProperty("schema").GetProperty("additionalProperties").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Adapter_in_json_object_mode_asks_for_plain_json_and_puts_the_schema_in_the_prompt()
+    {
+        var handler = new CapturingHandler("""{"choices":[{"message":{"role":"assistant","content":"{\"drinkName\":\"x\"}"}}]}""");
+        using var http = new HttpClient(handler);
+        var adapter = new OpenAiRecipeDraftModel(http, Options.Create(new LlmOptions
+        {
+            ApiKey = "test-key", Model = "deepseek-chat", BaseUrl = "https://api.deepseek.com",
+            JsonMode = LlmJsonMode.JsonObject,
+        }));
+
+        var content = await adapter.CompleteAsync(
+            new DraftModelRequest("system text", "user text", RecipeDraftSchema.Text), CancellationToken.None);
+
+        Assert.Equal("{\"drinkName\":\"x\"}", content);
+        Assert.Equal("https://api.deepseek.com/chat/completions", handler.RequestUri);
+        var body = JsonSerializer.Deserialize<JsonElement>(handler.Body!);
+        var format = body.GetProperty("response_format");
+        Assert.Equal("json_object", format.GetProperty("type").GetString());
+        Assert.False(format.TryGetProperty("json_schema", out _));
+        var system = body.GetProperty("messages")[0].GetProperty("content").GetString()!;
+        Assert.StartsWith("system text", system);
+        Assert.Contains("JSON Schema", system);
+        Assert.Contains(RecipeDraftSchema.Text, system);
+        Assert.Equal("user text", body.GetProperty("messages")[1].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public void Json_mode_is_read_from_configuration_by_name()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Llm:JsonMode"] = "JsonObject" })
+            .Build();
+        var options = new LlmOptions();
+        configuration.GetSection(LlmOptions.Section).Bind(options);
+
+        Assert.Equal(LlmJsonMode.JsonObject, options.JsonMode);
+        Assert.Equal(LlmJsonMode.StructuredOutput, new LlmOptions().JsonMode);
     }
 
     [Fact]

@@ -678,4 +678,23 @@ public sealed class TrainingApiTests(BrewForgeApiFactory factory)
         Assert.Contains("reason", (await (await trainer.PostAsJsonAsync($"{Classes}/{(await factory.NewClassAsync()).ClassId}/cancel",
             new { reason = new string('x', 501) })).ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
     }
+
+    [Fact]
+    public async Task G_09_a_regulation_cannot_make_a_prerequisite_point_at_itself_or_form_a_cycle()
+    {
+        using var tm = await factory.ClientForAsync(TestUsers.TrainingManager);
+        var future = Today.AddYears(1);
+
+        // A course type cannot be its own prerequisite.
+        await (await tm.PostAsJsonAsync("/api/v1/training-regulations", new
+        {
+            courseType = "EQUIPMENT", prerequisiteType = "EQUIPMENT", dueDays = 14, effectiveFrom = future,
+        })).ShouldBeErrorAsync(HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+
+        // PRODUCT already requires INDUCTION (seed); making INDUCTION require PRODUCT closes the loop.
+        await (await tm.PostAsJsonAsync("/api/v1/training-regulations", new
+        {
+            courseType = "INDUCTION", prerequisiteType = "PRODUCT", dueDays = 7, effectiveFrom = future,
+        })).ShouldBeErrorAsync(HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+    }
 }

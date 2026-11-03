@@ -63,6 +63,7 @@ public static class DependencyInjection
 
         services.AddScoped<SalesService>();
         services.AddScoped<PosImportService>();
+        services.AddScoped<Inventory.StockService>();
         services.AddScoped<SalesAnalyticsService>();
         services.AddScoped<DashboardService>();
         return services;

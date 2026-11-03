@@ -68,6 +68,9 @@ public static class AuditActions
     /// <summary>A course past its due date was reported to the learner and the training managers. Once per enrolment.</summary>
     public const string EscalateOverdue = "ESCALATE_OVERDUE";
 
+    /// <summary>A pilot branch's managers were reminded of trading days with no sales entered. Once per branch and day.</summary>
+    public const string RemindSales = "REMIND_SALES";
+
     public const string Reset = "RESET";
     public const string CompleteModule = "COMPLETE_MODULE";
     public const string CompleteLesson = "COMPLETE_LESSON";
@@ -139,6 +142,8 @@ public static class AuditEntities
     public const string QuestionBank = "QuestionBankItem";
     public const string PracticalSchedule = "PracticalSchedule";
     public const string SystemSetting = "SystemSetting";
+    public const string StockReceipt = "StockReceipt";
+    public const string StockCount = "StockCount";
 
     /// <summary>
     /// One POS import, identified by its job number. The schema has no table

@@ -106,6 +106,7 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
         var enrollment = await FindAsync(id, ownerOnly: false, cancellationToken);
         enrollment.Close();
         db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Close);
+        await PracticalScheduleService.CancelOpenAsync(db, [enrollment], clock.GetUtcNow(), cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return (await ToDtosAsync([enrollment], cancellationToken))[0];
     }
@@ -119,6 +120,12 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
             DateOnly.FromDateTime(now.UtcDateTime), cancellationToken);
 
         enrollment.ResetForRetake(rules, now);
+        // A reset begins a fresh cycle: the open appointments of the old one are cancelled so they do not
+        // carry over into the new cycle's stage, while their history is kept.
+        var openSchedules = await db.PracticalSchedules
+            .Where(s => s.EnrollmentId == id && s.Status == ScheduleStatus.Scheduled).ToListAsync(cancellationToken);
+        foreach (var schedule in openSchedules) schedule.Cancel();
+
         db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Reset,
             new { enrollment.DueDate, regulationId = rules.RegulationId });
         db.Notify(enrollment.UserId, "Course reset",

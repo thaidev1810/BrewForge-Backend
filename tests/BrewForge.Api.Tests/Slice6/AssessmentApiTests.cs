@@ -380,6 +380,32 @@ public sealed class AssessmentApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task A_certificate_says_it_was_issued_by_the_system_and_which_trainer_passed_the_practical()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();
+        using var trainee = await factory.ClientForAsync(TestUsers.Trainee);
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        // A failed practical first: it decided nothing, so it is not the assessment shown.
+        await (await factory.EvaluatePracticalAsync(learner, allPassed: false)).ShouldBeAsync(HttpStatusCode.OK);
+        var passed = await (await factory.EvaluatePracticalAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        var certificateId = passed.GetProperty("certificateId").GetInt64();
+        var trainerId = await factory.UserIdAsync(TestUsers.Trainer);
+        var trainerName = await factory.WithDbAsync(db => db.Users.Where(u => u.Id == trainerId).Select(u => u.FullName).SingleAsync());
+
+        var shown = (await (await trainee.GetAsync("/api/v1/me/certificates")).ShouldBeAsync(HttpStatusCode.OK))
+            .EnumerateArray().Single(c => c.Id() == certificateId);
+        var read = await (await trainee.GetAsync($"/api/v1/certificates/{certificateId}")).ShouldBeAsync(HttpStatusCode.OK);
+
+        foreach (var certificate in new[] { shown, read })
+        {
+            Assert.Equal("SYSTEM", certificate.GetProperty("issuedBy").GetString());
+            Assert.Equal(learner.EnrollmentId, certificate.GetProperty("enrollmentId").GetInt64());
+            Assert.Equal(trainerId, certificate.GetProperty("assessedById").GetInt64());
+            Assert.Equal(trainerName, certificate.GetProperty("assessedByName").GetString());
+        }
+    }
+
+    [Fact]
     public async Task A_certificate_cannot_be_created_changed_or_deleted_through_the_api()
     {
         // Every route that concerns certificates only reads.

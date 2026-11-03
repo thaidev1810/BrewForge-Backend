@@ -18,7 +18,7 @@ public sealed record BranchLaunchStatusDto(long Id, long BranchId, string? Branc
     DateTimeOffset? LiveSince);
 
 /// <summary>Where each drink stands at each branch (API contract section 10).</summary>
-public sealed class LaunchStatusService(IBrewForgeDbContext db, LaunchHistory history)
+public sealed class LaunchStatusService(IBrewForgeDbContext db, LaunchHistory history, TimeProvider clock)
 {
     /// <summary>Coverage per branch and drink. A branch manager sees their own branch.</summary>
     public async Task<IReadOnlyList<BranchLaunchStatusDto>> ListAsync(long? branchId, long? recipeId, string? status,
@@ -44,6 +44,7 @@ public sealed class LaunchStatusService(IBrewForgeDbContext db, LaunchHistory hi
                      ?? throw DomainException.NotFound("Launch status", id);
         launch.Withdraw();
         history.RecordWithdrawal(launch);
+        await LaunchNotices.AnnounceWithdrawalAsync(db, launch, clock.GetUtcNow(), cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return (await ToDtosAsync([launch], cancellationToken))[0];
     }

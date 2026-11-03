@@ -29,8 +29,14 @@ public enum AssignmentStage
 public sealed record AssignmentRequest(long? CourseId, long? BranchId, IReadOnlyList<long>? EmployeeIds,
     bool? AllTrainees, DateOnly? Deadline, string? Reason);
 
+/// <summary>A user left out of a whole-branch assignment, with the reason (e.g. the prerequisite is unmet).</summary>
+public sealed record SkippedAssignment(long UserId, string Reason);
+
 public sealed record AssignmentResultDto(long CourseId, IReadOnlyList<long> EnrollmentIds,
-    IReadOnlyList<long> AlreadyEnrolled);
+    IReadOnlyList<long> AlreadyEnrolled, IReadOnlyList<SkippedAssignment> Skipped);
+
+/// <summary>What became of one named user in an assignment: a fresh enrolment, or the open one they already had.</summary>
+public sealed record AssignmentOutcome(long UserId, long EnrollmentId, bool AlreadyEnrolled);
 
 public sealed record AssignmentDto(long EnrollmentId, long UserId, string? FullName, long? BranchId, string? BranchCode,
     long CourseId, string CourseTitle, DateOnly? DueDate, int ProgressPercent, AssignmentStage Stage, bool IsOverdue,
@@ -41,7 +47,7 @@ public sealed record AssignmentDto(long EnrollmentId, long UserId, string? FullN
 /// an ordinary enrolment, outside any class; the status shown is derived from it.
 /// </summary>
 public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluator evaluator, CourseService courses,
-    TimeProvider clock)
+    LearningPathService learningPath, TimeProvider clock)
 {
     public const int MaxReasonLength = 255;
 
@@ -102,12 +108,28 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
         }
 
         var users = await RosterAsync(branchId, request, cancellationToken);
-        return await AssignToAsync(course, users, request.Deadline, reason, cancellationToken);
+        // G-09: a course is taken after its prerequisite is passed. A named employee who has not is
+        // refused by name; a whole-branch assignment goes on with those who qualify and reports the
+        // rest as skipped, with the reason.
+        var split = await learningPath.SplitByPrerequisiteAsync([.. users], course.CourseType, cancellationToken);
+        if (request.EmployeeIds is { Count: > 0 } && split.Missing.Count > 0)
+        {
+            throw DomainException.RuleViolation(LearningPathService.PrerequisiteRule,
+                $"A {course.CourseType.Code()} course is taken after a {split.Prerequisite!.Value.Code()} course has been passed.",
+                details: [.. split.Missing.Select(u =>
+                    new ErrorDetail("traineeIds", $"user {u.Id} has not passed a {split.Prerequisite!.Value.Code()} course"))]);
+        }
+
+        var outcomes = await AssignToAsync(course, split.Eligible, request.Deadline, reason, cancellationToken);
+        return new AssignmentResultDto(course.Id,
+            [.. outcomes.Where(o => !o.AlreadyEnrolled).Select(o => o.EnrollmentId)],
+            [.. outcomes.Where(o => o.AlreadyEnrolled).Select(o => o.UserId)],
+            [.. split.Missing.Select(u => new SkippedAssignment(u.Id, LearningPathService.PrerequisiteRule))]);
     }
 
     /// <summary>Enrols the users on the course, skipping those who already hold an open enrolment on it.</summary>
-    internal async Task<AssignmentResultDto> AssignToAsync(Course course, IReadOnlyList<AppUser> users, DateOnly? deadline,
-        string? reason, CancellationToken cancellationToken)
+    internal async Task<IReadOnlyList<AssignmentOutcome>> AssignToAsync(Course course, IReadOnlyList<AppUser> users,
+        DateOnly? deadline, string? reason, CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
         var today = DateOnly.FromDateTime(now.UtcDateTime);
@@ -118,16 +140,17 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
 
         var rules = await evaluator.RulesAsync(course.CourseType, today, cancellationToken);
         var ids = users.Select(u => u.Id).ToList();
-        var already = await db.Enrollments.IgnoreQueryFilters()
-            .Where(e => e.CourseId == course.Id && e.State != EnrollmentState.Closed && ids.Contains(e.UserId))
-            .Select(e => e.UserId).ToListAsync(cancellationToken);
+        var already = (await db.Enrollments.IgnoreQueryFilters()
+                .Where(e => e.CourseId == course.Id && e.State != EnrollmentState.Closed && ids.Contains(e.UserId))
+                .Select(e => new { e.UserId, e.Id }).ToListAsync(cancellationToken))
+            .ToDictionary(e => e.UserId, e => e.Id);
 
-        var created = new List<Enrollment>();
-        foreach (var user in users.Where(u => !already.Contains(u.Id)))
+        var created = new Dictionary<long, Enrollment>();
+        foreach (var user in users.Where(u => !already.ContainsKey(u.Id)))
         {
             var enrollment = Enrollment.Assign(course, user.Id, null, rules, now, deadline);
             db.Enrollments.Add(enrollment);
-            created.Add(enrollment);
+            created[user.Id] = enrollment;
             db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Assign,
                 new { enrollment.CourseId, enrollment.UserId, enrollment.DueDate, reason });
             db.Notify(user.Id, "Course assigned",
@@ -135,7 +158,10 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
                 + (reason is null ? "" : $" Reason: {reason}"), now);
         }
         await db.SaveChangesAsync(cancellationToken);
-        return new AssignmentResultDto(course.Id, [.. created.Select(e => e.Id)], already);
+
+        return [.. users.Select(u => already.TryGetValue(u.Id, out var existing)
+            ? new AssignmentOutcome(u.Id, existing, AlreadyEnrolled: true)
+            : new AssignmentOutcome(u.Id, created[u.Id].Id, AlreadyEnrolled: false))];
     }
 
     private async Task<IReadOnlyList<AppUser>> RosterAsync(long branchId, AssignmentRequest request,
@@ -174,17 +200,17 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
         CancellationToken cancellationToken)
     {
         var courseIds = enrollments.Select(e => e.CourseId).Distinct().ToList();
-        var userIds = enrollments.Select(e => e.UserId).Distinct().ToList();
         var titles = await db.Courses.AsNoTracking().Where(c => courseIds.Contains(c.Id))
             .ToDictionaryAsync(c => c.Id, c => c.Title, cancellationToken);
-        var certified = (await db.Certificates.AsNoTracking()
-                .Where(c => courseIds.Contains(c.CourseId) && userIds.Contains(c.UserId)
-                            && c.Status != CertificateStatus.Superseded)
-                .Select(c => new { c.UserId, c.CourseId }).ToListAsync(cancellationToken))
-            .Select(c => (c.UserId, c.CourseId)).ToHashSet();
+        // An appointment counts only if it belongs to the CURRENT cycle: one made before the enrolment
+        // last started (a reset moves EnrolledAt forward and cancels the old ones) must not move the stage.
+        var enrolledAt = enrollments.ToDictionary(e => e.Id, e => e.EnrolledAt);
+        var enrollmentIds = enrolledAt.Keys.ToList();
         var scheduled = (await db.PracticalSchedules.AsNoTracking()
-                .Where(s => s.Status == ScheduleStatus.Scheduled).Select(s => s.EnrollmentId).ToListAsync(cancellationToken))
-            .ToHashSet();
+                .Where(s => s.Status == ScheduleStatus.Scheduled && enrollmentIds.Contains(s.EnrollmentId))
+                .Select(s => new { s.EnrollmentId, s.CreatedAt }).ToListAsync(cancellationToken))
+            .Where(s => enrolledAt.TryGetValue(s.EnrollmentId, out var at) && s.CreatedAt >= at)
+            .Select(s => s.EnrollmentId).ToHashSet();
         var branchIds = enrollments.Select(e => e.User.BranchId).Where(b => b is not null).Distinct().ToList();
         var codes = await db.Branches.AsNoTracking().Where(b => branchIds.Contains(b.Id))
             .ToDictionaryAsync(b => b.Id, b => b.BranchCode, cancellationToken);
@@ -192,7 +218,7 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
 
         return [.. enrollments.Select(e =>
         {
-            var stage = StageOf(e, certified.Contains((e.UserId, e.CourseId)), scheduled.Contains(e.Id));
+            var stage = StageOf(e, scheduled.Contains(e.Id));
             // Overdue is a separate flag, and only while the work is still outstanding.
             var isOverdue = e.DueDate is { } due && due < today
                 && stage is not (AssignmentStage.Completed or AssignmentStage.Closed or AssignmentStage.Locked);
@@ -205,15 +231,15 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
     /// <summary>
     /// The stage of an assignment, read from the enrolment and the CURRENT training cycle only: a reset
     /// starts a fresh cycle, so quiz attempts, appointments and practicals from before it do not count.
-    /// COMPLETED once a certificate stands; CLOSED and LOCKED follow the domain state; otherwise the
-    /// progress through the cycle. A passed quiz is QUIZ_PASSED until a practical is booked or has been
-    /// failed this cycle, then PRACTICAL_PENDING. Being past the deadline is reported by isOverdue, not
-    /// here, so it never hides the real stage; a cancelled appointment is not a booking, and completing
-    /// one is not passing the practical.
+    /// The enrolment's own state wins over any history — a CLOSED or LOCKED cycle is reported as such,
+    /// and COMPLETED means this enrolment reached PASSED (its cycle certified), not that the person once
+    /// held a certificate (an older or NEEDS_RECERT certificate does not complete a new cycle). A passed
+    /// quiz is QUIZ_PASSED until a practical is booked or has been failed this cycle, then PRACTICAL_PENDING.
+    /// Being past the deadline is reported by isOverdue, not here; a cancelled appointment is not a booking,
+    /// and completing one is not passing the practical.
     /// </summary>
-    internal static AssignmentStage StageOf(Enrollment e, bool certified, bool practicalBooked)
+    internal static AssignmentStage StageOf(Enrollment e, bool practicalBooked)
     {
-        if (certified) return AssignmentStage.Completed;
         if (e.State == EnrollmentState.Closed) return AssignmentStage.Closed;
         if (e.State == EnrollmentState.Locked) return AssignmentStage.Locked;
 
@@ -225,7 +251,8 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
             EnrollmentState.Eligible when practicalBooked || e.LatestPractical() is { Passed: false }
                 => AssignmentStage.PracticalPending,
             EnrollmentState.Eligible => AssignmentStage.QuizPassed,
-            _ => AssignmentStage.Completed,   // PASSED without a certificate on record: the course is done.
+            EnrollmentState.Passed => AssignmentStage.Completed,
+            _ => AssignmentStage.Assigned,
         };
     }
 }

@@ -93,6 +93,22 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Roles_lists_every_role_with_its_permissions_to_any_authenticated_caller()
+    {
+        // A trainee is the least-privileged role: that it can read confirms the catalogue is open to all.
+        using var client = await factory.ClientForAsync(TestUsers.Trainee);
+
+        var body = await (await client.GetAsync("/api/v1/roles")).ShouldBeAsync(HttpStatusCode.OK);
+
+        var roles = body.EnumerateArray().ToDictionary(r => r.GetProperty("role").GetString()!,
+            r => r.GetProperty("permissions").EnumerateArray().Select(p => p.GetString()).ToList());
+        Assert.Equal(8, roles.Count);
+        Assert.Contains("users.manage", roles["ADMIN"]);
+        Assert.Contains("recipes.release", roles["RD_MANAGER"]);
+        Assert.Equal(["branches.read", "learning.own", "skills.read"], roles["TRAINEE"].Order());
+    }
+
+    [Fact]
     public async Task Request_without_a_token_is_401_in_the_error_envelope()
     {
         using var client = factory.CreateClient();
@@ -140,6 +156,30 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
             .ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
         await (await client.PostAsJsonAsync(Refresh, new { refreshToken = newRefresh }))
             .ShouldBeAsync(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Two_refreshes_of_the_same_token_at_once_yield_one_new_session_and_one_401()
+    {
+        using var client = factory.CreateClient();
+        var session = await factory.LoginAsync(TestUsers.Trainer);
+
+        // The same refresh token is presented twice at the same moment (a double-submit or a retry).
+        var responses = await Task.WhenAll(
+            client.PostAsJsonAsync(Refresh, new { refreshToken = session.RefreshToken }),
+            client.PostAsJsonAsync(Refresh, new { refreshToken = session.RefreshToken }));
+
+        // Single-use holds under the race: exactly one gets a new pair, the other is refused.
+        var statuses = responses.Select(r => r.StatusCode).OrderBy(s => s).ToArray();
+        Assert.Equal([HttpStatusCode.OK, HttpStatusCode.Unauthorized], statuses);
+        Assert.False(string.IsNullOrEmpty((await responses.Single(r => r.StatusCode == HttpStatusCode.OK).JsonAsync())
+            .GetProperty("refreshToken").GetString()));
+        await responses.Single(r => r.StatusCode == HttpStatusCode.Unauthorized)
+            .ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+
+        // The token is spent either way: presenting it a third time is still refused.
+        await (await client.PostAsJsonAsync(Refresh, new { refreshToken = session.RefreshToken }))
+            .ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
     }
 
     [Fact]
@@ -196,6 +236,88 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
         });
         // Each hash has its own salt, so equal passwords do not produce equal hashes.
         Assert.Equal(hashes.Count, hashes.Distinct().Count());
+    }
+
+    [Fact]
+    public async Task G_11_a_locked_account_is_refused_at_once_even_with_a_still_valid_access_token()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var newcomer = await NewTraineeAsync(admin);
+        using var client = await AuthedClientAsync(newcomer);
+
+        // The token still has fifteen minutes to run, but deactivating the account refuses the next request.
+        await (await admin.PostAsync($"/api/v1/users/{newcomer.Id}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+        await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    [Fact]
+    public async Task G_11_a_role_change_invalidates_a_token_minted_with_the_old_role()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var newcomer = await NewTraineeAsync(admin);
+        using var client = await AuthedClientAsync(newcomer);
+
+        // The admin changes the account's role (to a head-office one, so its branch clears too).
+        await (await admin.PutAsJsonAsync($"/api/v1/users/{newcomer.Id}", new
+        {
+            email = $"{newcomer.Username}@brewforge.local", fullName = "Session Test", role = "TRAINER",
+            branchId = (long?)null,
+        })).ShouldBeAsync(HttpStatusCode.OK);
+        await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    [Fact]
+    public async Task G_11_a_branch_change_invalidates_a_token_minted_for_the_old_branch()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var newcomer = await NewTraineeAsync(admin);
+        using var client = await AuthedClientAsync(newcomer);
+
+        // The trainee is moved to another branch; the token minted for B01 no longer matches.
+        await (await admin.PutAsJsonAsync($"/api/v1/users/{newcomer.Id}", new
+        {
+            email = $"{newcomer.Username}@brewforge.local", fullName = "Session Test", role = "TRAINEE",
+            branchId = await factory.BranchIdAsync("B02"),
+        })).ShouldBeAsync(HttpStatusCode.OK);
+        await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    [Fact]
+    public async Task G_11_a_password_reset_ends_the_old_sessions()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var newcomer = await NewTraineeAsync(admin);
+        using var client = await AuthedClientAsync(newcomer);
+
+        // Role and branch are unchanged; only the password is reset, which still ends the session.
+        await (await admin.PutAsJsonAsync($"/api/v1/users/{newcomer.Id}", new
+        {
+            email = $"{newcomer.Username}@brewforge.local", fullName = "Session Test", role = "TRAINEE",
+            branchId = await factory.BranchIdAsync("B01"), password = "A-New-Test-Passw0rd",
+        })).ShouldBeAsync(HttpStatusCode.OK);
+        await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    private async Task<(long Id, string Username, string Password)> NewTraineeAsync(HttpClient admin)
+    {
+        var name = $"g11{Guid.NewGuid():N}"[..14];
+        const string password = "Another-Test-Passw0rd";
+        var created = await (await admin.PostAsJsonAsync("/api/v1/users", new
+        {
+            username = name, email = $"{name}@brewforge.local", password, fullName = "Session Test",
+            role = "TRAINEE", branchId = await factory.BranchIdAsync("B01"),
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        return (created.GetProperty("id").GetInt64(), name, password);
+    }
+
+    // A client bearing the newcomer's access token, confirmed working before the change under test.
+    private async Task<HttpClient> AuthedClientAsync((long Id, string Username, string Password) newcomer)
+    {
+        var token = (await factory.LoginAsync(newcomer.Username, newcomer.Password)).AccessToken;
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        await (await client.GetAsync(Me)).ShouldBeAsync(HttpStatusCode.OK);
+        return client;
     }
 
     private static JsonElement DecodePayload(string jwt) =>
