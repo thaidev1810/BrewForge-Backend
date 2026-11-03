@@ -33,23 +33,24 @@ public sealed class CoursesController(CourseService courses) : ControllerBase
     }
 
     /// <summary>Includes the modules, the quiz and the practical checklist.</summary>
-    [HttpGet("{id:long}"), AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager)]
+    [HttpGet("{id:long}"), AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager, RoleName.RdManager)]
     public Task<CourseDetailDto> Get(long id, CancellationToken cancellationToken) =>
         courses.GetAsync(id, cancellationToken);
 
     /// <summary>The seven modules in order, each lesson rendered from the bound version (BR-22).</summary>
-    [HttpGet("{id:long}/modules"), AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager)]
+    [HttpGet("{id:long}/modules"), AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager, RoleName.RdManager)]
     public Task<IReadOnlyList<CourseModuleDto>> Modules(long id, CancellationToken cancellationToken) =>
         courses.GetModulesAsync(id, cancellationToken);
 
     /// <summary>
-    /// <c>?branchId=</c>, the branch of the class. The active trainers for a session, each flagged
-    /// eligible (BR-34, and of that branch or of none) or with the reason they are not.
+    /// <c>?q=&amp;branchId=&amp;page=&amp;size=&amp;sort=</c>; <c>branchId</c> is the branch of the class.
+    /// The active trainers for a session, each flagged eligible (BR-34, and of that branch or of none)
+    /// or with the reason they are not.
     /// </summary>
     [HttpGet("{id:long}/eligible-trainers"), AuthorizeRoles(RoleName.Trainer, RoleName.TrainingManager)]
-    public Task<IReadOnlyList<TrainerOptionDto>> EligibleTrainers(long id, [FromQuery] long? branchId,
-        CancellationToken cancellationToken) =>
-        courses.EligibleTrainersAsync(id, branchId, cancellationToken);
+    public Task<PagedResult<TrainerOptionDto>> EligibleTrainers(long id, [FromQuery] PageQuery paging,
+        [FromQuery] string? q, [FromQuery] long? branchId, CancellationToken cancellationToken) =>
+        courses.EligibleTrainersAsync(id, paging, q, branchId, cancellationToken);
 
     [HttpGet("{id:long}/quiz"), Authorize(Policy = Policies.Trainer)]
     public Task<QuizDto> GetQuiz(long id, CancellationToken cancellationToken) =>
@@ -85,12 +86,12 @@ public sealed class CoursesController(CourseService courses) : ControllerBase
         courses.SubmitAsync(id, cancellationToken);
 
     /// <summary>UC-28. PENDING_APPROVAL to PUBLISHED.</summary>
-    [HttpPost("{id:long}/approve"), Authorize(Policy = Policies.TrainingManager)]
+    [HttpPost("{id:long}/approve"), Authorize(Policy = Policies.RdManager)]
     public Task<CourseDetailDto> Approve(long id, CancellationToken cancellationToken) =>
         courses.ApproveAsync(id, cancellationToken);
 
     /// <summary>UC-28. <c>{ comment }</c>. Back to DRAFT.</summary>
-    [HttpPost("{id:long}/return"), Authorize(Policy = Policies.TrainingManager)]
+    [HttpPost("{id:long}/return"), Authorize(Policy = Policies.RdManager)]
     public Task<CourseDetailDto> Return(long id, ReturnCourseRequest request, CancellationToken cancellationToken) =>
         courses.ReturnAsync(id, request, cancellationToken);
 

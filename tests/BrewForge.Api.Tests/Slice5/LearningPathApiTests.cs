@@ -272,7 +272,7 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     private async Task<long> NewPublishedInductionCourseAsync()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
         var course = await (await trainer.PostAsJsonAsync(Courses,
                 new { courseType = "INDUCTION", title = $"Induction {Guid.NewGuid():N}"[..20] }))
             .ShouldBeAsync(HttpStatusCode.Created);

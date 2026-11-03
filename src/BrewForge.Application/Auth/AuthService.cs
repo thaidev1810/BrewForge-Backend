@@ -16,6 +16,9 @@ public sealed record LoginResponse(string AccessToken, string RefreshToken, User
 public sealed record MeResponse(long Id, string Username, string Email, string FullName, RoleName Role,
     long? BranchId, UserStatus Status, IReadOnlyList<string> Permissions);
 
+/// <summary>A role and the permission codes it carries, for the client to build menus and role screens (G-06).</summary>
+public sealed record RoleDto(RoleName Role, IReadOnlyList<string> Permissions);
+
 /// <summary>SF-02: login, token refresh with rotation, logout and the caller's own profile.</summary>
 public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, ITokenService tokens,
     ICurrentUser currentUser)
@@ -73,9 +76,32 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
         var issued = tokens.Issue(user);
         db.Audit(AuditEntities.RefreshToken, () => claims.TokenId, AuditActions.Revoke,
             new { reason = "ROTATED", replacedBy = issued.RefreshTokenId }, actorUserId: user.Id);
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            // Revoking the presented token is what makes the refresh single-use. A unique index
+            // over this revocation lets only one of two concurrent refreshes of the same token
+            // commit; the loser lands here and is refused exactly like a token already spent.
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (IsRefreshRotationRace(exception))
+        {
+            throw DomainException.Unauthenticated("The refresh token is invalid, expired or revoked.");
+        }
 
         return new LoginResponse(issued.AccessToken, issued.RefreshToken, UserDto.From(user));
+    }
+
+    // The partial unique index of migration 015; its name reaches here in the exception message,
+    // so the race is recognised without this layer taking a dependency on the database provider.
+    private const string SingleRevokeIndex = "ux_refresh_token_single_revoke";
+
+    private static bool IsRefreshRotationRace(DbUpdateException exception)
+    {
+        for (Exception? error = exception; error is not null; error = error.InnerException)
+        {
+            if (error.Message.Contains(SingleRevokeIndex, StringComparison.Ordinal)) return true;
+        }
+        return false;
     }
 
     /// <summary>Revokes the caller's refresh token. Safe to repeat.</summary>
@@ -105,6 +131,16 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
 
         return new MeResponse(user.Id, user.Username, user.Email, user.FullName, user.Role.RoleName,
             user.BranchId, user.Status, user.Role.Permissions);
+    }
+
+    /// <summary>
+    /// Every role with its permission set, so the client can build menus and role screens (G-06).
+    /// The server still authorizes each endpoint on the role itself and never trusts the client (SE-03).
+    /// </summary>
+    public async Task<IReadOnlyList<RoleDto>> RolesAsync(CancellationToken cancellationToken)
+    {
+        var roles = await db.Roles.AsNoTracking().OrderBy(r => r.RoleName).ToListAsync(cancellationToken);
+        return [.. roles.Select(r => new RoleDto(r.RoleName, r.Permissions))];
     }
 
     private Task<bool> IsRevokedAsync(long tokenId, CancellationToken cancellationToken) =>

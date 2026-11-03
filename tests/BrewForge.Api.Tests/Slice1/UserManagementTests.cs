@@ -211,6 +211,40 @@ public sealed class UserManagementTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Lookup_resolves_stored_ids_including_inactive_but_stays_in_scope()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var b01 = await factory.BranchIdAsync("B01");
+
+        async Task<long> NewB01TraineeAsync()
+        {
+            var created = await (await admin.PostAsJsonAsync(Users, NewUser(UniqueName(), "TRAINEE", b01)))
+                .ShouldBeAsync(HttpStatusCode.Created);
+            return created.GetProperty("id").GetInt64();
+        }
+
+        var active = await NewB01TraineeAsync();
+        var gone = await NewB01TraineeAsync();
+        await (await admin.PostAsync($"{Users}/{gone}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+
+        // A trainer resolves both stored IDs to labels: the inactive one is included (active=false) so a
+        // historical reference keeps its name.
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var resolved = await (await trainer.GetAsync($"/api/v1/users/lookup?ids={active},{gone}"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        var byId = resolved.GetProperty("items").EnumerateArray()
+            .ToDictionary(u => u.GetProperty("id").GetInt64(), u => u.GetProperty("active").GetBoolean());
+        Assert.True(byId[active]);
+        Assert.False(byId[gone]);
+
+        // The B02 manager cannot resolve B01 IDs: branch scope holds even when IDs are given.
+        using var b02Manager = await factory.ClientForAsync(TestUsers.BranchManagerB02);
+        var outOfScope = await (await b02Manager.GetAsync($"/api/v1/users/lookup?ids={active},{gone}"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Empty(outOfScope.GetProperty("items").EnumerateArray());
+    }
+
+    [Fact]
     public async Task Coverage_is_recounted_when_a_certified_user_is_deactivated_or_moved()
     {
         using var admin = await factory.ClientForAsync(TestUsers.Admin);

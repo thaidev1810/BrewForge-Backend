@@ -100,9 +100,9 @@ public sealed class CorrectiveActionsController(CorrectiveActionService actions)
     public Task<RetrainingOptionsDto> RetrainingOptions(long id, CancellationToken cancellationToken) =>
         actions.RetrainingOptionsAsync(id, cancellationToken);
 
-    /// <summary>Enrols the staff named on the action on a course (<c>{ courseId, deadline }</c>) - the retraining assignment.</summary>
+    /// <summary>Enrols the staff named on the action on a course (<c>{ courseId, deadline }</c>), reporting the outcome per employee.</summary>
     [HttpPost("{id:long}/assign-retraining"), Authorize(Policy = Policies.QualityAuditor)]
-    public Task<AssignmentResultDto> AssignRetraining(long id, RetrainingRequest request,
+    public Task<RetrainingResultDto> AssignRetraining(long id, RetrainingRequest request,
         CancellationToken cancellationToken) =>
         actions.AssignRetrainingAsync(id, request, cancellationToken);
 

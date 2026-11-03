@@ -407,11 +407,11 @@ public sealed class CourseApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
-    public async Task Complete_course_is_submitted_then_approved_by_the_training_manager()
+    public async Task Complete_course_is_submitted_then_approved_by_the_rd_manager()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
-        var managerId = await factory.UserIdAsync(TestUsers.TrainingManager);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
+        var managerId = await factory.UserIdAsync(TestUsers.RdManager);
         var courseId = (await factory.NewCourseAsync()).Id();
         await factory.CompleteAuthoringAsync(courseId);
 
@@ -424,8 +424,14 @@ public sealed class CourseApiTests(BrewForgeApiFactory factory)
         var queue = await (await manager.GetAsync($"{Courses}?state=PENDING_APPROVAL&size=100")).ShouldBeAsync(HttpStatusCode.OK);
         Assert.Contains(queue.GetProperty("items").EnumerateArray(), c => c.Id() == courseId);
 
-        // The trainer cannot approve, and cannot edit while it is pending.
+        // Approval moved to the R&D manager: neither the trainer nor the training manager may approve,
+        // and the trainer cannot edit while it is pending.
         await (await trainer.PostAsync($"{Courses}/{courseId}/approve", null)).ShouldBeErrorAsync(HttpStatusCode.Forbidden, "MSG-E01");
+        using (var trainingManager = await factory.ClientForAsync(TestUsers.TrainingManager))
+        {
+            await (await trainingManager.PostAsync($"{Courses}/{courseId}/approve", null))
+                .ShouldBeErrorAsync(HttpStatusCode.Forbidden, "MSG-E01");
+        }
         await (await trainer.PutAsJsonAsync($"{Courses}/{courseId}/quiz", new { passScore = 50 }))
             .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "STATE_TRANSITION");
 
@@ -446,7 +452,7 @@ public sealed class CourseApiTests(BrewForgeApiFactory factory)
     public async Task Returned_course_goes_back_to_draft_and_the_comment_is_kept_in_the_audit_log()
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
         var courseId = (await factory.NewCourseAsync()).Id();
         await factory.CompleteAuthoringAsync(courseId);
         await (await trainer.PostAsync($"{Courses}/{courseId}/submit", null)).ShouldBeAsync(HttpStatusCode.OK);
@@ -499,19 +505,25 @@ public sealed class CourseApiTests(BrewForgeApiFactory factory)
         var versionId = course.GetProperty("recipeVersionId").GetInt64();
         var trainerId = await factory.UserIdAsync(TestUsers.Trainer);
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        var url = $"/api/v1/courses/{courseId}/eligible-trainers";
+        var url = $"/api/v1/courses/{courseId}/eligible-trainers?size=100";
 
         // Not certified on this fresh version yet: the trainer is listed but not eligible, with a reason.
         var before = await (await trainer.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
-        var meBefore = before.EnumerateArray().Single(t => t.GetProperty("id").GetInt64() == trainerId);
+        Assert.True(before.GetProperty("total").GetInt32() >= 1);   // the response is paged
+        var meBefore = before.GetProperty("items").EnumerateArray().Single(t => t.GetProperty("id").GetInt64() == trainerId);
         Assert.False(meBefore.GetProperty("eligible").GetBoolean());
         Assert.Equal(JsonValueKind.String, meBefore.GetProperty("reason").ValueKind);
 
         // Certified on the version: now eligible, no reason given.
         await factory.CertifyAsync(trainerId, courseId, versionId);
         var after = await (await trainer.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
-        var meAfter = after.EnumerateArray().Single(t => t.GetProperty("id").GetInt64() == trainerId);
+        var meAfter = after.GetProperty("items").EnumerateArray().Single(t => t.GetProperty("id").GetInt64() == trainerId);
         Assert.True(meAfter.GetProperty("eligible").GetBoolean());
         Assert.Equal(JsonValueKind.Null, meAfter.GetProperty("reason").ValueKind);
+
+        // Search narrows by name/username; a term that matches nobody returns an empty page.
+        var none = await (await trainer.GetAsync($"/api/v1/courses/{courseId}/eligible-trainers?q=zzz-no-such-trainer"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        Assert.Equal(0, none.GetProperty("total").GetInt32());
     }
 }

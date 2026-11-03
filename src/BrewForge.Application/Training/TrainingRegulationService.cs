@@ -24,6 +24,7 @@ public sealed class TrainingRegulationService(IBrewForgeDbContext db, ICurrentUs
     {
         Require(request);
         await EnsureNotRetroactiveAsync(request.CourseType!.Value, request.EffectiveFrom!.Value, cancellationToken);
+        await EnsureNoPrerequisiteCycleAsync(request.CourseType.Value, request.PrerequisiteType, cancellationToken);
 
         var regulation = TrainingRegulation.Create(request.CourseType.Value, request.MandatoryForRole,
             request.PrerequisiteType, request.DueDays!.Value, request.MaxRetakes ?? TrainingRules.Default.MaxRetakes,
@@ -58,6 +59,7 @@ public sealed class TrainingRegulationService(IBrewForgeDbContext db, ICurrentUs
             ? request.EffectiveFrom.Value
             : regulation.EffectiveFrom;
         await EnsureNotRetroactiveAsync(regulation.CourseType, earliest, cancellationToken);
+        await EnsureNoPrerequisiteCycleAsync(regulation.CourseType, request.PrerequisiteType, cancellationToken);
 
         regulation.Update(request.MandatoryForRole, request.PrerequisiteType, request.DueDays!.Value,
             request.MaxRetakes ?? regulation.MaxRetakes, request.MinAttendancePct ?? regulation.MinAttendancePct,
@@ -289,6 +291,37 @@ public sealed class TrainingRegulationService(IBrewForgeDbContext db, ICurrentUs
 
         TrainingRegulation.EnsureNotRetroactive(effectiveFrom,
             latest is { } at ? DateOnly.FromDateTime(at.UtcDateTime) : null);
+    }
+
+    /// <summary>
+    /// G-09: a prerequisite must not point a course type at itself, nor form a cycle through the
+    /// prerequisites of other course types, which would make the chain impossible to ever complete.
+    /// </summary>
+    private async Task EnsureNoPrerequisiteCycleAsync(CourseType courseType, CourseType? prerequisiteType,
+        CancellationToken cancellationToken)
+    {
+        if (prerequisiteType is null) return;
+        if (prerequisiteType == courseType)
+        {
+            throw DomainException.Validation("A course type cannot be its own prerequisite.",
+                new ErrorDetail("prerequisiteType", "must differ from courseType"));
+        }
+
+        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+        var all = await db.TrainingRegulations.AsNoTracking().ToListAsync(cancellationToken);
+        var prerequisiteOf = all.GroupBy(r => r.CourseType)
+            .ToDictionary(g => g.Key, g => TrainingRegulation.InForce(g, g.Key, today)?.PrerequisiteType);
+        prerequisiteOf[courseType] = prerequisiteType;   // the change being made
+
+        var seen = new HashSet<CourseType> { courseType };
+        var cursor = prerequisiteType.Value;
+        while (seen.Add(cursor))
+        {
+            if (!prerequisiteOf.TryGetValue(cursor, out var next) || next is null) return;
+            cursor = next.Value;
+        }
+        throw DomainException.Validation("The prerequisite chain forms a cycle.",
+            new ErrorDetail("prerequisiteType", "creates a circular dependency"));
     }
 
     private static void Require(TrainingRegulationRequest request) =>

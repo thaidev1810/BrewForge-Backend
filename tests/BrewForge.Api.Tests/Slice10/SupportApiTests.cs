@@ -150,20 +150,25 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
     public async Task Assignments_filtered_by_status_still_honour_the_requested_sort()
     {
         var course = await factory.NewPublishedCourseAsync();
-        var b01 = await factory.BranchIdAsync("B01");
         using var admin = await factory.ClientForAsync(TestUsers.Admin);
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        // A branch of this test's own, so its induction-passed trainees are never swept into another
+        // test's "every trainee of the branch" assignment.
+        var branch = await NewBranchAsync(admin);
 
-        // Two fresh B01 trainees, assigned the same course with different deadlines, both ASSIGNED.
+        // Two trainees, assigned the same course with different deadlines, both ASSIGNED.
         var near = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5);
         var far = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(15);
-        var t1 = await NewTraineeAsync(admin, b01);
-        var t2 = await NewTraineeAsync(admin, b01);
+        var t1 = await NewTraineeAsync(admin, branch);
+        var t2 = await NewTraineeAsync(admin, branch);
+        // The course is a PRODUCT one, so both need the induction passed before it can be assigned (G-09).
+        await factory.PassInductionAsync(t1);
+        await factory.PassInductionAsync(t2);
         await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
-            { courseId = course.Id(), branchId = b01, employeeIds = new[] { t1 }, deadline = near }))
+            { courseId = course.Id(), branchId = branch, employeeIds = new[] { t1 }, deadline = near }))
             .ShouldBeAsync(HttpStatusCode.Created);
         await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
-            { courseId = course.Id(), branchId = b01, employeeIds = new[] { t2 }, deadline = far }))
+            { courseId = course.Id(), branchId = branch, employeeIds = new[] { t2 }, deadline = far }))
             .ShouldBeAsync(HttpStatusCode.Created);
 
         var baseUrl = $"/api/v1/assignments?courseId={course.Id()}&stage=ASSIGNED";
@@ -172,6 +177,63 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
 
         Assert.Equal(new[] { near.ToString("yyyy-MM-dd"), far.ToString("yyyy-MM-dd") }, asc);
         Assert.Equal(new[] { far.ToString("yyyy-MM-dd"), near.ToString("yyyy-MM-dd") }, desc);
+    }
+
+    [Fact]
+    public async Task G_09_a_named_employee_without_the_prerequisite_is_refused_and_allowed_once_it_is_passed()
+    {
+        var course = await factory.NewPublishedCourseAsync();   // PRODUCT: taken after induction
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var branch = await NewBranchAsync(admin);
+        var newbie = await NewTraineeAsync(admin, branch);
+
+        // Named without the induction passed: refused by name, like opening a class.
+        var refused = await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+            { courseId = course.Id(), branchId = branch, employeeIds = new[] { newbie } }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "PREREQUISITE");
+        Assert.Contains(refused.DetailFields(), field => field == "traineeIds");
+
+        // Once the induction is passed, the same assignment is created.
+        await factory.PassInductionAsync(newbie);
+        await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+            { courseId = course.Id(), branchId = branch, employeeIds = new[] { newbie } }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+    }
+
+    [Fact]
+    public async Task G_09_assigning_a_whole_branch_skips_those_without_the_prerequisite()
+    {
+        var course = await factory.NewPublishedCourseAsync();
+        var courseId = course.Id();
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var branch = await NewBranchAsync(admin);
+        var ready = await NewTraineeAsync(admin, branch);
+        await factory.PassInductionAsync(ready);            // qualifies
+        var newbie = await NewTraineeAsync(admin, branch);  // no induction
+
+        // The whole branch is assigned: the one without the induction is left out, not a 409,
+        // and is reported as skipped with the reason (G-09).
+        var result = await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+            { courseId, branchId = branch, allTrainees = true })).ShouldBeAsync(HttpStatusCode.Created);
+        var skipped = result.GetProperty("skipped").EnumerateArray()
+            .ToDictionary(s => s.GetProperty("userId").GetInt64(), s => s.GetProperty("reason").GetString());
+        Assert.Equal("PREREQUISITE", skipped[newbie]);
+        Assert.DoesNotContain(ready, skipped.Keys);
+
+        var enrolled = await factory.WithDbAsync(db => db.Enrollments.IgnoreQueryFilters()
+            .Where(e => e.CourseId == courseId).Select(e => e.UserId).ToListAsync());
+        Assert.Contains(ready, enrolled);
+        Assert.DoesNotContain(newbie, enrolled);
+    }
+
+    private static async Task<long> NewBranchAsync(HttpClient admin)
+    {
+        var code = $"BZ{Guid.NewGuid():N}"[..8];
+        var created = await (await admin.PostAsJsonAsync("/api/v1/branches", new { branchCode = code, name = "G-09 branch" }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        return created.GetProperty("id").GetInt64();
     }
 
     private async Task<long> NewTraineeAsync(HttpClient admin, long branchId)
@@ -227,6 +289,82 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
         var overdue = await RowAsync();
         Assert.True(overdue.GetProperty("isOverdue").GetBoolean());
         Assert.Equal("PRACTICAL_PENDING", overdue.GetProperty("stage").GetString());
+    }
+
+    [Fact]
+    public async Task A_held_certificate_does_not_complete_a_fresh_assignment()
+    {
+        var course = await factory.NewPublishedCourseAsync();
+        var courseId = course.Id();
+        var versionId = course.GetProperty("recipeVersionId").GetInt64();
+        var b01 = await factory.BranchIdAsync("B01");
+        var trainee = await factory.UserIdAsync(TestUsers.Trainee);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+
+        // The trainee already holds a valid certificate on this course's version.
+        await factory.CertifyAsync(trainee, courseId, versionId);
+
+        // Assigning the course again starts a fresh cycle: the stage is ASSIGNED, not COMPLETED off the
+        // old certificate.
+        await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+            { courseId, branchId = b01, employeeIds = new[] { trainee } })).ShouldBeAsync(HttpStatusCode.Created);
+        var list = await (await trainer.GetAsync($"/api/v1/assignments?courseId={courseId}&size=100"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        var row = list.GetProperty("items").EnumerateArray().Single(a => a.GetProperty("userId").GetInt64() == trainee);
+        Assert.Equal("ASSIGNED", row.GetProperty("stage").GetString());
+    }
+
+    [Fact]
+    public async Task An_appointment_from_before_the_cycle_does_not_move_the_stage()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();
+        await (await factory.AttemptQuizAsync(learner)).ShouldBeAsync(HttpStatusCode.OK);
+        var trainerId = await factory.UserIdAsync(TestUsers.Trainer);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var url = $"/api/v1/assignments?courseId={learner.Setup.CourseId}&size=100";
+
+        async Task<string?> StageAsync()
+        {
+            var list = await (await trainer.GetAsync(url)).ShouldBeAsync(HttpStatusCode.OK);
+            return list.GetProperty("items").EnumerateArray()
+                .Single(a => a.GetProperty("enrollmentId").GetInt64() == learner.EnrollmentId)
+                .GetProperty("stage").GetString();
+        }
+
+        // The quiz is passed; nothing is booked for this cycle yet.
+        Assert.Equal("QUIZ_PASSED", await StageAsync());
+
+        // A SCHEDULED appointment made before this cycle began must not push the stage to PRACTICAL_PENDING.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlRawAsync(
+            "INSERT INTO practical_schedule (enrollment_id, trainer_id, scheduled_at, location, status, created_at) " +
+            "SELECT id, {1}, now() + interval '2 days', 'old cycle', 'SCHEDULED', enrolled_at - interval '1 day' " +
+            "FROM enrollment WHERE id = {0}", learner.EnrollmentId, trainerId));
+        Assert.Equal("QUIZ_PASSED", await StageAsync());
+    }
+
+    [Fact]
+    public async Task Managers_read_enrolment_and_course_detail_within_their_reach()
+    {
+        var learner = await factory.NewEligibleLearnerAsync();   // the B01 trainee
+        var enrollmentId = learner.EnrollmentId;
+        var courseId = learner.Setup.CourseId;
+
+        // The training manager (head office) reads any enrolment and its quiz-attempt summary.
+        using var tm = await factory.ClientForAsync(TestUsers.TrainingManager);
+        await (await tm.GetAsync($"/api/v1/enrollments/{enrollmentId}")).ShouldBeAsync(HttpStatusCode.OK);
+        await (await tm.GetAsync($"/api/v1/enrollments/{enrollmentId}/eligibility")).ShouldBeAsync(HttpStatusCode.OK);
+        await (await tm.GetAsync($"/api/v1/enrollments/{enrollmentId}/quiz-attempts")).ShouldBeAsync(HttpStatusCode.OK);
+
+        // The B01 branch manager reads their branch's enrolment; the B02 manager is scoped out (404).
+        using var b01Manager = await factory.ClientForAsync(TestUsers.BranchManager);
+        await (await b01Manager.GetAsync($"/api/v1/enrollments/{enrollmentId}")).ShouldBeAsync(HttpStatusCode.OK);
+        using var b02Manager = await factory.ClientForAsync(TestUsers.BranchManagerB02);
+        Assert.Equal(HttpStatusCode.NotFound, (await b02Manager.GetAsync($"/api/v1/enrollments/{enrollmentId}")).StatusCode);
+
+        // The R&D manager reads course detail and modules (to check the SOP-bound course), nothing to author.
+        using var rdm = await factory.ClientForAsync(TestUsers.RdManager);
+        await (await rdm.GetAsync($"/api/v1/courses/{courseId}")).ShouldBeAsync(HttpStatusCode.OK);
+        await (await rdm.GetAsync($"/api/v1/courses/{courseId}/modules")).ShouldBeAsync(HttpStatusCode.OK);
     }
 
     [Fact]

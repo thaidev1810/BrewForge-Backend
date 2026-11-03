@@ -37,7 +37,7 @@ public sealed class QuestionDrawApiTests(BrewForgeApiFactory factory)
     private async Task<EligibleLearner> NewLearnerOnABankAsync(int drawPerModule)
     {
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
         var courseId = await NewCourseWithBankAsync();
         await (await trainer.PutAsJsonAsync($"{Courses}/{courseId}/quiz", new { drawPerModule })).ShouldBeAsync(HttpStatusCode.OK);
         await (await trainer.PostAsync($"{Courses}/{courseId}/submit", null)).ShouldBeAsync(HttpStatusCode.OK);

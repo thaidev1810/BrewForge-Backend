@@ -113,7 +113,7 @@ public sealed class AuditApiTests(BrewForgeApiFactory factory)
             .Select(c => (c.GetProperty("checkType").GetString()!, c.GetProperty("passed").GetBoolean())).Order());
         // The course built from it, by whom, approved by whom.
         var course = Assert.Single(trace.GetProperty("courses").EnumerateArray());
-        Assert.Equal((drink.CourseId, "PUBLISHED", TestUsers.Trainer, TestUsers.TrainingManager), (course.Id(), course.GetProperty("state").GetString(),
+        Assert.Equal((drink.CourseId, "PUBLISHED", TestUsers.Trainer, TestUsers.RdManager), (course.Id(), course.GetProperty("state").GetString(),
             course.GetProperty("createdBy").GetProperty("username").GetString(), course.GetProperty("approvedBy").GetProperty("username").GetString()));
         // The staff certified against it, and where it is sold.
         Assert.Equal([(TestUsers.Trainee, "B01", "VALID"), ("trainee2", "B01", "VALID")], trace.GetProperty("certifiedStaff").EnumerateArray()

@@ -172,7 +172,7 @@ public sealed class LessonMediaApiTests(BrewForgeApiFactory factory)
         var picture = await (await UploadAsync(gate, Png())).ShouldBeAsync(HttpStatusCode.Created);
         await factory.CompleteAuthoringAsync(course.Id());
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        using var manager = await factory.ClientForAsync(TestUsers.TrainingManager);
+        using var manager = await factory.ClientForAsync(TestUsers.RdManager);
         await (await trainer.PostAsync($"{Courses}/{course.Id()}/submit", null)).ShouldBeAsync(HttpStatusCode.OK);
         await (await manager.PostAsync($"{Courses}/{course.Id()}/approve", null)).ShouldBeAsync(HttpStatusCode.OK);
 

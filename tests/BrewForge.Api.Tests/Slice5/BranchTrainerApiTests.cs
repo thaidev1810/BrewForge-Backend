@@ -67,16 +67,16 @@ public sealed class BranchTrainerApiTests(BrewForgeApiFactory factory)
 
         // Offered for a class at B01: the trainer of B02 is not eligible, and says why.
         var b01 = await factory.BranchIdAsync("B01");
-        var options = (await (await chainTrainer.GetAsync($"/api/v1/courses/{atB01.CourseId}/eligible-trainers?branchId={b01}"))
-            .ShouldBeAsync(HttpStatusCode.OK)).EnumerateArray().ToDictionary(t => t.Id());
+        var options = (await (await chainTrainer.GetAsync($"/api/v1/courses/{atB01.CourseId}/eligible-trainers?branchId={b01}&size=100"))
+            .ShouldBeAsync(HttpStatusCode.OK)).GetProperty("items").EnumerateArray().ToDictionary(t => t.Id());
         Assert.True(options[ofB01].GetProperty("eligible").GetBoolean());
         Assert.True(options[ofChain].GetProperty("eligible").GetBoolean());
         Assert.False(options[ofB02].GetProperty("eligible").GetBoolean());
         Assert.Equal("belongs to another branch", options[ofB02].GetProperty("reason").GetString());
 
         // Without a branch, certification alone decides.
-        var anywhere = (await (await chainTrainer.GetAsync($"/api/v1/courses/{atB01.CourseId}/eligible-trainers"))
-            .ShouldBeAsync(HttpStatusCode.OK)).EnumerateArray().Single(t => t.Id() == ofB02);
+        var anywhere = (await (await chainTrainer.GetAsync($"/api/v1/courses/{atB01.CourseId}/eligible-trainers?size=100"))
+            .ShouldBeAsync(HttpStatusCode.OK)).GetProperty("items").EnumerateArray().Single(t => t.Id() == ofB02);
         Assert.True(anywhere.GetProperty("eligible").GetBoolean());
 
         // Scheduling follows the same rule: the trainer of B02 could not see the class to run it.
