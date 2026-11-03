@@ -15,6 +15,23 @@ Lỗi nghiệp vụ trả về `409` với envelope chuẩn, trường `rule` ch
 
 ---
 
+## 2026-11-03 — Thông báo trong luồng mở bán món mới
+
+Không đổi endpoint nào. Hộp thông báo (`GET /me/notifications`) có thêm 6 loại; chúng cũng được gửi qua email và
+web push như các thông báo khác. Frontend có thể dựa vào `subject` để hiện biểu tượng hoặc dẫn link tới màn hình
+phù hợp.
+
+| `subject` | Ai nhận | Khi nào | Nên dẫn tới |
+|---|---|---|---|
+| `Training needed for a drink` | TRAINING_MANAGER, BRANCH_MANAGER của chi nhánh | Món được lên kế hoạch ở chi nhánh chưa đủ người có chứng chỉ (pilot bắt đầu, hoặc quyết định ROLLOUT) | Màn giao khóa / mở lớp |
+| `Branch ready to open a drink` | RD_MANAGER | Chi nhánh vừa đủ số người có chứng chỉ (`READY`) | Màn readiness của pilot, nút mở bán |
+| `Drink on sale` | BRANCH_MANAGER của chi nhánh | Món được mở bán ở chi nhánh | Màn nhập số ly bán |
+| `Drink withdrawn` | BRANCH_MANAGER của chi nhánh | Món ngừng bán (thủ công, hoặc quyết định DISCONTINUE) | Danh sách món đang bán |
+| `Pilot ended` | RD_MANAGER | Pilot tự kết thúc khi qua ngày cuối | Màn đánh giá pilot, nút ra quyết định |
+| `Sales missing` | BRANCH_MANAGER của chi nhánh pilot | Pilot đang chạy có ngày (tới hôm qua) chưa nhập số ly; tối đa một lần mỗi ngày cho mỗi chi nhánh, liệt kê đủ các ngày còn thiếu | Màn nhập số ly bán / import POS |
+
+---
+
 ## 2026-11-03 — PR `feat/backend-foundation` → `main`
 
 Gồm `feat/backend-foundation` và `feat/retraining-scope-and-cycle`.

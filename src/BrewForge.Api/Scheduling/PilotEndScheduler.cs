@@ -51,6 +51,8 @@ public sealed class PilotEndScheduler(IServiceScopeFactory scopes, IOptions<Sche
     public async Task RunOnceAsync(CancellationToken cancellationToken)
     {
         await using var scope = scopes.CreateAsyncScope();
-        await scope.ServiceProvider.GetRequiredService<PilotService>().EndDueAsync(cancellationToken);
+        var pilots = scope.ServiceProvider.GetRequiredService<PilotService>();
+        await pilots.EndDueAsync(cancellationToken);
+        await pilots.RemindMissingSalesAsync(cancellationToken);
     }
 }
