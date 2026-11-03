@@ -331,6 +331,12 @@ certified on a version before teaching it (BR-34), which is also why the
 "TRAINEE (own)" endpoints of the contract admit a TRAINER acting on their own
 enrolment.
 
+**Who issued a certificate.** Nobody does by hand (BR-21), so a certificate
+reads `issuedBy: "SYSTEM"`. Who decided it is the trainer who passed the
+practical: `assessedById` and `assessedByName`, with the `enrollmentId` it was
+earned through. They are read from the practical evaluations, not stored on
+the certificate, so the schema is unchanged.
+
 **Enrolment close and reset** (`POST /enrollments/{id}/close`, `/reset`) are
 not in the contract table. The state model gives both to the Training Manager
 and names no endpoint, so these two were added.
