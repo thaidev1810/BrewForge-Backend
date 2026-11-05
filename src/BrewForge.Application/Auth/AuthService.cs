@@ -122,7 +122,15 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
 
         db.Audit(AuditEntities.RefreshToken, () => claims.TokenId, AuditActions.Revoke, new { reason = "LOGOUT" });
         db.Audit(AuditEntities.User, () => userId, AuditActions.Logout);
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (IsRefreshRotationRace(exception))
+        {
+            // A concurrent logout or refresh revoked this token first: it is revoked either way, which is
+            // all a logout asks for, so this is the same quiet success as logging out twice.
+        }
     }
 
     public async Task<MeResponse> MeAsync(CancellationToken cancellationToken)

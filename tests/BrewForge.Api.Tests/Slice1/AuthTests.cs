@@ -197,6 +197,23 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Two_logouts_of_the_same_token_at_once_both_succeed_and_neither_is_a_500()
+    {
+        var session = await factory.LoginAsync(TestUsers.Auditor);
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", session.AccessToken);
+
+        // A double-click on "log out": both race to revoke the same refresh token.
+        var responses = await Task.WhenAll(
+            client.PostAsJsonAsync(Logout, new { refreshToken = session.RefreshToken }),
+            client.PostAsJsonAsync(Logout, new { refreshToken = session.RefreshToken }));
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.NoContent, response.StatusCode));
+        await (await client.PostAsJsonAsync(Refresh, new { refreshToken = session.RefreshToken }))
+            .ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    [Fact]
     public async Task Logout_with_another_users_refresh_token_is_403()
     {
         var mine = await factory.LoginAsync(TestUsers.Trainee);
