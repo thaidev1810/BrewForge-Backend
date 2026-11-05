@@ -132,6 +132,16 @@ public sealed class QualityAuditService(IBrewForgeDbContext db, ICurrentUser cur
                     new { action.BranchAuditId, action.RetrainingRequired, action.EmployeeIds });
                 await NotifyAsync(audit, action, branch.BranchCode, now, cancellationToken);
                 await db.SaveChangesAsync(cancellationToken);
+
+                // G-19: each named employee's duty to retrain, open until a cycle linked to it is passed.
+                if (action.RetrainingRequired && action.EmployeeIds.Length > 0)
+                {
+                    foreach (var employeeId in action.EmployeeIds)
+                    {
+                        db.RetrainingObligations.Add(new RetrainingObligation(action.Id, employeeId, legacy: false, now));
+                    }
+                    await db.SaveChangesAsync(cancellationToken);
+                }
             }
 
             return (await ToDtosAsync([audit], cancellationToken, action?.Id))[0];

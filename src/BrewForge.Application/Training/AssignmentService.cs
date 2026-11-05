@@ -128,8 +128,12 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
     }
 
     /// <summary>Enrols the users on the course, skipping those who already hold an open enrolment on it.</summary>
+    /// <param name="retakePassed">
+    /// When true (retraining), a passed enrolment does not count as the user's current one: it is history, and
+    /// a new cycle is started on the course. An enrolment still in progress is reused either way.
+    /// </param>
     internal async Task<IReadOnlyList<AssignmentOutcome>> AssignToAsync(Course course, IReadOnlyList<AppUser> users,
-        DateOnly? deadline, string? reason, CancellationToken cancellationToken)
+        DateOnly? deadline, string? reason, CancellationToken cancellationToken, bool retakePassed = false)
     {
         var now = clock.GetUtcNow();
         var today = DateOnly.FromDateTime(now.UtcDateTime);
@@ -141,9 +145,12 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
         var rules = await evaluator.RulesAsync(course.CourseType, today, cancellationToken);
         var ids = users.Select(u => u.Id).ToList();
         var already = (await db.Enrollments.IgnoreQueryFilters()
-                .Where(e => e.CourseId == course.Id && e.State != EnrollmentState.Closed && ids.Contains(e.UserId))
-                .Select(e => new { e.UserId, e.Id }).ToListAsync(cancellationToken))
-            .ToDictionary(e => e.UserId, e => e.Id);
+                .Where(e => e.CourseId == course.Id && e.State != EnrollmentState.Closed && ids.Contains(e.UserId)
+                            && (!retakePassed || e.State != EnrollmentState.Passed))
+                .Select(e => new { e.UserId, e.Id, e.State }).ToListAsync(cancellationToken))
+            // A user can hold a passed cycle and a newer one in progress (retraining): the one in progress is current.
+            .GroupBy(e => e.UserId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(e => e.State == EnrollmentState.Passed ? 1 : 0).ThenByDescending(e => e.Id).First().Id);
 
         var created = new Dictionary<long, Enrollment>();
         foreach (var user in users.Where(u => !already.ContainsKey(u.Id)))

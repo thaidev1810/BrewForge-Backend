@@ -16,7 +16,7 @@ namespace BrewForge.Api.Tests;
 public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
 {
     [Fact]
-    public async Task Migrations_create_the_54_tables_104_foreign_keys_and_5_triggers()
+    public async Task Migrations_create_the_55_tables_110_foreign_keys_and_5_triggers()
     {
         var (tables, foreignKeys, triggers) = await factory.WithDbAsync(async db => (
             await ScalarAsync(db, """SELECT count(*)::int AS "Value" FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"""),
@@ -31,9 +31,10 @@ public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
         // pictures of a lesson (009); feedback on a recipe (011); progress per lesson (012: 1 table, 3
         // foreign keys). 007 and 010 only add columns. The POS import idempotency ledger, keyed by user
         // and key, with a foreign key to the user (016: 1 table, 1 foreign key). Stock receipts and counts
-        // for ingredient loss control, each with three foreign keys (019: 2 tables, 6 foreign keys).
-        Assert.Equal(54, tables);
-        Assert.Equal(104, foreignKeys);
+        // for ingredient loss control, each with three foreign keys (019: 2 tables, 6 foreign keys). Retraining
+        // obligations of corrective actions, with six foreign keys (020: 1 table, 6 foreign keys).
+        Assert.Equal(55, tables);
+        Assert.Equal(110, foreignKeys);
         Assert.Equal(5, triggers);
     }
 

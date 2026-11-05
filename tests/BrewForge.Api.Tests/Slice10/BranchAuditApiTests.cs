@@ -3,7 +3,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using BrewForge.Api.Tests.Infrastructure;
 using BrewForge.Domain.Recipes;
+using BrewForge.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BrewForge.Api.Tests.Slice10;
 
@@ -410,28 +412,179 @@ public sealed class BranchAuditApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
-    public async Task G_19_a_named_employee_who_left_the_branch_does_not_hold_the_action_open()
+    public async Task G_19_I_a_named_employee_who_left_holds_the_action_until_exempted_with_a_reason()
     {
         var branch = await factory.BranchIdAsync("B01");
         using var admin = await factory.ClientForAsync(TestUsers.Admin);
         using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
         var trainee = await NewB01TraineeAsync(admin, branch);
         var sop = await factory.NewPublishedCourseAsync();
+        var actionId = await NewRetrainingActionAsync(auditor, branch, sop, trainee);
 
+        // The only named employee leaves. Leaving is not retraining: the action stays open, and says who holds it.
+        await (await admin.PostAsync($"/api/v1/users/{trainee}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+        var refused = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_INCOMPLETE");
+        Assert.Contains(Issues(refused), issue => issue == $"employee {trainee}: NOT_ASSIGNED");
+
+        // An exemption needs a reason; with one, it is recorded and the duty no longer holds the close.
+        Assert.Contains("reason", (await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/obligations/{trainee}/exempt", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.BadRequest)).DetailFields());
+        var exempted = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/obligations/{trainee}/exempt",
+                new { reason = "Left the chain before retraining" }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        var duty = Assert.Single(exempted.GetProperty("obligations").EnumerateArray());
+        Assert.Equal(("EXEMPTED", "Left the chain before retraining", true),
+            (duty.GetProperty("status").GetString(), duty.GetProperty("exemptReason").GetString(), duty.GetProperty("completed").GetBoolean()));
+        Assert.True(await factory.WithDbAsync(db => db.AuditLogs.AnyAsync(a =>
+            a.EntityType == "CorrectiveAction" && a.EntityId == actionId && a.Action == "EXEMPT")));
+
+        await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { })).ShouldBeAsync(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task G_19_A_to_D_someone_who_passed_before_gets_a_new_cycle_and_only_that_cycle_closes_the_action()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+        var trainee = await NewB01TraineeAsync(admin, branch);
+        var sop = await factory.NewPublishedCourseAsync();
+        var (courseId, versionId) = (sop.Id(), sop.GetProperty("recipeVersionId").GetInt64());
+
+        // Trained, passed and certified on this SOP a week ago.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
+            $"INSERT INTO enrollment (course_id, user_id, state, enrolled_at, completed_at) VALUES ({courseId}, {trainee}, 'PASSED', now() - interval '10 days', now() - interval '7 days')"));
+        var earlier = await factory.WithDbAsync(db => db.Enrollments.IgnoreQueryFilters()
+            .Where(e => e.CourseId == courseId && e.UserId == trainee).Select(e => e.Id).SingleAsync());
+        await factory.CertifyAsync(trainee, courseId, versionId);
+        var actionId = await NewRetrainingActionAsync(auditor, branch, sop, trainee);
+
+        // A and C: the old pass and its valid certificate do not meet a duty raised after them.
+        var refused = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_INCOMPLETE");
+        Assert.Contains(Issues(refused), issue => issue == $"employee {trainee}: NOT_ASSIGNED");
+
+        // Assigning starts a new cycle on the same course; the passed one stays as history.
+        var result = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/assign-retraining", new { courseId }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        var item = Assert.Single(result.GetProperty("results").EnumerateArray());
+        Assert.Equal("ASSIGNED", item.GetProperty("outcome").GetString());
+        Assert.True(item.GetProperty("obligationId").GetInt64() > 0);
+        var cycle = item.GetProperty("enrollmentId").GetInt64();
+        Assert.NotEqual(earlier, cycle);
+        // G: the new cycle starts from nothing - none of the old cycle's progress carries over.
+        var fresh = await factory.WithDbAsync(db => db.Enrollments.AsNoTracking().Include(e => e.QuizAttempts)
+            .SingleAsync(e => e.Id == cycle));
+        Assert.Equal((Domain.Training.EnrollmentState.Assigned, 0, 0), (fresh.State, fresh.ProgressPercent, fresh.QuizAttempts.Count));
+        Assert.Equal(Domain.Training.EnrollmentState.Passed, await factory.WithDbAsync(db =>
+            db.Enrollments.IgnoreQueryFilters().Where(e => e.Id == earlier).Select(e => e.State).SingleAsync()));
+
+        // B: assigned but not passed yet.
+        refused = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_INCOMPLETE");
+        Assert.Contains(Issues(refused), issue => issue == $"employee {trainee}: NOT_PASSED");
+
+        // D: the new cycle is passed - the action closes, and the duty says by which cycle.
+        await PassAsync(cycle);
+        var closed = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { note = "Retrained" }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        var duty = Assert.Single(closed.GetProperty("obligations").EnumerateArray());
+        Assert.Equal(("ASSIGNED", cycle, true, "PASSED"), (duty.GetProperty("status").GetString(),
+            duty.GetProperty("enrollmentId").GetInt64(), duty.GetProperty("completed").GetBoolean(),
+            duty.GetProperty("enrollmentState").GetString()));
+    }
+
+    [Fact]
+    public async Task G_19_E_one_of_two_employees_not_retrained_keeps_the_action_open()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+        var (first, second) = (await NewB01TraineeAsync(admin, branch), await NewB01TraineeAsync(admin, branch));
+        var sop = await factory.NewPublishedCourseAsync();
+        var actionId = await NewRetrainingActionAsync(auditor, branch, sop, first, second);
+
+        var result = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/assign-retraining", new { courseId = sop.Id() }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        var cycles = result.GetProperty("results").EnumerateArray()
+            .ToDictionary(r => r.GetProperty("employeeId").GetInt64(), r => r.GetProperty("enrollmentId").GetInt64());
+        await PassAsync(cycles[first]);
+
+        var refused = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_INCOMPLETE");
+        Assert.Equal([$"employee {second}: NOT_PASSED"], Issues(refused));
+    }
+
+    [Fact]
+    public async Task G_19_H_assigning_again_or_twice_at_once_makes_no_second_duty_or_cycle()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+        var (trainee, other) = (await NewB01TraineeAsync(admin, branch), await NewB01TraineeAsync(admin, branch));
+        var sop = await factory.NewPublishedCourseAsync();
+        var courseId = sop.Id();
+        var actionId = await NewRetrainingActionAsync(auditor, branch, sop, trainee, other);
+        var url = $"{Actions}/{actionId}/assign-retraining";
+
+        // Twice at the same moment, then once more: one duty and one cycle per employee, the same each time.
+        var responses = await Task.WhenAll(auditor.PostAsJsonAsync(url, new { courseId }), auditor.PostAsJsonAsync(url, new { courseId }));
+        Assert.All(responses, r => Assert.Equal(HttpStatusCode.OK, r.StatusCode));
+        var again = await (await auditor.PostAsJsonAsync(url, new { courseId })).ShouldBeAsync(HttpStatusCode.OK);
+        Assert.All(again.GetProperty("results").EnumerateArray(),
+            r => Assert.Equal("ALREADY_ENROLLED", r.GetProperty("outcome").GetString()));
+
+        var (duties, active) = await factory.WithDbAsync(async db => (
+            await db.RetrainingObligations.CountAsync(o => o.CorrectiveActionId == actionId),
+            await db.Enrollments.IgnoreQueryFilters().CountAsync(e => e.CourseId == courseId
+                && (e.UserId == trainee || e.UserId == other) && e.State != Domain.Training.EnrollmentState.Closed)));
+        Assert.Equal((2, 2), (duties, active));
+    }
+
+    [Fact]
+    public async Task G_19_an_action_from_before_duties_were_recorded_waits_for_reconciliation()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+        var trainee = await NewB01TraineeAsync(admin, branch);
+        var sop = await factory.NewPublishedCourseAsync();
+        var actionId = await NewRetrainingActionAsync(auditor, branch, sop, trainee);
+
+        // As if raised before migration 020: no duty recorded. Re-applying the schema backfills one, marked legacy.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
+            $"DELETE FROM retraining_obligation WHERE corrective_action_id = {actionId}"));
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<DatabaseInitializer>().ApplySchemaAsync();
+        }
+
+        var action = await (await auditor.GetAsync($"{Actions}/{actionId}")).ShouldBeAsync(HttpStatusCode.OK);
+        var duty = Assert.Single(action.GetProperty("obligations").EnumerateArray());
+        Assert.Equal(("PENDING", true, false), (duty.GetProperty("status").GetString(), duty.GetProperty("legacy").GetBoolean(),
+            duty.GetProperty("completed").GetBoolean()));
+        var refused = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_INCOMPLETE");
+        Assert.Contains(Issues(refused), issue => issue == $"employee {trainee}: LEGACY_PENDING");
+    }
+
+    private async Task<long> NewRetrainingActionAsync(HttpClient auditor, long branch, JsonElement sop, params long[] employees)
+    {
         var audit = await (await auditor.PostAsJsonAsync(Audits, new
         {
             branchId = branch, recipeVersionId = sop.GetProperty("recipeVersionId").GetInt64(),
-            retrainingRequired = true, employeeIds = new[] { trainee }, items = new[] { Item("Sugar quantity", false) },
+            retrainingRequired = true, employeeIds = employees, items = new[] { Item("Sugar quantity", false) },
         })).ShouldBeAsync(HttpStatusCode.Created);
-        var actionId = audit.GetProperty("correctiveActionId").GetInt64();
-
-        // The only named employee is deactivated: assign-retraining would skip them, so they do not
-        // count towards the close gate, and the action can be closed without anyone passing.
-        await (await admin.PostAsync($"/api/v1/users/{trainee}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
-        var closed = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { }))
-            .ShouldBeAsync(HttpStatusCode.OK);
-        Assert.Equal("CLOSED", closed.GetProperty("status").GetString());
+        return audit.GetProperty("correctiveActionId").GetInt64();
     }
+
+    /// <summary>The learner passes the cycle now, as the assessment would record it.</summary>
+    private Task PassAsync(long enrollmentId) => factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
+        $"UPDATE enrollment SET state = 'PASSED', completed_at = now() WHERE id = {enrollmentId}"));
+
+    private static List<string> Issues(JsonElement envelope) =>
+        [.. envelope.GetProperty("details").EnumerateArray().Select(d => d.GetProperty("issue").GetString()!)];
 
     private static async Task<long> NewB01TraineeAsync(HttpClient admin, long branch)
     {

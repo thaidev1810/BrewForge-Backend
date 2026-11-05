@@ -68,6 +68,7 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
     public DbSet<BranchAudit> BranchAudits => Set<BranchAudit>();
     public DbSet<CorrectiveAction> CorrectiveActions => Set<CorrectiveAction>();
+    public DbSet<RetrainingObligation> RetrainingObligations => Set<RetrainingObligation>();
 
     /// <summary>
     /// Read by the query filters below. A member of the context, not a
@@ -152,6 +153,13 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         {
             action.Property(a => a.EmployeeIds).HasColumnType("bigint[]");
             action.HasQueryFilter(a => BranchScope == null || a.BranchId == BranchScope);
+        });
+
+        modelBuilder.Entity<RetrainingObligation>(obligation =>
+        {
+            // One duty per employee per action: a repeated or concurrent assignment cannot make a second.
+            obligation.HasIndex(o => new { o.CorrectiveActionId, o.EmployeeId }).IsUnique();
+            obligation.Property(o => o.ExemptReason).HasMaxLength(RetrainingObligation.MaxReasonLength);
         });
 
         ConfigureRecipes(modelBuilder);
@@ -469,6 +477,16 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         var result = await work();
         await transaction.CommitAsync(cancellationToken);
         return result;
+    }
+
+    public async Task LockCorrectiveActionAsync(long correctiveActionId, CancellationToken cancellationToken = default)
+    {
+        if (Database.CurrentTransaction is null)
+        {
+            throw new InvalidOperationException("A row lock lasts only as long as a transaction: call it inside InTransactionAsync.");
+        }
+        await Database.ExecuteSqlAsync($"SELECT 1 FROM corrective_action WHERE id = {correctiveActionId} FOR UPDATE",
+            cancellationToken);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess) =>

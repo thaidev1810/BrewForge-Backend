@@ -15,6 +15,48 @@ Lỗi nghiệp vụ trả về `409` với envelope chuẩn, trường `rule` ch
 
 ---
 
+## 2026-11-05 — G-19: nghĩa vụ học lại của hành động khắc phục
+
+Sửa bug: hành động khắc phục yêu cầu học lại vẫn **đóng được nhờ lần đậu cũ**. Giờ mỗi nhân viên được nêu tên có một
+**nghĩa vụ học lại** riêng, gắn với đúng khóa/SOP và đúng **lượt học (enrollment)** được giao; chỉ lượt đó đậu **sau khi
+được giao** mới tính.
+
+### ⚠️ Breaking (hành vi)
+
+- **Nhân viên đã nghỉ / chuyển chi nhánh không còn bị bỏ qua im lặng.** Họ vẫn giữ nghĩa vụ và **chặn đóng** cho tới khi
+  Quality Auditor **miễn trừ có lý do** (endpoint mới bên dưới). Trước đây hành động đóng được luôn.
+- **Người đã đậu khóa từ trước** khi được giao học lại sẽ nhận **lượt học mới** trên cùng khóa (lượt cũ, quiz, thực hành,
+  chứng chỉ cũ vẫn giữ làm lịch sử). Trước đây họ bị báo `ALREADY_ENROLLED` và không bao giờ học lại được.
+
+### Mới
+
+| Endpoint / trường | Ai dùng | Mô tả |
+|---|---|---|
+| `POST /corrective-actions/{id}/obligations/{employeeId}/exempt` `{ reason }` | QUALITY_AUDITOR | Miễn nghĩa vụ học lại cho một nhân viên (nghỉ, chuyển…). `reason` bắt buộc (≤500), ghi audit, không hoàn tác. Trả về hành động khắc phục. |
+| `obligations[]` trong `GET /corrective-actions`, `GET /corrective-actions/{id}` và kết quả `start`/`close`/`exempt` | mọi role đọc được action | Mỗi phần tử: `{ id, employeeId, status: PENDING\|ASSIGNED\|EXEMPTED, courseId, recipeVersionId, enrollmentId, enrollmentState, assignedAt, completed, legacy, exemptReason, exemptedBy, exemptedAt }`. `completed = true` khi lượt học được giao đã đậu sau thời điểm giao, hoặc đã miễn. |
+| `results[].obligationId` trong `POST /corrective-actions/{id}/assign-retraining` | QUALITY_AUDITOR | Nghĩa vụ ứng với từng nhân viên. Các field cũ (`enrollmentIds`, `alreadyEnrolled`, `results[].outcome`) giữ nguyên. |
+
+### Thay đổi hành vi
+
+- **`POST /corrective-actions/{id}/close`** khi `retrainingRequired = true`: mỗi nhân viên phải **đậu đúng lượt học được
+  giao, sau thời điểm giao**, hoặc đã được miễn. Thiếu → `409` `RETRAINING_INCOMPLETE`, `details[]` mỗi người một dòng
+  `"employee {id}: {lý do}"` với lý do `NOT_ASSIGNED` (chưa giao), `NOT_PASSED` (đã giao, chưa đậu),
+  `LEGACY_PENDING` (dữ liệu cũ chờ đối soát). Action không yêu cầu học lại: không đổi.
+- **`assign-retraining`**: gửi lại (hoặc gửi đồng thời) không tạo nghĩa vụ hay lượt học trùng — lượt đã gắn đang học
+  được trả lại với `outcome: ALREADY_ENROLLED`. Nhân viên nghỉ/chuyển/đã miễn trả `SKIPPED` với `reasonCode`
+  `INACTIVE` / `WRONG_BRANCH` / `EXEMPTED`, nghĩa vụ **vẫn mở** nếu chưa miễn.
+- **Dữ liệu cũ**: hành động khắc phục **đang mở** tạo trước bản này được thêm nghĩa vụ `PENDING` với `legacy: true` —
+  cần giao học lại hoặc miễn trừ rồi mới đóng. Hành động đã đóng giữ nguyên, không có gì bị tự đánh dấu hoàn thành.
+
+### Chạy lại case G-19 đang FAIL
+
+1. Nhân viên có enrollment PASSED trên khóa của SOP → tạo audit trượt, `retrainingRequired: true`, nêu tên nhân viên đó.
+2. `POST …/close` → kỳ vọng `409 RETRAINING_INCOMPLETE`, detail `NOT_ASSIGNED`.
+3. `POST …/assign-retraining` với khóa của SOP → `outcome: ASSIGNED`, `enrollmentId` **khác** enrollment cũ.
+4. `POST …/close` → `409`, detail `NOT_PASSED`. Cho nhân viên học và đậu lượt mới → `close` → `200`.
+
+---
+
 ## 2026-11-05 — Sửa báo cáo hao hụt nguyên liệu và đăng xuất trùng
 
 ### Mới
