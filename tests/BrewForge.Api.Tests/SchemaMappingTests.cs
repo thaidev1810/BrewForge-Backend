@@ -52,6 +52,33 @@ public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Migration_015_clears_duplicate_revocations_of_an_older_database_before_building_its_index()
+    {
+        // A database from before 015: no unique index, and the race it closes has left two revocations of a token.
+        var tokenId = Random.Shared.NextInt64(1L << 40, long.MaxValue);
+        await factory.WithDbAsync(async db =>
+        {
+            await db.Database.ExecuteSqlRawAsync("DROP INDEX IF EXISTS ux_refresh_token_single_revoke");
+            await db.Database.ExecuteSqlAsync(
+                $"INSERT INTO audit_log (entity_type, entity_id, action) VALUES ('RefreshToken', {tokenId}, 'REVOKE'), ('RefreshToken', {tokenId}, 'REVOKE')");
+        });
+
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<DatabaseInitializer>().ApplySchemaAsync();
+        }
+
+        var (revocations, indexBuilt, trigger) = await factory.WithDbAsync(async db => (
+            await ScalarAsync(db, $"SELECT count(*)::int AS \"Value\" FROM audit_log WHERE entity_type = 'RefreshToken' AND action = 'REVOKE' AND entity_id = {tokenId}"),
+            await ScalarAsync(db, "SELECT count(*)::int AS \"Value\" FROM pg_indexes WHERE indexname = 'ux_refresh_token_single_revoke'"),
+            await db.Database.SqlQueryRaw<string>("SELECT tgenabled::text AS \"Value\" FROM pg_trigger WHERE tgname = 'trg_audit_log_no_update'").SingleAsync()));
+
+        Assert.Equal(1, revocations);   // the earliest kept, the duplicate gone
+        Assert.Equal(1, indexBuilt);
+        Assert.Equal("O", trigger);     // the append-only trigger is enabled again
+    }
+
+    [Fact]
     public async Task Every_entity_maps_column_for_column_onto_its_table()
     {
         var problems = await factory.WithDbAsync(async db =>
