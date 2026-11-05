@@ -89,6 +89,7 @@ public sealed class JwtTokenService(IOptions<JwtOptions> options, TimeProvider c
         {
             [BrewForgeClaims.Subject] = subject,
             [BrewForgeClaims.TokenId] = refreshTokenId.ToString(CultureInfo.InvariantCulture),
+            [BrewForgeClaims.SecurityVersion] = user.SecurityVersion,
         };
 
         return new IssuedTokens(
@@ -119,7 +120,10 @@ public sealed class JwtTokenService(IOptions<JwtOptions> options, TimeProvider c
                && long.TryParse(sub?.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var userId)
                && result.Claims.TryGetValue(BrewForgeClaims.TokenId, out var jti)
                && long.TryParse(jti?.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var tokenId)
-            ? new RefreshTokenClaims(userId, tokenId)
+               // A token minted before the security version existed carries none: it is not trusted.
+               && result.Claims.TryGetValue(BrewForgeClaims.SecurityVersion, out var sv)
+               && int.TryParse(sv?.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var securityVersion)
+            ? new RefreshTokenClaims(userId, tokenId, securityVersion)
             : null;
     }
 
