@@ -2,6 +2,7 @@ using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Inventory;
+using BrewForge.Domain.Launch;
 using BrewForge.Domain.MasterData;
 using BrewForge.Domain.Recipes;
 using Microsoft.EntityFrameworkCore;
@@ -17,10 +18,13 @@ public sealed record StockCountRequest(long? IngredientId, decimal? Quantity, st
 public sealed record StockMovementDto(long Id, long BranchId, long IngredientId, string IngredientCode,
     decimal Quantity, string Unit, DateOnly Date);
 
-/// <summary>One ingredient's stock loss over the period: what was used against what the recipes expected.</summary>
+/// <summary>
+/// One ingredient's stock loss between its two counts: what was used against what the recipes expected.
+/// <c>OpeningCountedOn</c>/<c>ClosingCountedOn</c> are the days of those counts, the window actually measured.
+/// </summary>
 public sealed record StockLossLineDto(long IngredientId, string IngredientCode, string Unit, decimal OpeningStock,
     decimal Received, decimal ClosingStock, decimal ActualUsed, decimal TheoreticalUsed, decimal Loss,
-    decimal? VariancePct, bool Flagged);
+    decimal? VariancePct, bool Flagged, DateOnly OpeningCountedOn, DateOnly ClosingCountedOn);
 
 public sealed record StockLossReportDto(long BranchId, string? BranchCode, DateOnly From, DateOnly To,
     decimal VarianceThresholdPct, IReadOnlyList<StockLossLineDto> Lines);
@@ -94,9 +98,11 @@ public sealed class StockService(IBrewForgeDbContext db, ICurrentUser currentUse
     }
 
     /// <summary>
-    /// The loss of each ingredient between a full count on <paramref name="from"/> and one on
-    /// <paramref name="to"/>: stock used (opening + received - closing) against what the recipes say the
-    /// sales of the period should have used. Only ingredients counted on both days are measurable.
+    /// The loss of each ingredient over the period: its opening count is the latest on or before
+    /// <paramref name="from"/>, its closing count the latest on or before <paramref name="to"/>, and the
+    /// receipts and sales are those between the two counts themselves. Stock used (opening + received -
+    /// closing) is set against what the recipes say those sales should have used. An ingredient whose two
+    /// counts are the same count has nothing to measure and is left out.
     /// </summary>
     public async Task<StockLossReportDto> LossReportAsync(long? branchId, DateOnly? from, DateOnly? to,
         CancellationToken cancellationToken)
@@ -111,58 +117,76 @@ public sealed class StockService(IBrewForgeDbContext db, ICurrentUser currentUse
 
         var opening = await CountsOnAsync(scopedBranch, from!.Value, cancellationToken);
         var closing = await CountsOnAsync(scopedBranch, to!.Value, cancellationToken);
-        var received = await db.StockReceipts.AsNoTracking()
-            .Where(r => r.BranchId == scopedBranch && r.ReceivedOn > from.Value && r.ReceivedOn <= to.Value)
-            .GroupBy(r => r.IngredientId)
-            .Select(g => new { IngredientId = g.Key, Quantity = g.Sum(r => r.Quantity) })
-            .ToDictionaryAsync(x => x.IngredientId, x => x.Quantity, cancellationToken);
-        var theoretical = await TheoreticalUseAsync(scopedBranch, from.Value, to.Value, cancellationToken);
 
-        // Only the ingredients with both an opening and a closing count can be measured.
-        var ingredientIds = opening.Keys.Intersect(closing.Keys).ToList();
-        var ingredients = await db.Ingredients.AsNoTracking().Where(i => ingredientIds.Contains(i.Id))
-            .ToDictionaryAsync(i => i.Id, cancellationToken);
+        // Measurable: counted at both ends, by two different counts. Each ingredient is measured over its own
+        // window (opening count day, closing count day]: a receipt or a sale between the opening count and
+        // `from` belongs to the period, or the opening stock would be set against the wrong movements.
+        var windows = opening.Keys.Intersect(closing.Keys)
+            .Where(id => closing[id].CountedOn > opening[id].CountedOn)
+            .ToDictionary(id => id, id => (Open: opening[id].CountedOn, Close: closing[id].CountedOn));
+        var lines = new List<StockLossLineDto>();
         var branchCode = await db.Branches.AsNoTracking().IgnoreQueryFilters()
             .Where(b => b.Id == scopedBranch).Select(b => b.BranchCode).FirstOrDefaultAsync(cancellationToken);
 
-        var lines = ingredientIds
-            .Where(id => ingredients.ContainsKey(id))
-            .Select(id =>
+        if (windows.Count > 0)
+        {
+            var earliest = windows.Values.Min(w => w.Open);
+            var latest = windows.Values.Max(w => w.Close);
+            var ingredientIds = windows.Keys.ToList();
+            var receipts = await db.StockReceipts.AsNoTracking()
+                .Where(r => r.BranchId == scopedBranch && ingredientIds.Contains(r.IngredientId)
+                            && r.ReceivedOn > earliest && r.ReceivedOn <= latest)
+                .Select(r => new { r.IngredientId, r.ReceivedOn, r.Quantity })
+                .ToListAsync(cancellationToken);
+            var theoretical = await TheoreticalUseAsync(scopedBranch, earliest, latest, cancellationToken);
+            var ingredients = await db.Ingredients.AsNoTracking().Where(i => ingredientIds.Contains(i.Id))
+                .ToDictionaryAsync(i => i.Id, cancellationToken);
+
+            foreach (var (id, window) in windows)
             {
-                var ingredient = ingredients[id];
-                var open = opening[id];
-                var close = closing[id];
-                var recv = received.GetValueOrDefault(id);
-                var expected = theoretical.GetValueOrDefault(id);
+                if (!ingredients.TryGetValue(id, out var ingredient)) continue;
+                bool InWindow(DateOnly day) => day > window.Open && day <= window.Close;
+                var open = opening[id].Quantity;
+                var close = closing[id].Quantity;
+                var recv = receipts.Where(r => r.IngredientId == id && InWindow(r.ReceivedOn)).Sum(r => r.Quantity);
+                var expected = theoretical.Where(t => t.IngredientId == id && InWindow(t.TradingDate)).Sum(t => t.Quantity);
                 var actual = open + recv - close;
                 var loss = actual - expected;
                 decimal? variancePct = expected > 0 ? Math.Round(loss / expected * 100m, 2) : null;
-                return new StockLossLineDto(id, ingredient.IngredientCode, ingredient.Unit.Code(), open, recv, close,
-                    actual, expected, loss, variancePct, StockLossPolicy.IsFlagged(variancePct));
-            })
-            .OrderByDescending(line => line.VariancePct ?? decimal.MinValue)
-            .ToList();
+                lines.Add(new StockLossLineDto(id, ingredient.IngredientCode, ingredient.Unit.Code(), open, recv, close,
+                    actual, expected, loss, variancePct, StockLossPolicy.IsFlagged(variancePct), window.Open, window.Close));
+            }
+        }
+        lines = [.. lines.OrderByDescending(line => line.VariancePct ?? decimal.MinValue)];
 
         return new StockLossReportDto(scopedBranch, branchCode, from.Value, to.Value,
             StockLossPolicy.VarianceThresholdPct, lines);
     }
 
-    /// <summary>The latest count of each ingredient on or before a day, as its on-hand quantity for that day.</summary>
-    private async Task<Dictionary<long, decimal>> CountsOnAsync(long branchId, DateOnly on, CancellationToken cancellationToken) =>
+    /// <summary>The latest count of each ingredient on or before a day: its on-hand quantity and the day it was counted.</summary>
+    private async Task<Dictionary<long, (decimal Quantity, DateOnly CountedOn)>> CountsOnAsync(long branchId, DateOnly on,
+        CancellationToken cancellationToken) =>
         (await db.StockCounts.AsNoTracking()
             .Where(c => c.BranchId == branchId && c.CountedOn <= on)
             .ToListAsync(cancellationToken))
         .GroupBy(c => c.IngredientId)
-        .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.CountedOn).ThenByDescending(c => c.Id).First().Quantity);
+        .ToDictionary(g => g.Key, g =>
+        {
+            var latest = g.OrderByDescending(c => c.CountedOn).ThenByDescending(c => c.Id).First();
+            return (latest.Quantity, latest.CountedOn);
+        });
 
-    /// <summary>What the recipes say the sales of the period should have used, per ingredient, in its own unit.</summary>
-    private async Task<Dictionary<long, decimal>> TheoreticalUseAsync(long branchId, DateOnly from, DateOnly to,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// What the recipes say the sales in (<paramref name="from"/>, <paramref name="to"/>] should have used, per
+    /// ingredient and trading day, in the ingredient's own unit; the caller narrows it to each ingredient's window.
+    /// </summary>
+    private async Task<List<(long IngredientId, DateOnly TradingDate, decimal Quantity)>> TheoreticalUseAsync(long branchId,
+        DateOnly from, DateOnly to, CancellationToken cancellationToken)
     {
         var sales = await db.SalesRecords.AsNoTracking()
             .Where(s => s.BranchId == branchId && s.RecipeVersionId != null
                         && s.TradingDate > from && s.TradingDate <= to)
-            .Select(s => new { VersionId = s.RecipeVersionId!.Value, s.CupsSold })
+            .Select(s => new { VersionId = s.RecipeVersionId!.Value, s.TradingDate, s.CupsSold })
             .ToListAsync(cancellationToken);
         if (sales.Count == 0) return [];
 
@@ -178,22 +202,23 @@ public sealed class StockService(IBrewForgeDbContext db, ICurrentUser currentUse
         var unitOf = await db.Ingredients.AsNoTracking().Where(i => ingredientIds.Contains(i.Id))
             .ToDictionaryAsync(i => i.Id, i => i.Unit.Code(), cancellationToken);
 
-        var totals = new Dictionary<long, decimal>();
+        var uses = new List<(long IngredientId, DateOnly TradingDate, decimal Quantity)>();
         foreach (var sale in sales)
         {
-            if (!useByVersion.TryGetValue(sale.VersionId, out var uses)) continue;
-            foreach (var (ingredientId, perCup) in uses)
+            if (!useByVersion.TryGetValue(sale.VersionId, out var perIngredient)) continue;
+            foreach (var (ingredientId, perCup) in perIngredient)
             {
                 if (!unitOf.TryGetValue(ingredientId, out var target)) continue;
                 var perCupInUnit = perCup.Sum(u => UnitConverter.TryConvert(u.Quantity, u.Unit, target, out var c) ? c : 0m);
-                totals[ingredientId] = totals.GetValueOrDefault(ingredientId) + perCupInUnit * sale.CupsSold;
+                uses.Add((ingredientId, sale.TradingDate, perCupInUnit * sale.CupsSold));
             }
         }
-        return totals;
+        return uses;
     }
 
     private long OwnBranchOrThrow() => currentUser.RestrictedToBranchId
         ?? throw DomainException.Forbidden(message: "Only a branch manager records the stock of their branch.");
 
-    private DateOnly Today => DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+    // The chain trades in Vietnam: "today" is the trading day there, not in UTC, as for sales.
+    private DateOnly Today => TradingCalendar.DateOf(clock.GetUtcNow());
 }

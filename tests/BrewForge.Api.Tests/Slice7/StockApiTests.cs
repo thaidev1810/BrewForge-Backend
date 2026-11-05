@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using BrewForge.Api.Tests.Infrastructure;
+using BrewForge.Domain.Launch;
 using static BrewForge.Api.Tests.Infrastructure.ImpactScenario;
 using static BrewForge.Api.Tests.Infrastructure.SalesScenario;
 
@@ -51,6 +52,54 @@ public sealed class StockApiTests(BrewForgeApiFactory factory)
         Assert.Equal(200m, line.GetProperty("loss").GetDecimal());
         Assert.Equal(10m, line.GetProperty("variancePct").GetDecimal());
         Assert.True(line.GetProperty("flagged").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Movements_between_an_earlier_opening_count_and_from_are_part_of_the_period()
+    {
+        var drink = await factory.NewTaughtDrinkAsync(certifiedStaff: 1);   // its own ingredient, 20 g per cup
+        using var manager = await factory.ClientForAsync(TestUsers.BranchManager);
+        var openingDay = Today.AddDays(-4);
+        var from = Today.AddDays(-2);
+        var to = Today.AddDays(-1);
+
+        // The last count before `from` is two days earlier, and stock moved in between: a 500 g delivery
+        // and 50 cups sold (1000 g expected). Those movements belong to the period the opening count opens.
+        await (await manager.PostAsJsonAsync(Counts, new { ingredientId = drink.IngredientId, quantity = 3000m, unit = "g", countedOn = openingDay }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        await (await manager.PostAsJsonAsync(Receipts, new { ingredientId = drink.IngredientId, quantity = 500m, unit = "g", receivedOn = openingDay.AddDays(1) }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        await (await manager.PostAsJsonAsync("/api/v1/sales",
+                new { branchId = drink.BranchId, recipeId = drink.RecipeId, tradingDate = openingDay.AddDays(1), cupsSold = 50 }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        await (await manager.PostAsJsonAsync(Counts, new { ingredientId = drink.IngredientId, quantity = 2400m, unit = "g", countedOn = to }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+
+        var report = await (await manager.GetAsync($"/api/v1/stock/loss-report?from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}"))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        var line = report.GetProperty("lines").EnumerateArray()
+            .Single(l => l.GetProperty("ingredientId").GetInt64() == drink.IngredientId);
+        Assert.Equal(openingDay.ToString("yyyy-MM-dd"), line.GetProperty("openingCountedOn").GetString());
+        Assert.Equal(to.ToString("yyyy-MM-dd"), line.GetProperty("closingCountedOn").GetString());
+        Assert.Equal(500m, line.GetProperty("received").GetDecimal());
+        Assert.Equal(1000m, line.GetProperty("theoreticalUsed").GetDecimal());
+        Assert.Equal(1100m, line.GetProperty("actualUsed").GetDecimal());   // 3000 + 500 - 2400
+        Assert.Equal(100m, line.GetProperty("loss").GetDecimal());
+        Assert.True(line.GetProperty("flagged").GetBoolean());               // 10%
+    }
+
+    [Fact]
+    public async Task A_receipt_dated_today_in_Vietnam_is_accepted()
+    {
+        var drink = await factory.NewTaughtDrinkAsync(certifiedStaff: 1);
+        using var manager = await factory.ClientForAsync(TestUsers.BranchManager);
+
+        // Between 17:00 and 24:00 UTC the Vietnamese day is already tomorrow in UTC terms; it is not "the future".
+        var todayInVietnam = TradingCalendar.DateOf(DateTimeOffset.UtcNow);
+        await (await manager.PostAsJsonAsync(Receipts,
+                new { ingredientId = drink.IngredientId, quantity = 100m, unit = "g", receivedOn = todayInVietnam }))
+            .ShouldBeAsync(HttpStatusCode.Created);
     }
 
     [Fact]

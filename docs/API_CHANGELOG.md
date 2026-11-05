@@ -15,6 +15,25 @@ Lỗi nghiệp vụ trả về `409` với envelope chuẩn, trường `rule` ch
 
 ---
 
+## 2026-11-05 — Sửa báo cáo hao hụt nguyên liệu và đăng xuất trùng
+
+### Mới
+
+- **`GET /stock/loss-report`**: mỗi dòng có thêm `openingCountedOn` và `closingCountedOn` — ngày của hai lần kiểm kho
+  thực sự được dùng để tính dòng đó. Nên hiển thị khoảng này cạnh số liệu (ví dụ "Kiểm 01/11 → 04/11").
+
+### Thay đổi hành vi
+
+- **Báo cáo hao hụt**: tồn đầu là lần kiểm gần nhất **trước hoặc đúng** `from`; hàng nhập và số ly bán giờ được cộng từ
+  **ngày của lần kiểm đó** đến lần kiểm cuối, không còn cắt ở `from`. Trước đây hàng nhập/bán nằm giữa ngày kiểm đầu và
+  `from` bị bỏ sót nên hao hụt bị sai. Nguyên liệu mà lần kiểm đầu và cuối là cùng một lần thì không có dòng.
+- **Ngày nhập kho / kiểm kho** được so với "hôm nay" theo **giờ Việt Nam**: ghi ngày hôm nay sau 0h giờ VN không còn bị
+  báo `400` "ngày trong tương lai".
+- **Đăng xuất** (`POST /auth/logout`) bấm hai lần cùng lúc, hoặc trùng lúc đang refresh: không còn lỗi `500`, cả hai đều
+  `204`.
+
+---
+
 ## 2026-11-05 — Sửa lỗi phiên đăng nhập và đóng hành động khắc phục
 
 Không đổi endpoint hay dữ liệu trả về.
