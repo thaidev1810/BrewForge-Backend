@@ -298,6 +298,25 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
         await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
     }
 
+    [Fact]
+    public async Task G_11_a_password_reset_also_ends_the_refresh_token()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var newcomer = await NewTraineeAsync(admin);
+        var session = await factory.LoginAsync(newcomer.Username, newcomer.Password);
+
+        await (await admin.PutAsJsonAsync($"/api/v1/users/{newcomer.Id}", new
+        {
+            email = $"{newcomer.Username}@brewforge.local", fullName = "Session Test", role = "TRAINEE",
+            branchId = await factory.BranchIdAsync("B01"), password = "A-New-Test-Passw0rd",
+        })).ShouldBeAsync(HttpStatusCode.OK);
+
+        // The refresh token minted before the reset cannot mint a fresh session after it.
+        using var client = factory.CreateClient();
+        await (await client.PostAsJsonAsync(Refresh, new { refreshToken = session.RefreshToken }))
+            .ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
     private async Task<(long Id, string Username, string Password)> NewTraineeAsync(HttpClient admin)
     {
         var name = $"g11{Guid.NewGuid():N}"[..14];
