@@ -195,10 +195,18 @@ public sealed class CorrectiveActionService(IBrewForgeDbContext db, ICurrentUser
             .Select(u => u.Id).ToListAsync(cancellationToken);
         if (obliged.Count == 0) return;
 
-        var (_, _, courses) = await RetrainingCoursesAsync(action, cancellationToken);
-        var courseIds = courses.Select(c => c.CourseId).ToList();
+        // Retraining is a pass earned after the action was raised: a pass from before the failed audit is the
+        // training that did not hold, so it does not count. The course may since have gone OUT_OF_DATE (a new
+        // release); a pass on it still counts, so a later release cannot hold the action open for ever.
+        var (auditedVersionId, currentVersionId, _) = await RetrainingCoursesAsync(action, cancellationToken);
+        var versionIds = new List<long> { auditedVersionId };
+        if (currentVersionId is { } current) versionIds.Add(current);
+        var courseIds = await db.Courses.AsNoTracking()
+            .Where(c => c.RecipeVersionId != null && versionIds.Contains(c.RecipeVersionId.Value))
+            .Select(c => c.Id).ToListAsync(cancellationToken);
         var passed = await db.Enrollments.IgnoreQueryFilters()
-            .Where(e => obliged.Contains(e.UserId) && courseIds.Contains(e.CourseId) && e.State == EnrollmentState.Passed)
+            .Where(e => obliged.Contains(e.UserId) && courseIds.Contains(e.CourseId) && e.State == EnrollmentState.Passed
+                        && e.CompletedAt >= action.CreatedAt)
             .Select(e => e.UserId).Distinct().ToListAsync(cancellationToken);
 
         var pending = obliged.Where(userId => !passed.Contains(userId)).ToList();

@@ -335,10 +335,78 @@ public sealed class BranchAuditApiTests(BrewForgeApiFactory factory)
             .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_INCOMPLETE");
 
         // Once the retraining is passed, the action closes.
-        await factory.WithDbAsync(db => db.Database.ExecuteSqlAsync($"UPDATE enrollment SET state = 'PASSED' WHERE id = {enrollmentId}"));
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
+            $"UPDATE enrollment SET state = 'PASSED', completed_at = now() WHERE id = {enrollmentId}"));
         var closed = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { note = "Retrained" }))
             .ShouldBeAsync(HttpStatusCode.OK);
         Assert.Equal("CLOSED", closed.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task G_19_a_pass_from_before_the_failed_audit_is_not_retraining()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var trainee = await NewB01TraineeAsync(admin, branch);
+        var sop = await factory.NewPublishedCourseAsync();
+
+        // The trainee was trained and passed on this SOP last week.
+        await factory.PassInductionAsync(trainee);
+        var assigned = await (await trainer.PostAsJsonAsync("/api/v1/assignments", new
+            {
+                courseId = sop.Id(), branchId = branch, employeeIds = new[] { trainee }, reason = "Onboarding",
+            }))
+            .ShouldBeAsync(HttpStatusCode.Created);
+        var earlier = assigned.GetProperty("enrollmentIds").EnumerateArray().Single().GetInt64();
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
+            $"UPDATE enrollment SET state = 'PASSED', completed_at = now() - interval '7 days' WHERE id = {earlier}"));
+
+        // Then an audit finds them preparing it wrong.
+        var audit = await (await auditor.PostAsJsonAsync(Audits, new
+        {
+            branchId = branch, recipeVersionId = sop.GetProperty("recipeVersionId").GetInt64(),
+            retrainingRequired = true, employeeIds = new[] { trainee }, items = new[] { Item("Sugar quantity", false) },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        var actionId = audit.GetProperty("correctiveActionId").GetInt64();
+
+        // The old pass is the training that did not hold: it does not close the action.
+        await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { }))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "RETRAINING_INCOMPLETE");
+
+        // This trainee passed the induction, so they would join every whole-branch class of B01 opened
+        // by later tests; they leave the branch's active staff here.
+        await (await admin.PostAsync($"/api/v1/users/{trainee}/deactivate", null)).ShouldBeAsync(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task G_19_a_retraining_passed_on_a_course_that_later_went_out_of_date_still_counts()
+    {
+        var branch = await factory.BranchIdAsync("B01");
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        using var auditor = await factory.ClientForAsync(TestUsers.Auditor);
+        var trainee = await NewB01TraineeAsync(admin, branch);
+        var sop = await factory.NewPublishedCourseAsync();
+
+        var audit = await (await auditor.PostAsJsonAsync(Audits, new
+        {
+            branchId = branch, recipeVersionId = sop.GetProperty("recipeVersionId").GetInt64(),
+            retrainingRequired = true, employeeIds = new[] { trainee }, items = new[] { Item("Sugar quantity", false) },
+        })).ShouldBeAsync(HttpStatusCode.Created);
+        var actionId = audit.GetProperty("correctiveActionId").GetInt64();
+        var result = await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/assign-retraining", new { courseId = sop.Id() }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+        var enrollmentId = result.GetProperty("enrollmentIds").EnumerateArray().Single().GetInt64();
+
+        // Retrained and passed; then a new release of the drink makes the course OUT_OF_DATE.
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
+            $"UPDATE enrollment SET state = 'PASSED', completed_at = now() WHERE id = {enrollmentId}"));
+        await factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
+            $"UPDATE course SET state = 'OUT_OF_DATE' WHERE id = {sop.Id()}"));
+
+        await (await auditor.PostAsJsonAsync($"{Actions}/{actionId}/close", new { note = "Retrained" }))
+            .ShouldBeAsync(HttpStatusCode.OK);
     }
 
     [Fact]

@@ -15,6 +15,25 @@ Lỗi nghiệp vụ trả về `409` với envelope chuẩn, trường `rule` ch
 
 ---
 
+## 2026-11-05 — Sửa lỗi phiên đăng nhập và đóng hành động khắc phục
+
+Không đổi endpoint hay dữ liệu trả về.
+
+### Thay đổi hành vi
+
+- **Đặt lại mật khẩu** (`PUT /users/{id}` có `password`), vô hiệu hóa, đổi vai trò hoặc chi nhánh: refresh token phát hành
+  **trước** đó giờ cũng bị từ chối (`POST /auth/refresh` → `401`), không chỉ access token. Frontend xử lý như đã ghi ở
+  mục G-11: refresh `401` thì đăng xuất về trang đăng nhập.
+- **Sau khi triển khai bản này, mọi refresh token cũ bị từ chối một lần** (chúng chưa mang phiên bản bảo mật): người
+  dùng đang đăng nhập sẽ phải đăng nhập lại một lần.
+- **Admin sửa người dùng** và gửi lại `status: ACTIVE` cho người đang hoạt động: người đó **không còn bị đăng xuất**.
+  Chỉ khi trạng thái thật sự đổi (khóa ↔ mở) mới kết thúc phiên.
+- **Đóng hành động khắc phục** (`POST /corrective-actions/{id}/close`) khi yêu cầu học lại: chỉ tính lần đậu **sau khi**
+  hành động được tạo. Lần đậu từ trước khi audit trượt không còn đủ để đóng → `409` `RETRAINING_INCOMPLETE`. Lần đậu
+  trên khóa đã chuyển `OUT_OF_DATE` (do công thức ra phiên bản mới) vẫn được tính.
+
+---
+
 ## 2026-11-03 — Thông báo trong luồng mở bán món mới
 
 Không đổi endpoint nào. Hộp thông báo (`GET /me/notifications`) có thêm 6 loại; chúng cũng được gửi qua email và
