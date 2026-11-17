@@ -72,6 +72,12 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
         {
             throw DomainException.Unauthenticated("The account is no longer active.");
         }
+        // G-11: a password reset or a role/branch change ends the sessions that were open before it,
+        // refresh tokens included; otherwise a stolen refresh token would outlive the reset.
+        if (user.SecurityVersion != claims.SecurityVersion)
+        {
+            throw DomainException.Unauthenticated("The refresh token is invalid, expired or revoked.");
+        }
 
         var issued = tokens.Issue(user);
         db.Audit(AuditEntities.RefreshToken, () => claims.TokenId, AuditActions.Revoke,
@@ -116,7 +122,15 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
 
         db.Audit(AuditEntities.RefreshToken, () => claims.TokenId, AuditActions.Revoke, new { reason = "LOGOUT" });
         db.Audit(AuditEntities.User, () => userId, AuditActions.Logout);
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (IsRefreshRotationRace(exception))
+        {
+            // A concurrent logout or refresh revoked this token first: it is revoked either way, which is
+            // all a logout asks for, so this is the same quiet success as logging out twice.
+        }
     }
 
     public async Task<MeResponse> MeAsync(CancellationToken cancellationToken)

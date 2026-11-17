@@ -106,6 +106,15 @@ public sealed class CorrectiveActionsController(CorrectiveActionService actions)
         CancellationToken cancellationToken) =>
         actions.AssignRetrainingAsync(id, request, cancellationToken);
 
+    /// <summary>
+    /// Releases one named employee from the action's retraining (<c>{ reason }</c>, required) - for someone who
+    /// left or moved. Recorded in the audit log; the duty then no longer holds the close.
+    /// </summary>
+    [HttpPost("{id:long}/obligations/{employeeId:long}/exempt"), Authorize(Policy = Policies.QualityAuditor)]
+    public Task<CorrectiveActionDto> ExemptObligation(long id, long employeeId, ExemptObligationRequest request,
+        CancellationToken cancellationToken) =>
+        actions.ExemptAsync(id, employeeId, request, cancellationToken);
+
     /// <summary>The auditor closes the action once the deviation is corrected.</summary>
     [HttpPost("{id:long}/close"), Authorize(Policy = Policies.QualityAuditor)]
     public Task<CorrectiveActionDto> Close(long id, CloseCorrectiveActionRequest request,

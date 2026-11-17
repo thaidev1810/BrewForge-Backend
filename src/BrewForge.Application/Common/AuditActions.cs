@@ -61,6 +61,7 @@ public static class AuditActions
     public const string Open = "OPEN";
     public const string Close = "CLOSE";
     public const string Assign = "ASSIGN";
+    public const string Exempt = "EXEMPT";
 
     /// <summary>A learner was told their course is due soon. Said once per enrolment; the entry is the record of it.</summary>
     public const string RemindDue = "REMIND_DUE";

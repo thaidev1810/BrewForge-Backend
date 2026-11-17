@@ -16,7 +16,7 @@ namespace BrewForge.Api.Tests;
 public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
 {
     [Fact]
-    public async Task Migrations_create_the_54_tables_104_foreign_keys_and_5_triggers()
+    public async Task Migrations_create_the_55_tables_110_foreign_keys_and_5_triggers()
     {
         var (tables, foreignKeys, triggers) = await factory.WithDbAsync(async db => (
             await ScalarAsync(db, """SELECT count(*)::int AS "Value" FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"""),
@@ -31,9 +31,10 @@ public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
         // pictures of a lesson (009); feedback on a recipe (011); progress per lesson (012: 1 table, 3
         // foreign keys). 007 and 010 only add columns. The POS import idempotency ledger, keyed by user
         // and key, with a foreign key to the user (016: 1 table, 1 foreign key). Stock receipts and counts
-        // for ingredient loss control, each with three foreign keys (019: 2 tables, 6 foreign keys).
-        Assert.Equal(54, tables);
-        Assert.Equal(104, foreignKeys);
+        // for ingredient loss control, each with three foreign keys (019: 2 tables, 6 foreign keys). Retraining
+        // obligations of corrective actions, with six foreign keys (020: 1 table, 6 foreign keys).
+        Assert.Equal(55, tables);
+        Assert.Equal(110, foreignKeys);
         Assert.Equal(5, triggers);
     }
 
@@ -49,6 +50,33 @@ public sealed class SchemaMappingTests(BrewForgeApiFactory factory)
 
         // Nothing is created twice and nothing is lost: this is what every start of the API does.
         Assert.Equal(before, await factory.RowCountsAsync());
+    }
+
+    [Fact]
+    public async Task Migration_015_clears_duplicate_revocations_of_an_older_database_before_building_its_index()
+    {
+        // A database from before 015: no unique index, and the race it closes has left two revocations of a token.
+        var tokenId = Random.Shared.NextInt64(1L << 40, long.MaxValue);
+        await factory.WithDbAsync(async db =>
+        {
+            await db.Database.ExecuteSqlRawAsync("DROP INDEX IF EXISTS ux_refresh_token_single_revoke");
+            await db.Database.ExecuteSqlAsync(
+                $"INSERT INTO audit_log (entity_type, entity_id, action) VALUES ('RefreshToken', {tokenId}, 'REVOKE'), ('RefreshToken', {tokenId}, 'REVOKE')");
+        });
+
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<DatabaseInitializer>().ApplySchemaAsync();
+        }
+
+        var (revocations, indexBuilt, trigger) = await factory.WithDbAsync(async db => (
+            await ScalarAsync(db, $"SELECT count(*)::int AS \"Value\" FROM audit_log WHERE entity_type = 'RefreshToken' AND action = 'REVOKE' AND entity_id = {tokenId}"),
+            await ScalarAsync(db, "SELECT count(*)::int AS \"Value\" FROM pg_indexes WHERE indexname = 'ux_refresh_token_single_revoke'"),
+            await db.Database.SqlQueryRaw<string>("SELECT tgenabled::text AS \"Value\" FROM pg_trigger WHERE tgname = 'trg_audit_log_no_update'").SingleAsync()));
+
+        Assert.Equal(1, revocations);   // the earliest kept, the duplicate gone
+        Assert.Equal(1, indexBuilt);
+        Assert.Equal("O", trigger);     // the append-only trigger is enabled again
     }
 
     [Fact]

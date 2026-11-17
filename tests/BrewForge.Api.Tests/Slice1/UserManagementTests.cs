@@ -148,6 +148,55 @@ public sealed class UserManagementTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Password_reset_ends_the_sessions_opened_before_it_refresh_tokens_included()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var username = UniqueName();
+        var id = (await (await admin.PostAsJsonAsync(Users, NewUser(username, "TRAINER")))
+            .ShouldBeAsync(HttpStatusCode.Created)).GetProperty("id").GetInt64();
+        var before = await factory.LoginAsync(username, NewPassword);
+        const string reset = "Reset-Test-Passw0rd";
+
+        await (await admin.PutAsJsonAsync($"{Users}/{id}", new
+            {
+                email = $"{username}@brewforge.local", fullName = "Test User", role = "TRAINER", password = reset,
+            }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        // The refresh token issued before the reset no longer opens a session.
+        using var anonymous = factory.CreateClient();
+        await (await anonymous.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = before.RefreshToken }))
+            .ShouldBeErrorAsync(HttpStatusCode.Unauthorized);
+        // A session opened with the new password refreshes as usual.
+        var after = await factory.LoginAsync(username, reset);
+        await (await anonymous.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = after.RefreshToken }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Editing_an_active_user_who_stays_active_does_not_sign_them_out()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var username = UniqueName();
+        var id = (await (await admin.PostAsJsonAsync(Users, NewUser(username, "TRAINER")))
+            .ShouldBeAsync(HttpStatusCode.Created)).GetProperty("id").GetInt64();
+        var session = await factory.LoginAsync(username, NewPassword);
+
+        // The admin form sends the whole user back, status ACTIVE included, to change the name only.
+        await (await admin.PutAsJsonAsync($"{Users}/{id}", new
+            {
+                email = $"{username}@brewforge.local", fullName = "Renamed User", role = "TRAINER", status = "ACTIVE",
+            }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+
+        using var user = factory.CreateClient();
+        user.DefaultRequestHeaders.Authorization = new("Bearer", session.AccessToken);
+        await (await user.GetAsync("/api/v1/auth/me")).ShouldBeAsync(HttpStatusCode.OK);
+        await (await user.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = session.RefreshToken }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task Administrator_cannot_deactivate_their_own_account()
     {
         using var admin = await factory.ClientForAsync(TestUsers.Admin);

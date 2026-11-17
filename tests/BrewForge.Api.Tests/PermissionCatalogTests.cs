@@ -60,6 +60,7 @@ public sealed class PermissionCatalogTests(BrewForgeApiFactory factory)
         { Permissions.AssignmentsManage, "POST", "/assignments" },
         { Permissions.SchedulesManageOwn, "POST", "/enrollments/{id}/practical-schedules" },
         { Permissions.QualityAct, "POST", "/branch-audits" },
+        { Permissions.QualityAct, "POST", "/corrective-actions/{id}/obligations/{employeeId}/exempt" },
         { Permissions.QuestionBankManage, "POST", "/question-bank" },
         { Permissions.SkillsRead, "GET", "/me/skills" },
         { Permissions.LearningOwn, "GET", "/me/enrollments" },

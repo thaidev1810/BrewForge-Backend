@@ -71,12 +71,18 @@ public sealed class AppUser : INeverDeleted
     /// <summary>A user is never deleted, only made inactive (BR-16).</summary>
     public void Deactivate()
     {
+        if (!IsActive) return; // already inactive: nothing changes, and no session is ended twice
         Status = UserStatus.Inactive;
         BumpSecurityVersion();
     }
 
+    /// <summary>
+    /// Makes an inactive user active again. An edit that resends ACTIVE for a user who is already active
+    /// changes nothing, so it does not sign that user out (G-11 ends sessions only on a real change).
+    /// </summary>
     public void Reactivate()
     {
+        if (IsActive) return;
         Status = UserStatus.Active;
         BumpSecurityVersion();
     }

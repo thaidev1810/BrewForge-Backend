@@ -80,6 +80,9 @@ public interface IBrewForgeDbContext
     DbSet<BranchAudit> BranchAudits { get; }
     DbSet<CorrectiveAction> CorrectiveActions { get; }
 
+    /// <summary>G-19: each named employee's duty to retrain under a corrective action, and the cycle linked to it.</summary>
+    DbSet<RetrainingObligation> RetrainingObligations { get; }
+
     /// <summary>
     /// Queues an audit entry that is written in the same transaction as the
     /// next <see cref="SaveChangesAsync"/>. The entity id is read after the
@@ -99,4 +102,11 @@ public interface IBrewForgeDbContext
     /// Needed where the order of two changes matters to a database constraint.
     /// </summary>
     Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Locks a corrective action's row until the current transaction ends (<c>SELECT ... FOR UPDATE</c>), so
+    /// that closing it, assigning retraining and exempting an employee happen one at a time. Must be called
+    /// inside <see cref="InTransactionAsync{T}"/>.
+    /// </summary>
+    Task LockCorrectiveActionAsync(long correctiveActionId, CancellationToken cancellationToken = default);
 }

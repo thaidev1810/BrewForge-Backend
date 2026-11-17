@@ -11,7 +11,11 @@ public interface IPasswordHasher
 
 public sealed record IssuedTokens(string AccessToken, string RefreshToken, long RefreshTokenId);
 
-public sealed record RefreshTokenClaims(long UserId, long TokenId);
+/// <summary>
+/// What a refresh token carries. <c>SecurityVersion</c> is the account's version when the token was issued:
+/// a password reset, deactivation or role/branch change bumps it, and a token of an older version is refused (G-11).
+/// </summary>
+public sealed record RefreshTokenClaims(long UserId, long TokenId, int SecurityVersion);
 
 public interface ITokenService
 {

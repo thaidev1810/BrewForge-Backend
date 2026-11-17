@@ -104,6 +104,7 @@ public static class AuthorizationMatrix
         new("GET", "/branch-audits/evidence/{key}", AuditReaders),
         new("GET", "/corrective-actions/{id}/retraining-options", [RoleName.QualityAuditor]),
         new("POST", "/corrective-actions/{id}/assign-retraining", [RoleName.QualityAuditor]),
+        new("POST", "/corrective-actions/{id}/obligations/{employeeId}/exempt", [RoleName.QualityAuditor]),
 
         // Branch audits and corrective actions: see QualityController.
         new("GET", "/branch-audits", AuditReaders),

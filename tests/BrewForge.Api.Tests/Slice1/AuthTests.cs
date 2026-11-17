@@ -197,6 +197,23 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
+    public async Task Two_logouts_of_the_same_token_at_once_both_succeed_and_neither_is_a_500()
+    {
+        var session = await factory.LoginAsync(TestUsers.Auditor);
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", session.AccessToken);
+
+        // A double-click on "log out": both race to revoke the same refresh token.
+        var responses = await Task.WhenAll(
+            client.PostAsJsonAsync(Logout, new { refreshToken = session.RefreshToken }),
+            client.PostAsJsonAsync(Logout, new { refreshToken = session.RefreshToken }));
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.NoContent, response.StatusCode));
+        await (await client.PostAsJsonAsync(Refresh, new { refreshToken = session.RefreshToken }))
+            .ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    [Fact]
     public async Task Logout_with_another_users_refresh_token_is_403()
     {
         var mine = await factory.LoginAsync(TestUsers.Trainee);
@@ -296,6 +313,25 @@ public sealed class AuthTests(BrewForgeApiFactory factory)
             branchId = await factory.BranchIdAsync("B01"), password = "A-New-Test-Passw0rd",
         })).ShouldBeAsync(HttpStatusCode.OK);
         await (await client.GetAsync(Me)).ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
+    }
+
+    [Fact]
+    public async Task G_11_a_password_reset_also_ends_the_refresh_token()
+    {
+        using var admin = await factory.ClientForAsync(TestUsers.Admin);
+        var newcomer = await NewTraineeAsync(admin);
+        var session = await factory.LoginAsync(newcomer.Username, newcomer.Password);
+
+        await (await admin.PutAsJsonAsync($"/api/v1/users/{newcomer.Id}", new
+        {
+            email = $"{newcomer.Username}@brewforge.local", fullName = "Session Test", role = "TRAINEE",
+            branchId = await factory.BranchIdAsync("B01"), password = "A-New-Test-Passw0rd",
+        })).ShouldBeAsync(HttpStatusCode.OK);
+
+        // The refresh token minted before the reset cannot mint a fresh session after it.
+        using var client = factory.CreateClient();
+        await (await client.PostAsJsonAsync(Refresh, new { refreshToken = session.RefreshToken }))
+            .ShouldBeErrorAsync(HttpStatusCode.Unauthorized, "UNAUTHENTICATED");
     }
 
     private async Task<(long Id, string Username, string Password)> NewTraineeAsync(HttpClient admin)
