@@ -14,8 +14,13 @@ public sealed class EnvelopeAuthorizationResultHandler : IAuthorizationMiddlewar
         if (authorizeResult.Challenged)
         {
             context.Response.Headers[HeaderNames.WWWAuthenticate] = "Bearer";
-            return ErrorEnvelope.WriteAsync(context, StatusCodes.Status401Unauthorized,
-                ErrorEnvelope.ForStatusCode(context, StatusCodes.Status401Unauthorized));
+            // BE-03: why the token was refused, when one was sent; no rule when no token came at all.
+            var envelope = ErrorEnvelope.ForStatusCode(context, StatusCodes.Status401Unauthorized);
+            if (context.Items[AccessTokenValidator.RuleItem] is string rule)
+            {
+                envelope = envelope with { Rule = rule };
+            }
+            return ErrorEnvelope.WriteAsync(context, StatusCodes.Status401Unauthorized, envelope);
         }
 
         if (authorizeResult.Forbidden)

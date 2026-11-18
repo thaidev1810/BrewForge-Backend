@@ -9,6 +9,7 @@ public static class AuditActions
     public const string Login = "LOGIN";
     public const string Logout = "LOGOUT";
     public const string Revoke = "REVOKE";
+    public const string RefreshReuseDetected = "REFRESH_REUSE";
 
     public const string Validate = "VALIDATE";
     public const string Submit = "SUBMIT";

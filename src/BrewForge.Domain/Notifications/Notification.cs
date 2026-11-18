@@ -35,6 +35,38 @@ public sealed class Notification
         CreatedAt = now;
     }
 
+    /// <summary>
+    /// BE-05: what the notification is about, for the client to open it - one of
+    /// <see cref="NotificationReference"/>'s types and the id of that row. Null when it is about nothing to open.
+    /// </summary>
+    public string? ReferenceType { get; private set; }
+    public long? ReferenceId { get; private set; }
+
+    /// <summary>Every id the notification was raised with (a branch, a recipe, a version...), as JSON.</summary>
+    public string? ContextJson { get; private set; }
+
+    private (string Type, Func<long> Id)? _pendingReference;
+
+    /// <summary>
+    /// Points the notification at a row. The id is read when the notification is stored, so it may be that of a
+    /// row saved in the same step, whose id does not exist yet; type and id are written together then.
+    /// </summary>
+    public void About(string referenceType, Func<long> referenceId, string? contextJson)
+    {
+        _pendingReference = (referenceType, referenceId);
+        ContextJson = contextJson;
+    }
+
+    /// <summary>Fixes the reference, once the rows saved with the notification have their ids.</summary>
+    public void ResolveReference()
+    {
+        if (_pendingReference is not { } pending) return;
+        (ReferenceType, ReferenceId) = (pending.Type, pending.Id());
+        _pendingReference = null;
+    }
+
+    public void WithContext(string? contextJson) => ContextJson = contextJson;
+
     public long Id { get; private set; }
     public long UserId { get; private set; }
     public string Subject { get; private set; } = null!;

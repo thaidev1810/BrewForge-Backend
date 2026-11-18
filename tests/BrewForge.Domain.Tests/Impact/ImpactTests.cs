@@ -245,10 +245,10 @@ public sealed class ImpactTests
     [Fact]
     public void BR_15_neither_a_course_nor_a_certificate_has_a_way_to_be_removed_by_propagation()
     {
-        // The run can flag and nothing else: it holds no operation that deletes.
+        // The run can flag, and compare a preview with now (BE-02), and nothing else: it holds no operation that deletes.
         var operations = typeof(ImpactRun).GetMethods().Where(m => m.DeclaringType == typeof(ImpactRun) && !m.IsSpecialName)
             .Select(m => m.Name).Order();
-        Assert.Equal(["Commit", "Resume", "WhatIf"], operations);
+        Assert.Equal(["ChangesSince", "Commit", "Resume", "WhatIf"], operations);
         // And both records are of the kind the persistence layer refuses to delete.
         Assert.Equal("BR-15", ((INeverDeleted)PublishedCourse(ReleasedVersion(310, RecipeId), 20)).RetentionRule);
         Assert.True(typeof(INeverDeleted).IsAssignableFrom(typeof(Certificate)));

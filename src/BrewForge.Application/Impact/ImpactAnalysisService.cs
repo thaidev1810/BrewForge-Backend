@@ -86,11 +86,21 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
     }
 
     /// <summary>
-    /// Applies the flags of a run (BR-15). The affected set is computed again
-    /// at this moment, so that a certificate issued since the what-if is not
-    /// left valid on a procedure that no longer stands.
+    /// Applies the flags of a run (BR-15) - exactly the what-if the user reviewed. The affected set is computed
+    /// again at this moment; if it is no longer the one the run previewed (a certificate issued since, or one
+    /// flagged by another run of the same change), nothing is applied and the commit is refused with
+    /// <c>IMPACT_STALE</c>, each difference in <c>details</c>: the user analyses again and commits the new run.
+    /// Commits of runs of one trigger take turns, so the later sees what the earlier flagged.
     /// </summary>
-    public async Task<ImpactAnalysisDto> CommitAsync(string runId, CancellationToken cancellationToken)
+    public Task<ImpactAnalysisDto> CommitAsync(string runId, CancellationToken cancellationToken) =>
+        db.InTransactionAsync(async () =>
+        {
+            var peek = await HeaderAsync(runId, tracking: false, cancellationToken);
+            await db.AdvisoryLockAsync($"impact:{peek.TriggerEntity}:{peek.TriggerId}", cancellationToken);
+            return await CommitLockedAsync(runId, cancellationToken);
+        }, cancellationToken);
+
+    private async Task<ImpactAnalysisDto> CommitLockedAsync(string runId, CancellationToken cancellationToken)
     {
         var header = await HeaderAsync(runId, tracking: true, cancellationToken);
         // The header is the authority on "committed once": an empty run has no rows to carry it.
@@ -102,6 +112,14 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
         var rows = await RowsAsync(header.RunId, tracking: true, cancellationToken);
         var stored = await TriggerOfAsync(header.TriggerEntity, header.TriggerId, cancellationToken);
         var (trigger, affected) = await ComputeAsync(stored.Kind, stored.EntityId, tracking: true, cancellationToken);
+
+        var changes = ImpactRun.ChangesSince(rows, affected);
+        if (changes.Count > 0)
+        {
+            throw DomainException.RuleViolation("IMPACT_STALE",
+                "What this change affects is no longer what the analysis showed. Run the analysis again and review it before committing.",
+                details: [.. changes.Select(change => new ErrorDetail("affected", change))]);
+        }
 
         var run = ImpactRun.Resume(header.RunId, trigger, affected, rows, clock.GetUtcNow());
         run.Commit(rows);

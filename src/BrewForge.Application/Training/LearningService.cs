@@ -129,7 +129,8 @@ public sealed class LearningService(IBrewForgeDbContext db, CourseService course
         db.Audit(AuditEntities.Enrollment, () => enrollment.Id, AuditActions.Reset,
             new { enrollment.DueDate, regulationId = rules.RegulationId });
         db.Notify(enrollment.UserId, "Course reset",
-            "Your enrolment was reset. Start the course again from the first module.", clock.GetUtcNow());
+            "Your enrolment was reset. Start the course again from the first module.", clock.GetUtcNow(),
+            new { enrollmentId = enrollment.Id, courseId = enrollment.CourseId });
         await db.SaveChangesAsync(cancellationToken);
         return (await ToDtosAsync([enrollment], cancellationToken))[0];
     }

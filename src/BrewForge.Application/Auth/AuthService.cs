@@ -21,7 +21,7 @@ public sealed record RoleDto(RoleName Role, IReadOnlyList<string> Permissions);
 
 /// <summary>SF-02: login, token refresh with rotation, logout and the caller's own profile.</summary>
 public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, ITokenService tokens,
-    ICurrentUser currentUser)
+    ICurrentUser currentUser, TimeProvider clock)
 {
     // Verified against when the username is unknown, so that a wrong username
     // and a wrong password take about the same time to refuse.
@@ -54,29 +54,56 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
 
     /// <summary>
     /// Exchanges a refresh token for a new pair. The presented token is revoked
-    /// in the same transaction, so each refresh token works once.
+    /// in the same transaction, so each refresh token works once. Every refusal
+    /// is a 401 whose <c>rule</c> says why (BE-03, <see cref="AuthRules"/>); a
+    /// spent token presented again ends every session of its user.
     /// </summary>
     public async Task<LoginResponse> RefreshAsync(RefreshRequest request, CancellationToken cancellationToken)
     {
         new FieldErrors().Required("refreshToken", request.RefreshToken).ThrowIfAny();
 
-        var claims = tokens.ReadRefreshToken(request.RefreshToken);
-        if (claims is null || await IsRevokedAsync(claims.TokenId, cancellationToken))
-        {
-            throw DomainException.Unauthenticated("The refresh token is invalid, expired or revoked.");
-        }
+        var claims = tokens.ReadRefreshToken(request.RefreshToken)
+            ?? throw DomainException.Unauthenticated("The refresh token is invalid or expired.", AuthRules.TokenInvalid);
 
         var user = await db.Users.Include(u => u.Role)
             .SingleOrDefaultAsync(u => u.Id == claims.UserId, cancellationToken);
         if (user is null || !user.IsActive)
         {
-            throw DomainException.Unauthenticated("The account is no longer active.");
+            throw DomainException.Unauthenticated("The account is no longer active.", AuthRules.AccountInactive);
+        }
+
+        var revocation = await RevocationOfAsync(claims.TokenId, cancellationToken);
+        if (revocation is not null)
+        {
+            var rotated = revocation.Payload.Contains("ROTATED", StringComparison.Ordinal);
+            if (rotated && clock.GetUtcNow() - revocation.At <= ReuseGrace)
+            {
+                // Rotated a moment ago: the same client retrying (a double-submit, a timed-out request), not a thief.
+                throw DomainException.Unauthenticated(
+                    "The refresh token was just used by another request; use the pair that request received.",
+                    AuthRules.TokenAlreadyUsed);
+            }
+            if (rotated && user.SecurityVersion == claims.SecurityVersion)
+            {
+                // Spent by a refresh, and now back: a copy is in other hands. Whoever holds the newer token
+                // (the user or the thief) loses it too - every session of the user ends, sign in again.
+                user.EndAllSessions();
+                db.Audit(AuditEntities.User, () => user.Id, AuditActions.RefreshReuseDetected,
+                    new { refreshTokenId = claims.TokenId }, actorUserId: user.Id);
+                await db.SaveChangesAsync(cancellationToken);
+                throw DomainException.Unauthenticated(
+                    "This refresh token was already used. Every session of the account has been ended; sign in again.",
+                    AuthRules.TokenReused);
+            }
+            throw DomainException.Unauthenticated("The refresh token has been revoked.", AuthRules.TokenRevoked);
         }
         // G-11: a password reset or a role/branch change ends the sessions that were open before it,
         // refresh tokens included; otherwise a stolen refresh token would outlive the reset.
         if (user.SecurityVersion != claims.SecurityVersion)
         {
-            throw DomainException.Unauthenticated("The refresh token is invalid, expired or revoked.");
+            throw DomainException.Unauthenticated(
+                "The session was ended by a change to the account (password, role, branch or status); sign in again.",
+                AuthRules.SessionRevoked);
         }
 
         var issued = tokens.Issue(user);
@@ -86,12 +113,14 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
         {
             // Revoking the presented token is what makes the refresh single-use. A unique index
             // over this revocation lets only one of two concurrent refreshes of the same token
-            // commit; the loser lands here and is refused exactly like a token already spent.
+            // commit; the loser lands here. It is a double-submit, not a theft: no session is ended.
             await db.SaveChangesAsync(cancellationToken);
         }
         catch (DbUpdateException exception) when (IsRefreshRotationRace(exception))
         {
-            throw DomainException.Unauthenticated("The refresh token is invalid, expired or revoked.");
+            throw DomainException.Unauthenticated(
+                "The refresh token was used by another request at the same moment; use the pair that request received.",
+                AuthRules.TokenAlreadyUsed);
         }
 
         return new LoginResponse(issued.AccessToken, issued.RefreshToken, UserDto.From(user));
@@ -160,4 +189,21 @@ public sealed class AuthService(IBrewForgeDbContext db, IPasswordHasher hasher, 
     private Task<bool> IsRevokedAsync(long tokenId, CancellationToken cancellationToken) =>
         db.AuditLogs.AnyAsync(a => a.EntityType == AuditEntities.RefreshToken && a.EntityId == tokenId
                                    && a.Action == AuditActions.Revoke, cancellationToken);
+
+    /// <summary>
+    /// How long after a rotation the old refresh token, presented again, is taken for the same client retrying
+    /// rather than for a stolen copy (BE-03): refused with TOKEN_ALREADY_USED, without ending any session.
+    /// </summary>
+    public static readonly TimeSpan ReuseGrace = TimeSpan.FromSeconds(30);
+
+    private sealed record Revocation(string Payload, DateTimeOffset At);
+
+    /// <summary>The token's revocation (its reason in the payload, and when), or null while it is live.</summary>
+    private async Task<Revocation?> RevocationOfAsync(long tokenId, CancellationToken cancellationToken)
+    {
+        var row = await db.AuditLogs.AsNoTracking()
+            .Where(a => a.EntityType == AuditEntities.RefreshToken && a.EntityId == tokenId && a.Action == AuditActions.Revoke)
+            .Select(a => new { a.PayloadJson, a.CreatedAt }).FirstOrDefaultAsync(cancellationToken);
+        return row is null ? null : new Revocation(row.PayloadJson ?? "", row.CreatedAt);
+    }
 }

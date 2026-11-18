@@ -41,6 +41,7 @@ public static class DependencyInjection
 
         services.AddScoped<DataSeeder>();
         services.AddScoped<DatabaseInitializer>();
+        services.AddScoped<SystemInfoReader>();
 
         services.AddSingleton<IPasswordHasher, Argon2idPasswordHasher>();
         services.AddSingleton<ITokenService, JwtTokenService>();

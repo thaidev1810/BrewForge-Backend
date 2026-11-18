@@ -20,17 +20,38 @@ public static class NotificationExtensions
     /// e-mail and Web Push, both in the same transaction as the next save:
     /// a notification never exists for a change that was not stored.
     /// </summary>
+    /// <param name="about">
+    /// BE-05: the row the notification is about, when its id is not known yet (a row saved in the same step).
+    /// Without it, the most specific id of <paramref name="context"/> is taken (<see cref="NotificationReference.ByPriority"/>).
+    /// </param>
     public static void Notify(this IBrewForgeDbContext db, long userId, string subject, string message,
-        DateTimeOffset now, object? context = null)
+        DateTimeOffset now, object? context = null, (string Type, Func<long> Id)? about = null)
     {
         var payload = new JsonObject { ["subject"] = subject, ["message"] = message };
-        if (context is not null && JsonSerializer.SerializeToNode(context, Web) is JsonObject extra)
+        var extra = context is null ? null : JsonSerializer.SerializeToNode(context, Web) as JsonObject;
+        if (extra is not null)
         {
             foreach (var (key, value) in extra.ToList()) payload[key] = value?.DeepClone();
         }
 
         db.Audit(AuditEntities.User, () => userId, AuditActions.Notify, payload);
-        db.Notifications.Add(new Notification(userId, subject, message, now));
+        var notification = new Notification(userId, subject, message, now);
+        var contextJson = extra?.ToJsonString();
+        if (about is { } reference)
+        {
+            notification.About(reference.Type, reference.Id, contextJson);
+        }
+        else if (extra is not null
+                 && NotificationReference.ByPriority.FirstOrDefault(p => extra[p.ContextKey] is JsonValue) is { Type: not null } found
+                 && extra[found.ContextKey]!.GetValue<long>() is var id and > 0)
+        {
+            notification.About(found.Type, () => id, contextJson);
+        }
+        else
+        {
+            notification.WithContext(contextJson);
+        }
+        db.Notifications.Add(notification);
     }
 }
 
@@ -45,11 +66,15 @@ public sealed record PushSubscriptionDto(long Id, string Endpoint, DateTimeOffse
 public sealed record PushConfigDto(bool Enabled, string? PublicKey);
 
 /// <summary>A notification as its user reads it in the application.</summary>
+/// <param name="ReferenceType">BE-05: what to open (<see cref="NotificationReference"/>); null when nothing.</param>
+/// <param name="ReferenceId">The id of that row.</param>
+/// <param name="Context">Every id the notification was raised with, e.g. <c>{ branchId, recipeId, recipeVersionId }</c>.</param>
 public sealed record NotificationDto(long Id, string Subject, string Message, DateTimeOffset CreatedAt,
-    DateTimeOffset? ReadAt, bool Read)
+    DateTimeOffset? ReadAt, bool Read, string? ReferenceType, long? ReferenceId, JsonElement? Context)
 {
     public static NotificationDto From(Notification n) =>
-        new(n.Id, n.Subject, n.Message, n.CreatedAt, n.ReadAt, n.ReadAt is not null);
+        new(n.Id, n.Subject, n.Message, n.CreatedAt, n.ReadAt, n.ReadAt is not null, n.ReferenceType, n.ReferenceId,
+            n.ContextJson is null ? null : JsonSerializer.Deserialize<JsonElement>(n.ContextJson));
 }
 
 public sealed record UnreadCountDto(int Count);

@@ -57,6 +57,7 @@ public static class AuthorizationMatrix
         new("POST", "/auth/logout", Everyone),
         new("GET", "/auth/me", Everyone),
         new("GET", "/roles", Everyone),
+        new("GET", "/system/info", Nobody, Anonymous: true),
 
         // 3. Master data
         new("GET", "/users", AdminOnly),

@@ -109,4 +109,11 @@ public interface IBrewForgeDbContext
     /// inside <see cref="InTransactionAsync{T}"/>.
     /// </summary>
     Task LockCorrectiveActionAsync(long correctiveActionId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Holds a named lock until the current transaction ends (<c>pg_advisory_xact_lock</c>), so that work under the
+    /// same name happens one at a time - commits of impact runs of one trigger, a run of the training reminders -
+    /// and the later one sees what the earlier stored. Must be called inside <see cref="InTransactionAsync{T}"/>.
+    /// </summary>
+    Task AdvisoryLockAsync(string name, CancellationToken cancellationToken = default);
 }

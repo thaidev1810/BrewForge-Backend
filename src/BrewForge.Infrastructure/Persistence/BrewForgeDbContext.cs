@@ -405,7 +405,10 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
                 .ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
         });
 
-        modelBuilder.Entity<Notification>();
+        modelBuilder.Entity<Notification>(notification =>
+        {
+            notification.Property(n => n.ContextJson).HasColumnType("jsonb");
+        });
         modelBuilder.Entity<PushSubscription>(subscription =>
         {
             subscription.HasIndex(s => s.Endpoint).IsUnique();
@@ -489,6 +492,15 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
             cancellationToken);
     }
 
+    public async Task AdvisoryLockAsync(string name, CancellationToken cancellationToken = default)
+    {
+        if (Database.CurrentTransaction is null)
+        {
+            throw new InvalidOperationException("An advisory lock here lasts only as long as a transaction: call it inside InTransactionAsync.");
+        }
+        await Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock(hashtextextended({name}, 0))", cancellationToken);
+    }
+
     public override int SaveChanges(bool acceptAllChangesOnSuccess) =>
         SaveChangesAsync(acceptAllChangesOnSuccess).GetAwaiter().GetResult();
 
@@ -510,6 +522,12 @@ public sealed class BrewForgeDbContext(DbContextOptions<BrewForgeDbContext> opti
         try
         {
             var written = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+
+            // A notification may point at a row saved in the same step (an enrolment, a certificate): its id is known now.
+            foreach (var notification in ChangeTracker.Entries<Notification>().Select(entry => entry.Entity))
+            {
+                notification.ResolveReference();
+            }
 
             var now = clock.GetUtcNow();
             foreach (var pending in _pendingAudits)

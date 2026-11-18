@@ -87,6 +87,12 @@ public sealed class AppUser : INeverDeleted
         BumpSecurityVersion();
     }
 
+    /// <summary>
+    /// Ends every session of the user, access and refresh tokens alike (BE-03): used when a spent refresh
+    /// token comes back, which means a copy of it is in someone else's hands.
+    /// </summary>
+    public void EndAllSessions() => BumpSecurityVersion();
+
     private void BumpSecurityVersion() => SecurityVersion++;
 
     private void SetProfile(string email, string fullName, Role role, long? branchId)

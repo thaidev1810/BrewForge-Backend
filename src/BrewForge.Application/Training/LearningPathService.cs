@@ -1,6 +1,7 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Application.Notifications;
+using BrewForge.Domain.Notifications;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
@@ -163,7 +164,8 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
                     reason = "LEARNING_PATH",
                 });
                 db.Notify(userId, "Course assigned",
-                    $"'{course.Title}' is part of your training path. Due {enrollment.DueDate:yyyy-MM-dd}.", now);
+                    $"'{course.Title}' is part of your training path. Due {enrollment.DueDate:yyyy-MM-dd}.", now,
+                    new { courseId = course.Id }, about: (NotificationReference.Enrollment, () => enrollment.Id));
             }
         }
         return created;
@@ -188,7 +190,15 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
     /// audit entry of the enrolment, and an enrolment that has one since it
     /// was last assigned is not reminded again.
     /// </summary>
-    public async Task<ReminderResult> RemindAsync(CancellationToken cancellationToken)
+    public Task<ReminderResult> RemindAsync(CancellationToken cancellationToken) =>
+        // BE-05: one run at a time, across instances too, so two runs never both decide a reminder is still owed.
+        db.InTransactionAsync(async () =>
+        {
+            await db.AdvisoryLockAsync("training-reminders", cancellationToken);
+            return await RemindLockedAsync(cancellationToken);
+        }, cancellationToken);
+
+    private async Task<ReminderResult> RemindLockedAsync(CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
         var today = Today;
@@ -228,7 +238,8 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
             {
                 overdue++;
                 db.Notify(enrollment.UserId, "Course overdue",
-                    $"'{title}' was due on {enrollment.DueDate:yyyy-MM-dd}. Finish it as soon as you can.", now);
+                    $"'{title}' was due on {enrollment.DueDate:yyyy-MM-dd}. Finish it as soon as you can.", now,
+                    new { enrollmentId = enrollment.Id, courseId = enrollment.CourseId });
                 foreach (var managerId in managers)
                 {
                     db.Notify(managerId, "Course overdue",
@@ -240,7 +251,8 @@ public sealed class LearningPathService(IBrewForgeDbContext db, ICurrentUser cur
             {
                 dueSoon++;
                 db.Notify(enrollment.UserId, "Course due soon",
-                    $"'{title}' is due on {enrollment.DueDate:yyyy-MM-dd}.", now);
+                    $"'{title}' is due on {enrollment.DueDate:yyyy-MM-dd}.", now,
+                    new { enrollmentId = enrollment.Id, courseId = enrollment.CourseId });
             }
         }
         await db.SaveChangesAsync(cancellationToken);

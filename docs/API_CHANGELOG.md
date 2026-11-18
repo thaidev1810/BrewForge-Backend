@@ -15,6 +15,62 @@ Lỗi nghiệp vụ trả về `409` với envelope chuẩn, trường `rule` ch
 
 ---
 
+## 2026-11-18 — BE-02 → BE-05: impact cũ, mã lỗi phiên, thông tin bản chạy, tham chiếu thông báo
+
+### ⚠️ Breaking (hành vi)
+
+- **BE-02 — `POST /impact-analysis/{runId}/commit` từ chối kết quả xem trước đã cũ.** Nếu từ lúc phân tích tới lúc
+  commit, tập bị ảnh hưởng đã đổi (vd. có chứng chỉ mới được cấp, hoặc một run khác của cùng thay đổi đã commit trước)
+  → `409`, `rule: "IMPACT_STALE"`, **không áp dụng gì**. `details[]` mỗi dòng `{ field: "affected", issue:
+  "<Entity> <id>: NEWLY_AFFECTED | NO_LONGER_AFFECTED" }` (`Entity` = `Course` / `Certificate` / `BranchLaunchStatus`).
+  FE: báo người dùng, gọi lại `POST /impact-analysis` để có run mới, cho xem lại rồi mới commit run mới. Trước đây
+  commit tự tính lại và áp dụng luôn.
+- **BE-03 — token refresh đã dùng mà bị gửi lại sau 30 giây ⇒ đăng xuất mọi phiên của tài khoản** (`rule:
+  "TOKEN_REUSED"`). Cả access token và refresh token mới nhất cũng hết hiệu lực (`SESSION_REVOKED`). Người dùng phải
+  đăng nhập lại.
+
+### Mới
+
+| Endpoint / trường | Ai dùng | Mô tả |
+|---|---|---|
+| `rule` trong mọi `401` | FE | Lý do chưa/không còn đăng nhập (bảng dưới). Không có token → `rule: null`. `403` (đã đăng nhập, thiếu quyền) không dùng các mã này. |
+| `GET /system/info` | ai cũng gọi được (không cần token) | `{ application, version, commit, environment, startedAt, database: { reachable, latestScript, expectedScripts, appliedScripts, missing[], changed[] }, ready }`. `ready = true` khi DB trả lời và có **đủ** mọi script migration của bản build, không script nào bị sửa. Không chứa secret/connection string. |
+| `referenceType`, `referenceId`, `context` trong `GET /me/notifications` | mọi role | Đối tượng thông báo nói tới. `referenceType` ∈ `ENROLLMENT`, `CERTIFICATE`, `COURSE`, `PRACTICAL_SCHEDULE`, `TRAINING_CLASS`, `BRANCH_AUDIT`, `RECIPE_FEEDBACK`, `PILOT`, `RECIPE`; mở bằng endpoint GET tương ứng (vd. `ENROLLMENT` → `GET /enrollments/{id}`). `context` = mọi id kèm theo (vd. `{ branchId, recipeId, recipeVersionId }`). Thông báo cũ: cả ba `null`. |
+
+**Mã `rule` của 401 (BE-03):**
+
+| `rule` | Khi nào | FE làm gì |
+|---|---|---|
+| `TOKEN_EXPIRED` | Access token hết hạn | Gọi `POST /auth/refresh` rồi gửi lại request |
+| `TOKEN_INVALID` | Token sai/hỏng/sai chữ ký, hoặc refresh token hết hạn | Về màn đăng nhập |
+| `TOKEN_REVOKED` | Refresh token đã logout | Về màn đăng nhập |
+| `TOKEN_ALREADY_USED` | Refresh token vừa được một request khác dùng (gửi trùng, retry khi timeout, trong 30 giây) | **Không** đăng xuất: dùng cặp token request kia nhận được (FE nên gom refresh thành một request duy nhất) |
+| `TOKEN_REUSED` | Refresh token đã dùng bị gửi lại sau 30 giây (nghi bị lộ) | Về màn đăng nhập; mọi phiên đã bị thu hồi |
+| `SESSION_REVOKED` | Đổi mật khẩu / role / chi nhánh / trạng thái sau khi token được cấp | Về màn đăng nhập (đăng nhập lại nhận quyền mới) |
+| `ACCOUNT_INACTIVE` | Tài khoản bị vô hiệu hóa | Về màn đăng nhập, báo tài khoản bị khóa |
+
+Chính sách phiên: logout chỉ thu hồi **refresh token** của phiên đó (access token còn tối đa 15 phút); đổi mật khẩu,
+role, chi nhánh hoặc khóa tài khoản thu hồi **mọi** phiên ngay ở request kế tiếp.
+
+### Thay đổi hành vi
+
+- **BE-02**: commit đồng thời của cùng run → một `200`, một `IMPACT_ALREADY_COMMITTED` (như cũ); commit đồng thời của
+  hai run khác nhau cùng một thay đổi → chạy lần lượt, run sau nhận `IMPACT_STALE`. Lỗi giữa chừng không để lại cập
+  nhật dở dang.
+- **BE-05**: bộ nhắc hạn học (`TrainingReminderScheduler`) chạy song song (nhiều instance) không gửi trùng.
+- Mở đối tượng từ thông báo đi qua endpoint của đối tượng, nên vẫn kiểm quyền/chi nhánh: mất quyền → `403`/`404`,
+  đối tượng không còn → `404`; FE chỉ hiện nội dung thông báo.
+
+### Dữ liệu / triển khai
+
+- Migration `022_schema_script_log.sql` (bảng ghi script đã chạy, phục vụ `/system/info`) và
+  `023_notification_reference.sql` (3 cột mới của `notification`). Tự chạy khi API khởi động với
+  `Database:InitializeOnStartup = true`.
+- Khi build không có thư mục `.git` (vd. Docker), đặt biến môi trường `BREWFORGE_COMMIT=<sha>` để `/system/info` báo
+  đúng commit.
+
+---
+
 ## 2026-11-18 — Học công thức (PRODUCT) không cần xong hội nhập (INDUCTION)
 
 Nhân viên mới **học SOP công thức ngay**, song song với khóa hội nhập; không còn phải có chứng chỉ hội nhập trước.

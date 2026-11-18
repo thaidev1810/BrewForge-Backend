@@ -46,8 +46,9 @@ public sealed class DomainException : Exception
     public static DomainException Validation(string code, string message, IReadOnlyList<ErrorDetail> details) =>
         new(ErrorKind.Validation, code, message, null, details);
 
-    public static DomainException Unauthenticated(string message) =>
-        new(ErrorKind.Unauthenticated, ErrorCodes.Unauthenticated, message, null, null);
+    /// <param name="rule">Why the caller is not (or no longer) signed in, for the client to act on (BE-03).</param>
+    public static DomainException Unauthenticated(string message, string? rule = null) =>
+        new(ErrorKind.Unauthenticated, ErrorCodes.Unauthenticated, message, rule, null);
 
     public static DomainException Forbidden(string? rule = null, string? message = null) =>
         new(ErrorKind.Forbidden, ErrorCodes.Forbidden,

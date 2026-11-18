@@ -3,6 +3,7 @@ using BrewForge.Application.Common;
 using BrewForge.Application.Courses;
 using BrewForge.Application.Launch;
 using BrewForge.Application.Notifications;
+using BrewForge.Domain.Notifications;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
@@ -311,7 +312,8 @@ public sealed class AssessmentService(IBrewForgeDbContext db, CourseService cour
                 .Where(c => c.Status == CertificateStatus.Superseded && !ReferenceEquals(c, certificate)).Select(c => c.Id).Distinct(),
         });
         db.Notify(enrollment.UserId, "Certificate issued", $"You are now certified on '{course.Title}'.",
-            clock.GetUtcNow());
+            clock.GetUtcNow(), new { courseId = course.Id, enrollmentId = enrollment.Id },
+            about: (NotificationReference.Certificate, () => certificate.Id));
         await db.SaveChangesAsync(cancellationToken);
 
         await readiness.RecomputeForCertificateAsync(certificate.UserId, certificate.RecipeVersionId, cancellationToken);

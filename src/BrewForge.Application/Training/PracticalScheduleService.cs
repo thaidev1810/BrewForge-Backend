@@ -1,6 +1,7 @@
 using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Application.Notifications;
+using BrewForge.Domain.Notifications;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Training;
 using Microsoft.EntityFrameworkCore;
@@ -71,7 +72,8 @@ public sealed class PracticalScheduleService(IBrewForgeDbContext db, LearningSer
         db.Audit(AuditEntities.PracticalSchedule, () => schedule.Id, AuditActions.ScheduleSession,
             new { enrollmentId, schedule.ScheduledAt, schedule.Location });
         db.Notify(enrollment.UserId, "Practical scheduled",
-            $"Your practical assessment is on {schedule.ScheduledAt:yyyy-MM-dd HH:mm} UTC at {schedule.Location}.", now);
+            $"Your practical assessment is on {schedule.ScheduledAt:yyyy-MM-dd HH:mm} UTC at {schedule.Location}.", now,
+            new { enrollmentId = enrollment.Id }, about: (NotificationReference.PracticalSchedule, () => schedule.Id));
         await db.SaveChangesAsync(cancellationToken);
         return (await ToDtosAsync([schedule], cancellationToken))[0];
     }
@@ -88,7 +90,8 @@ public sealed class PracticalScheduleService(IBrewForgeDbContext db, LearningSer
         var userId = await db.Enrollments.Where(e => e.Id == schedule.EnrollmentId).Select(e => e.UserId)
             .SingleAsync(cancellationToken);
         db.Notify(userId, "Practical rescheduled",
-            $"Your practical assessment moved to {schedule.ScheduledAt:yyyy-MM-dd HH:mm} UTC at {schedule.Location}.", now);
+            $"Your practical assessment moved to {schedule.ScheduledAt:yyyy-MM-dd HH:mm} UTC at {schedule.Location}.", now,
+            new { enrollmentId = schedule.EnrollmentId, practicalScheduleId = schedule.Id });
         await db.SaveChangesAsync(cancellationToken);
         return (await ToDtosAsync([schedule], cancellationToken))[0];
     }

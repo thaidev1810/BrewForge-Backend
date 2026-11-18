@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using BrewForge.Application.Abstractions;
+using BrewForge.Application.Auth;
 using BrewForge.Domain.Identity;
 using BrewForge.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -16,12 +17,25 @@ namespace BrewForge.Api.Auth;
 /// </summary>
 public static class AccessTokenValidator
 {
+    /// <summary>Where the reason a token was refused is kept for the 401 envelope (BE-03), in HttpContext.Items.</summary>
+    public const string RuleItem = "BrewForge.AuthRule";
+
+    /// <summary>The 401 rule of a token the bearer handler itself refused: expired, or not a token of ours.</summary>
+    public static Task OnAuthenticationFailedAsync(AuthenticationFailedContext context)
+    {
+        context.HttpContext.Items[RuleItem] = context.Exception is Microsoft.IdentityModel.Tokens.SecurityTokenExpiredException
+            ? AuthRules.TokenExpired
+            : AuthRules.TokenInvalid;
+        return Task.CompletedTask;
+    }
+
     public static async Task ValidateAsync(TokenValidatedContext context)
     {
         var principal = context.Principal;
         if (principal is null || !long.TryParse(principal.FindFirstValue(BrewForgeClaims.Subject), out var userId)
             || !int.TryParse(principal.FindFirstValue(BrewForgeClaims.SecurityVersion), out var tokenVersion))
         {
+            context.HttpContext.Items[RuleItem] = AuthRules.TokenInvalid;
             context.Fail("The access token is missing a subject or security version.");
             return;
         }
@@ -36,6 +50,9 @@ public static class AccessTokenValidator
 
         if (account is null || account.Status != UserStatus.Active || account.SecurityVersion != tokenVersion)
         {
+            context.HttpContext.Items[RuleItem] = account is null || account.Status != UserStatus.Active
+                ? AuthRules.AccountInactive
+                : AuthRules.SessionRevoked;
             context.Fail("The account is locked, gone, or its role, branch or password has changed; sign in again.");
         }
     }

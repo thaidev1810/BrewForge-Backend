@@ -44,6 +44,12 @@ public sealed class DatabaseInitializer(BrewForgeDbContext db, DataSeeder seeder
                     logger.LogInformation("Applying database script {Script}", name);
                     await ExecuteAsync(sql);
                 }
+                // BE-04: every script now stands in the database (001 too, when it was there already), each as
+                // the build carries it. Recorded so GET /system/info can tell a database that lacks one.
+                foreach (var (name, sql) in scripts)
+                {
+                    await RecordAsync(name, SystemInfoReader.Checksum(sql));
+                }
             }
             finally
             {
@@ -60,6 +66,27 @@ public sealed class DatabaseInitializer(BrewForgeDbContext db, DataSeeder seeder
             await using var command = connection.CreateCommand();
             command.CommandText = sql;
             await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        async Task RecordAsync(string name, string checksum)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO schema_script_log (name, checksum) VALUES (@name, @checksum)
+                ON CONFLICT (name) DO UPDATE SET checksum = EXCLUDED.checksum, applied_at = now()
+                WHERE schema_script_log.checksum <> EXCLUDED.checksum
+                """;
+            AddParameter(command, "name", name);
+            AddParameter(command, "checksum", checksum);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        static void AddParameter(System.Data.Common.DbCommand command, string name, string value)
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = name;
+            parameter.Value = value;
+            command.Parameters.Add(parameter);
         }
 
         async Task<bool> SchemaExistsAsync()

@@ -2,6 +2,7 @@ using BrewForge.Application.Abstractions;
 using BrewForge.Application.Common;
 using BrewForge.Application.Courses;
 using BrewForge.Application.Notifications;
+using BrewForge.Domain.Notifications;
 using BrewForge.Domain.Common;
 using BrewForge.Domain.Courses;
 using BrewForge.Domain.Identity;
@@ -162,7 +163,8 @@ public sealed class AssignmentService(IBrewForgeDbContext db, EnrollmentEvaluato
                 new { enrollment.CourseId, enrollment.UserId, enrollment.DueDate, reason });
             db.Notify(user.Id, "Course assigned",
                 $"You have been assigned '{course.Title}'. Due {enrollment.DueDate:yyyy-MM-dd}."
-                + (reason is null ? "" : $" Reason: {reason}"), now);
+                + (reason is null ? "" : $" Reason: {reason}"), now, new { courseId = course.Id },
+                about: (NotificationReference.Enrollment, () => enrollment.Id));
         }
         await db.SaveChangesAsync(cancellationToken);
 

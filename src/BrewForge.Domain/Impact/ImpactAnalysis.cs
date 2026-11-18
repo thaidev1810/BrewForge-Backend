@@ -210,6 +210,28 @@ public sealed class ImpactRun
     }
 
     /// <summary>
+    /// BE-02: how the affected set of now differs from the what-if the user reviewed, its rows. One line per
+    /// entity, <c>"{entity} {id}: NEWLY_AFFECTED"</c> (became affected since, a certificate issued meanwhile)
+    /// or <c>"{entity} {id}: NO_LONGER_AFFECTED"</c> (flagged by another run, archived, withdrawn). Empty when
+    /// the preview still stands; otherwise it must not be committed, as it is not what the user agreed to.
+    /// </summary>
+    public static IReadOnlyList<string> ChangesSince(IReadOnlyCollection<ChangeImpact> previewRows, ImpactSet affected)
+    {
+        var previewed = previewRows.Select(row => (row.AffectedEntity, row.AffectedId)).ToHashSet();
+        var current = affected.Courses.Select(c => (ChangeImpact.CourseEntity, c.Id))
+            .Concat(affected.Certificates.Select(c => (ChangeImpact.CertificateEntity, c.Id)))
+            .Concat(affected.LiveBranches.Select(l => (ChangeImpact.LaunchEntity, l.Id)))
+            .ToHashSet();
+        return
+        [
+            .. current.Except(previewed).OrderBy(k => k.Item1).ThenBy(k => k.Item2)
+                .Select(k => $"{k.Item1} {k.Item2}: NEWLY_AFFECTED"),
+            .. previewed.Except(current).OrderBy(k => k.Item1).ThenBy(k => k.Item2)
+                .Select(k => $"{k.Item1} {k.Item2}: NO_LONGER_AFFECTED"),
+        ];
+    }
+
+    /// <summary>
     /// Applies the flags: every affected course becomes OUT_OF_DATE and every
     /// affected certificate NEEDS_RECERT. Branches are reported, not changed:
     /// what a branch sells is decided at the launch gate. A run is committed

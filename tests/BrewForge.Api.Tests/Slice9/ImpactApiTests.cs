@@ -36,7 +36,7 @@ public sealed class ImpactApiTests(BrewForgeApiFactory factory)
         Assert.Equal(
             before.Where(table => table.Key is not ("change_impact" or "impact_run_header")),
             after.Where(table => table.Key is not ("change_impact" or "impact_run_header")));
-        Assert.Equal(55, after.Count);
+        Assert.Equal(56, after.Count);
 
         var runId = Guid.Parse(result.GetProperty("runId").GetString()!);
         var rows = await factory.WithDbAsync(db => db.ChangeImpacts.AsNoTracking().Where(r => r.AnalysisRunId == runId).ToListAsync());
@@ -259,20 +259,71 @@ public sealed class ImpactApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
-    public async Task Commit_takes_in_a_certificate_issued_after_the_what_if()
+    public async Task BE_02_a_what_if_overtaken_by_a_certificate_issued_since_is_refused_and_the_new_run_commits()
     {
         var drink = await factory.NewTaughtDrinkAsync(certifiedStaff: 1);
         var run = await factory.AnalyzeAsync("RecipeVersion", drink.VersionId);
         Assert.Single(run.GetProperty("affected").GetProperty("certificates").EnumerateArray());
         // The second trainee is certified while the manager is still looking at the what-if.
         await factory.CertifyAsync(await factory.UserIdAsync("trainee2"), drink.CourseId, drink.VersionId);
+        var newcomer = await factory.WithDbAsync(db => db.Certificates.Where(c => c.RecipeVersionId == drink.VersionId)
+            .OrderByDescending(c => c.Id).Select(c => c.Id).FirstAsync());
+        var before = await factory.RowCountsAsync();
 
-        var committed = await (await factory.CommitAsync(run.GetProperty("runId").GetString()!)).ShouldBeAsync(HttpStatusCode.OK);
+        // What the manager reviewed is no longer what the change affects: refused, the difference named, nothing applied.
+        var stale = await (await factory.CommitAsync(run.GetProperty("runId").GetString()!))
+            .ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IMPACT_STALE");
+        Assert.Equal([$"Certificate {newcomer}: NEWLY_AFFECTED"],
+            stale.GetProperty("details").EnumerateArray().Select(d => d.GetProperty("issue").GetString()));
+        Assert.Equal(before, await factory.RowCountsAsync());
+        Assert.All(await factory.WithDbAsync(db => db.Certificates.Where(c => c.RecipeVersionId == drink.VersionId).Select(c => c.Status).ToListAsync()),
+            status => Assert.Equal(Domain.Training.CertificateStatus.Valid, status));
+        Assert.False(await factory.WithDbAsync(db => db.ImpactRuns.Where(h => h.RunId == Guid.Parse(run.GetProperty("runId").GetString()!))
+            .Select(h => h.Committed).SingleAsync()));
 
-        // Nobody is left certified on a procedure that no longer stands.
-        Assert.Equal(2, committed.GetProperty("affected").GetProperty("certificates").GetArrayLength());
+        // Analysed again and reviewed: the new run takes both in, and nobody is left certified on a procedure that no longer stands.
+        var again = await factory.AnalyzeAsync("RecipeVersion", drink.VersionId);
+        Assert.Equal(2, again.GetProperty("affected").GetProperty("certificates").GetArrayLength());
+        await (await factory.CommitAsync(again.GetProperty("runId").GetString()!)).ShouldBeAsync(HttpStatusCode.OK);
         Assert.All(await factory.WithDbAsync(db => db.Certificates.Where(c => c.RecipeVersionId == drink.VersionId).Select(c => c.Status).ToListAsync()),
             status => Assert.Equal(Domain.Training.CertificateStatus.NeedsRecert, status));
+    }
+
+    [Fact]
+    public async Task BE_02_of_two_runs_of_one_change_only_the_first_committed_applies_and_the_other_is_stale()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var first = (await factory.AnalyzeAsync("Ingredient", drink.IngredientId)).GetProperty("runId").GetString()!;
+        var second = (await factory.AnalyzeAsync("Ingredient", drink.IngredientId)).GetProperty("runId").GetString()!;
+
+        await (await factory.CommitAsync(first)).ShouldBeAsync(HttpStatusCode.OK);
+        var flags = await FlagCountAsync();
+
+        // The second previewed what the first has now flagged: refused, and nothing is flagged or told twice.
+        var stale = await (await factory.CommitAsync(second)).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IMPACT_STALE");
+        Assert.All(stale.GetProperty("details").EnumerateArray(),
+            detail => Assert.EndsWith(": NO_LONGER_AFFECTED", detail.GetProperty("issue").GetString()));
+        Assert.Equal(flags, await FlagCountAsync());
+
+        Task<int> FlagCountAsync() => factory.WithDbAsync(db => db.AuditLogs.CountAsync(a =>
+            (a.EntityType == "Certificate" && drink.CertificateIds.Contains(a.EntityId) && a.Action == "FLAG_RECERT")
+            || (a.EntityType == "AppUser" && a.Action == "NOTIFY")));
+    }
+
+    [Fact]
+    public async Task BE_02_two_runs_of_one_change_committed_at_once_apply_once()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var first = (await factory.AnalyzeAsync("Ingredient", drink.IngredientId)).GetProperty("runId").GetString()!;
+        var second = (await factory.AnalyzeAsync("Ingredient", drink.IngredientId)).GetProperty("runId").GetString()!;
+
+        var responses = await Task.WhenAll(factory.CommitAsync(first), factory.CommitAsync(second));
+
+        // They take turns: one applies, the other finds its preview overtaken.
+        Assert.Equal([HttpStatusCode.OK, HttpStatusCode.Conflict], responses.Select(r => r.StatusCode).Order());
+        await responses.Single(r => r.StatusCode == HttpStatusCode.Conflict).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IMPACT_STALE");
+        Assert.Equal(drink.CertificateIds.Count, await factory.WithDbAsync(db => db.AuditLogs.CountAsync(a =>
+            a.EntityType == "Certificate" && drink.CertificateIds.Contains(a.EntityId) && a.Action == "FLAG_RECERT")));
     }
 
     // ---------------------------------------------------------------- on release
