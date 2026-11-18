@@ -29,6 +29,26 @@ public static class TrainingScenario
             $"INSERT INTO certificate (user_id, course_id, recipe_version_id) VALUES ({userId}, {courseId}, {recipeVersionId})"));
 
     /// <summary>
+    /// Makes induction the prerequisite of PRODUCT courses for the duration of a test, as a training manager
+    /// may choose to (the seed sets none). Dispose to put the regulation back as it was; the tests of the
+    /// collection run one at a time, so no other test sees the change.
+    /// </summary>
+    public static async Task<IAsyncDisposable> RequireInductionBeforeProductAsync(this BrewForgeApiFactory factory)
+    {
+        await SetProductPrerequisiteAsync(factory, "INDUCTION");
+        return new Restore(() => SetProductPrerequisiteAsync(factory, null));
+    }
+
+    private static Task SetProductPrerequisiteAsync(BrewForgeApiFactory factory, string? prerequisite) =>
+        factory.WithDbAsync(db => db.Database.ExecuteSqlAsync(
+            $"UPDATE training_regulation SET prerequisite_type = {prerequisite} WHERE course_type = 'PRODUCT'"));
+
+    private sealed class Restore(Func<Task> undo) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync() => await undo();
+    }
+
+    /// <summary>
     /// Marks a user as having passed the induction, the prerequisite of a PRODUCT course: a certificate
     /// on the seeded INDUCTION course, which is what the prerequisite check looks for (no version needed).
     /// </summary>

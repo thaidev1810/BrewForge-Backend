@@ -221,7 +221,9 @@ public sealed class AuditApiTests(BrewForgeApiFactory factory)
     public async Task Course_effectiveness_shows_the_pass_rate_per_module_beside_the_cups_sold_where_staff_completed_the_course()
     {
         var setup = await factory.NewClassAsync(sessions: 5);
-        await factory.OpenClassAsync(setup.ClassId); // trainee and trainee2 of B01
+        // trainee and trainee2 of B01, by name: other tests leave trainees of their own at B01 too.
+        await factory.OpenClassAsync(setup.ClassId,
+            [await factory.UserIdAsync(TestUsers.Trainee), await factory.UserIdAsync("trainee2")]);
         var first = await factory.EnrollmentIdAsync(setup.ClassId, TestUsers.Trainee);
         var second = await factory.EnrollmentIdAsync(setup.ClassId, "trainee2");
         // One absence out of ten: 90 percent attendance, and both still at or above the minimum of 80.

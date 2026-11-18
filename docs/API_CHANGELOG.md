@@ -15,6 +15,30 @@ Lỗi nghiệp vụ trả về `409` với envelope chuẩn, trường `rule` ch
 
 ---
 
+## 2026-11-18 — Học công thức (PRODUCT) không cần xong hội nhập (INDUCTION)
+
+Nhân viên mới **học SOP công thức ngay**, song song với khóa hội nhập; không còn phải có chứng chỉ hội nhập trước.
+Cả hai khóa vẫn **bắt buộc** với TRAINEE. Endpoint và DTO **không đổi**.
+
+### Thay đổi hành vi
+
+- Quy chế PRODUCT không còn `prerequisiteType` (trước là `"INDUCTION"`). `GET /training-regulations` và
+  `GET /training-needs` trả `prerequisiteType: null` cho PRODUCT.
+- **Lộ trình học** (`GET /learning-paths/{userId}`, `GET /me/learning-path`): stage PRODUCT có `blocked: false`;
+  khóa PRODUCT của các món chi nhánh đang bán hiện `ENROLLED`/`AVAILABLE`, không còn `BLOCKED`.
+- **Tạo nhân viên mới** giao luôn khóa INDUCTION **và** các khóa PRODUCT của chi nhánh (tự học).
+- `POST /assignments` và `POST /training-classes/{id}/open` không còn trả `409 PREREQUISITE` / `skipped.reason:
+  "PREREQUISITE"` cho khóa PRODUCT vì thiếu hội nhập.
+- Cơ chế tiên quyết **vẫn còn**: Training Manager có thể đặt lại bằng `PUT /training-regulations/{id}`
+  (`prerequisiteType: "INDUCTION"`), khi đó FE vẫn phải xử lý `PREREQUISITE`/`BLOCKED` như cũ — đừng xóa code đó.
+
+### Dữ liệu cũ
+
+Migration `021_product_without_induction.sql` bỏ tiên quyết của quy chế PRODUCT **một lần** (có ghi audit). Nhân
+viên đang chờ hội nhập chưa tự có khóa PRODUCT: gọi `POST /learning-paths/{userId}/assign` để giao các stage đã mở.
+
+---
+
 ## 2026-11-05 — G-19: nghĩa vụ học lại của hành động khắc phục
 
 Sửa bug: hành động khắc phục yêu cầu học lại vẫn **đóng được nhờ lần đậu cũ**. Giờ mỗi nhân viên được nêu tên có một

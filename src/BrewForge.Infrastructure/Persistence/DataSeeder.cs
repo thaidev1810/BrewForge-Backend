@@ -204,8 +204,9 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
 
     /// <summary>
     /// One regulation per course type, in force since the start of the year:
-    /// induction and product training are mandatory for trainees, and product
-    /// training comes after induction.
+    /// induction and product training are mandatory for trainees. Neither waits
+    /// for the other: a newcomer may study the SOP of a drink before finishing
+    /// induction (a prerequisite can still be set on a regulation if wanted).
     /// </summary>
     private async Task SeedRegulationsAsync(CancellationToken cancellationToken)
     {
@@ -216,7 +217,7 @@ public sealed class DataSeeder(BrewForgeDbContext db, IPasswordHasher hasher, IO
         (CourseType Type, RoleName? MandatoryFor, CourseType? Prerequisite, int DueDays)[] defaults =
         [
             (CourseType.Induction, RoleName.Trainee, null, 7),
-            (CourseType.Product, RoleName.Trainee, CourseType.Induction, 14),
+            (CourseType.Product, RoleName.Trainee, null, 14),
             (CourseType.Equipment, null, null, 14),
             (CourseType.Recertification, null, null, 7),
         ];

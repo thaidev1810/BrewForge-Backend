@@ -25,8 +25,40 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     private sealed record NewStaff(string Username, long Id);
 
     [Fact]
-    public async Task New_member_of_staff_is_put_on_the_induction_course_and_held_back_from_the_product_courses()
+    public async Task New_member_of_staff_is_put_on_induction_and_the_product_courses_of_their_branch_at_once()
     {
+        var drink = await TaughtDrinkAtB03Async();
+        var induction = await InductionCourseIdAsync();
+
+        var staff = await NewTraineeAsync("B03");
+
+        // No prerequisite by default: induction and the SOP of the drinks of their branch, side by side.
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var stages = (await (await trainer.GetAsync($"{Paths}/{staff.Id}")).ShouldBeAsync(HttpStatusCode.OK))
+            .GetProperty("stages").EnumerateArray().ToList();
+        Assert.Equal(["INDUCTION", "PRODUCT"], stages.Select(stage => stage.GetProperty("courseType").GetString()));
+        Assert.All(stages, stage => Assert.Equal((false, JsonValueKind.Null),
+            (stage.GetProperty("blocked").GetBoolean(), stage.GetProperty("prerequisiteType").ValueKind)));
+        Assert.Equal("ENROLLED", CourseOf(stages[0], induction).GetProperty("status").GetString());
+        var product = CourseOf(stages[1], drink.CourseId);
+        Assert.Equal("ENROLLED", product.GetProperty("status").GetString());
+
+        // Without any induction certificate, they study the SOP and are certified on the drink.
+        Assert.False(await factory.WithDbAsync(db => db.Certificates.AnyAsync(c => c.UserId == staff.Id)));
+        var enrollmentId = product.GetProperty("enrollmentId").GetInt64();
+        await PassCourseAsync(staff, drink.CourseId, enrollmentId);
+        Assert.True(await factory.WithDbAsync(db => db.Certificates.AnyAsync(c => c.UserId == staff.Id && c.CourseId == drink.CourseId)));
+
+        // And a class of another PRODUCT course takes them straight away.
+        var other = await factory.NewClassAsync(branchCode: "B03");
+        await (await trainer.PostAsJsonAsync($"{Classes}/{other.ClassId}/open", new { traineeIds = new[] { staff.Id } }))
+            .ShouldBeAsync(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task With_induction_set_as_prerequisite_a_new_member_of_staff_is_held_back_from_the_product_courses()
+    {
+        await using var _ = await factory.RequireInductionBeforeProductAsync();
         var drink = await TaughtDrinkAtB03Async();
         var induction = await InductionCourseIdAsync();
 
@@ -68,6 +100,7 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     [Fact]
     public async Task Course_is_not_opened_to_somebody_who_has_not_passed_its_prerequisite()
     {
+        await using var _ = await factory.RequireInductionBeforeProductAsync();
         var staff = await NewTraineeAsync("B01");
         var seeded = await factory.UserIdAsync(TestUsers.Trainee);
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
@@ -91,8 +124,9 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     }
 
     [Fact]
-    public async Task Passing_induction_opens_the_product_courses_of_the_branch()
+    public async Task With_induction_set_as_prerequisite_passing_it_opens_the_product_courses_of_the_branch()
     {
+        await using var _ = await factory.RequireInductionBeforeProductAsync();
         var drink = await TaughtDrinkAtB03Async();
         var staff = await NewTraineeAsync("B03");
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
@@ -246,10 +280,17 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
     /// <summary>The new member of staff takes the seeded induction course, self-paced, and is certified on it.</summary>
     private async Task PassInductionAsync(NewStaff staff)
     {
-        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
-        var course = await factory.GetCourseAsync(await InductionCourseIdAsync());
+        var inductionId = await InductionCourseIdAsync();
         var enrollmentId = await factory.WithDbAsync(db => db.Enrollments
-            .Where(e => e.UserId == staff.Id && e.CourseId == course.Id()).Select(e => e.Id).SingleAsync());
+            .Where(e => e.UserId == staff.Id && e.CourseId == inductionId).Select(e => e.Id).SingleAsync());
+        await PassCourseAsync(staff, inductionId, enrollmentId);
+    }
+
+    /// <summary>The member of staff takes a course self-paced - modules, quiz, practical - and is certified on it.</summary>
+    private async Task PassCourseAsync(NewStaff staff, long courseId, long enrollmentId)
+    {
+        using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
+        var course = await factory.GetCourseAsync(courseId);
         var moduleIds = course.GetProperty("modules").EnumerateArray().Select(m => m.Id()).ToList();
         var learner = new EligibleLearner(new ClassSetup(course.Id(), RecipeVersionId: 0, ClassId: 0, [], moduleIds),
             staff.Username, staff.Id, enrollmentId);
@@ -262,8 +303,11 @@ public sealed class LearningPathApiTests(BrewForgeApiFactory factory)
         var evaluation = await (await trainer.PostAsJsonAsync($"{learner.Url}/practical-evaluation", new
         {
             practicalVideoId,
-            items = course.GetProperty("practicalChecklist").EnumerateArray()
-                .Select(item => new { lessonId = item.GetProperty("lessonId").GetInt64(), passed = true }),
+            // A course built from a recipe checks its SOP steps; one built from none, its lessons.
+            items = course.GetProperty("practicalChecklist").EnumerateArray().Select(item =>
+                item.TryGetProperty("recipeStepId", out var step) && step.ValueKind == JsonValueKind.Number
+                    ? (object)new { recipeStepId = step.GetInt64(), passed = true }
+                    : new { lessonId = item.GetProperty("lessonId").GetInt64(), passed = true }),
         })).ShouldBeAsync(HttpStatusCode.OK);
         Assert.Equal("PASSED", evaluation.GetProperty("enrollmentState").GetString());
     }

@@ -28,11 +28,15 @@ public sealed class TrainingApiTests(BrewForgeApiFactory factory)
         Assert.Equal("PLANNED", planned.GetProperty("state").GetString());
         Assert.Equal(0, planned.GetProperty("enrolledCount").GetInt32());
 
+        var b01 = await factory.BranchIdAsync("B01");
+        var activeTrainees = await factory.WithDbAsync(db => db.Users.CountAsync(u =>
+            u.BranchId == b01 && u.Role.RoleName == Domain.Identity.RoleName.Trainee && u.Status == Domain.Identity.UserStatus.Active));
         var opened = await factory.OpenClassAsync(setup.ClassId);
         Assert.Equal("RUNNING", opened.GetProperty("class").GetProperty("state").GetString());
-        // Every active trainee of branch B01.
-        Assert.Equal(2, opened.GetProperty("enrollmentIds").GetArrayLength());
-        Assert.Equal(2, opened.GetProperty("class").GetProperty("enrolledCount").GetInt32());
+        // Every active trainee of branch B01 (the seeded two, and any another test left there).
+        Assert.True(activeTrainees >= 2);
+        Assert.Equal(activeTrainees, opened.GetProperty("enrollmentIds").GetArrayLength());
+        Assert.Equal(activeTrainees, opened.GetProperty("class").GetProperty("enrolledCount").GetInt32());
 
         var enrollment = await factory.GetEnrollmentAsync(await factory.EnrollmentIdAsync(setup.ClassId, TestUsers.Trainee));
         Assert.Equal("ASSIGNED", enrollment.GetProperty("state").GetString());
@@ -531,7 +535,8 @@ public sealed class TrainingApiTests(BrewForgeApiFactory factory)
         Assert.DoesNotContain(trainee2Id, users);   // already certified
         var need = needs.EnumerateArray().First(n => n.GetProperty("userId").GetInt64() == traineeId);
         Assert.Equal("REGULATION", need.GetProperty("reason").GetString());
-        Assert.Equal("INDUCTION", need.GetProperty("prerequisiteType").GetString());
+        // PRODUCT training no longer waits for induction (migration 021).
+        Assert.Equal(JsonValueKind.Null, need.GetProperty("prerequisiteType").ValueKind);
         Assert.Equal(14, need.GetProperty("dueDays").GetInt32());
         Assert.Equal(JsonValueKind.Null, need.GetProperty("enrollmentState").ValueKind);
     }
@@ -684,6 +689,7 @@ public sealed class TrainingApiTests(BrewForgeApiFactory factory)
     {
         using var tm = await factory.ClientForAsync(TestUsers.TrainingManager);
         var future = Today.AddYears(1);
+        await using var _ = await factory.RequireInductionBeforeProductAsync();
 
         // A course type cannot be its own prerequisite.
         await (await tm.PostAsJsonAsync("/api/v1/training-regulations", new
@@ -691,7 +697,7 @@ public sealed class TrainingApiTests(BrewForgeApiFactory factory)
             courseType = "EQUIPMENT", prerequisiteType = "EQUIPMENT", dueDays = 14, effectiveFrom = future,
         })).ShouldBeErrorAsync(HttpStatusCode.BadRequest, "VALIDATION_FAILED");
 
-        // PRODUCT already requires INDUCTION (seed); making INDUCTION require PRODUCT closes the loop.
+        // PRODUCT requires INDUCTION (set above); making INDUCTION require PRODUCT closes the loop.
         await (await tm.PostAsJsonAsync("/api/v1/training-regulations", new
         {
             courseType = "INDUCTION", prerequisiteType = "PRODUCT", dueDays = 7, effectiveFrom = future,

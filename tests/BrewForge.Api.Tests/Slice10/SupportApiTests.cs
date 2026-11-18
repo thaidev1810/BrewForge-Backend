@@ -182,6 +182,8 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
     [Fact]
     public async Task G_09_a_named_employee_without_the_prerequisite_is_refused_and_allowed_once_it_is_passed()
     {
+        // The seed sets no prerequisite; a training manager may make PRODUCT wait for induction.
+        await using var _ = await factory.RequireInductionBeforeProductAsync();
         var course = await factory.NewPublishedCourseAsync();   // PRODUCT: taken after induction
         using var admin = await factory.ClientForAsync(TestUsers.Admin);
         using var trainer = await factory.ClientForAsync(TestUsers.Trainer);
@@ -204,6 +206,7 @@ public sealed class SupportApiTests(BrewForgeApiFactory factory)
     [Fact]
     public async Task G_09_assigning_a_whole_branch_skips_those_without_the_prerequisite()
     {
+        await using var _ = await factory.RequireInductionBeforeProductAsync();
         var course = await factory.NewPublishedCourseAsync();
         var courseId = course.Id();
         using var admin = await factory.ClientForAsync(TestUsers.Admin);

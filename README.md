@@ -186,7 +186,7 @@ src/BrewForge.Api             Controllers, authorization policies, the error env
 | BR-39 a practical is scheduled after the quiz is passed, one open appointment per enrolment, in the future | `PracticalSchedule.Create`, `Reschedule`; index `ux_practical_schedule_open` | `SupportApiTests.Practical_is_scheduled_*` |
 | Two versions of a recipe are compared step by step | `RecipeVersionDiff.Between` | `RecipeVersionDiffTests`, `RecertificationApiTests.Two_versions_*` |
 | A recertification course teaches what changed, to staff certified before, and its certificate replaces the flagged one | `Course.WhatToRelearn`, `CourseModuleGenerator.Generate`, `TrainingClassService.OnlyCertifiedBeforeAsync`, `Enrollment.TryCertify` | `RecertificationCourseTests`, `AssessmentTests.Certificate_on_a_newer_version_*`, `RecertificationApiTests` |
-| A course is not assigned to somebody who has not passed its prerequisite | `LearningPathService.OnlyWithPrerequisiteAsync`, `MissingPrerequisiteAsync` | `LearningPathApiTests.Course_is_not_opened_*` |
+| A course is not assigned to somebody who has not passed its prerequisite (none is seeded: PRODUCT no longer waits for INDUCTION) | `LearningPathService.OnlyWithPrerequisiteAsync`, `MissingPrerequisiteAsync` | `LearningPathApiTests.Course_is_not_opened_*` |
 | New staff are put on their path, moved on when they pass a stage, and reminded of due dates | `LearningPathService.AssignOpenStagesAsync`, `RemindAsync`; `TrainingReminderScheduler` | `LearningPathApiTests` |
 | A document of an existing drink is transcribed, each step held to the passage it quotes | `RecipeExtractSchema`, `SourceGrounding`, `RecipeExtractionParser`, `RecipeDraftingService.ExtractAsync` | `DocumentExtractionUnitTests`, `DocumentExtractionApiTests` |
 | A variant is content of its version and must pass like it | `RecipeVariant.Apply`, `RecipeVersion.ReplaceVariants`, `AsServed`, `RecipeValidator.Validate`; triggers on `recipe_variant` | `RecipeVariantTests`, `RecipeVariantApiTests` |
@@ -843,8 +843,11 @@ it is also what happens to a new member of staff, without a schema change.
   course built from no recipe concerns everybody, one built from a recipe
   version concerns those whose branch has that version on its menu. Each
   course is `CERTIFIED`, `ENROLLED`, `BLOCKED` or `AVAILABLE`.
-- **Prerequisites are enforced.** A course whose type has a prerequisite is
-  not assigned to somebody who never passed a course of that type. Opening a
+- **Prerequisites are enforced.** None is seeded: induction and product
+  training run side by side, so a newcomer studies the SOP of a drink before
+  finishing induction (migration 021 removed the PRODUCT -> INDUCTION one).
+  A training manager can still set one on a regulation; a course whose type
+  has a prerequisite is then not assigned to somebody who never passed a course of that type. Opening a
   class naming such a person is refused (`409 PREREQUISITE`, each of them
   named in `details`); a class for a whole branch enrols those who qualify. A
   course once passed stays passed for this purpose.

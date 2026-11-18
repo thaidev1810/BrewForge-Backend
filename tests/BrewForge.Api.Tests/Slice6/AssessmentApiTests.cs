@@ -506,7 +506,9 @@ public sealed class AssessmentApiTests(BrewForgeApiFactory factory)
     public async Task Training_progress_dashboard_counts_learners_by_state_and_certified_staff_per_branch()
     {
         var setup = await factory.NewClassAsync();
-        await factory.OpenClassAsync(setup.ClassId); // trainee and trainee2 of B01
+        // trainee and trainee2 of B01, by name: other tests leave trainees of their own at B01 too.
+        await factory.OpenClassAsync(setup.ClassId,
+            [await factory.UserIdAsync(TestUsers.Trainee), await factory.UserIdAsync("trainee2")]);
         await factory.CertifyThroughTheCourseAsync(await factory.StudyAsync(setup, TestUsers.Trainee));
         var behind = await factory.EnrollmentIdAsync(setup.ClassId, "trainee2");
         var yesterday = Today.AddDays(-1);
