@@ -326,6 +326,115 @@ public sealed class ImpactApiTests(BrewForgeApiFactory factory)
             a.EntityType == "Certificate" && drink.CertificateIds.Contains(a.EntityId) && a.Action == "FLAG_RECERT")));
     }
 
+    // ---------------------------------------------------------------- BE-02b: runs of different triggers
+
+    [Fact]
+    public async Task BE_02b_an_ingredient_run_committed_makes_the_version_run_on_the_same_course_stale()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var byIngredient = (await factory.AnalyzeAsync("Ingredient", drink.IngredientId)).GetProperty("runId").GetString()!;
+        var byVersion = (await factory.AnalyzeAsync("RecipeVersion", drink.VersionId)).GetProperty("runId").GetString()!;
+
+        await (await factory.CommitAsync(byIngredient)).ShouldBeAsync(HttpStatusCode.OK);
+        var stale = await (await factory.CommitAsync(byVersion)).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IMPACT_STALE");
+
+        // What the version run previewed has been flagged by the other: each difference named.
+        var issues = stale.GetProperty("details").EnumerateArray().Select(d => d.GetProperty("issue").GetString()).ToList();
+        Assert.Contains($"Course {drink.CourseId}: NO_LONGER_AFFECTED", issues);
+        Assert.All(drink.CertificateIds, id => Assert.Contains($"Certificate {id}: NO_LONGER_AFFECTED", issues));
+        await AssertFlaggedOnceAsync(drink);
+        Assert.False(await factory.WithDbAsync(db => db.ImpactRuns.Where(h => h.RunId == Guid.Parse(byVersion)).Select(h => h.Committed).SingleAsync()));
+    }
+
+    [Fact]
+    public async Task BE_02b_runs_of_different_triggers_on_the_same_course_committed_at_once_apply_once()
+    {
+        // Several rounds on fresh drinks: a race shows itself only some of the time.
+        for (var round = 0; round < 5; round++)
+        {
+            var drink = await factory.NewTaughtDrinkAsync();
+            var byIngredient = (await factory.AnalyzeAsync("Ingredient", drink.IngredientId)).GetProperty("runId").GetString()!;
+            var byVersion = (await factory.AnalyzeAsync("RecipeVersion", drink.VersionId)).GetProperty("runId").GetString()!;
+
+            var responses = await Task.WhenAll(factory.CommitAsync(byIngredient), factory.CommitAsync(byVersion));
+
+            Assert.Equal([HttpStatusCode.OK, HttpStatusCode.Conflict], responses.Select(r => r.StatusCode).Order());
+            await responses.Single(r => r.StatusCode == HttpStatusCode.Conflict).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IMPACT_STALE");
+            await AssertFlaggedOnceAsync(drink);
+            Assert.Equal(1, await factory.WithDbAsync(db => db.ImpactRuns
+                .CountAsync(h => (h.RunId == Guid.Parse(byIngredient) || h.RunId == Guid.Parse(byVersion)) && h.Committed)));
+        }
+    }
+
+    [Fact]
+    public async Task BE_02b_runs_of_different_triggers_on_independent_drinks_both_commit_at_once()
+    {
+        var (first, second) = (await factory.NewTaughtDrinkAsync(), await factory.NewTaughtDrinkAsync());
+        var byIngredient = (await factory.AnalyzeAsync("Ingredient", first.IngredientId)).GetProperty("runId").GetString()!;
+        var byVersion = (await factory.AnalyzeAsync("RecipeVersion", second.VersionId)).GetProperty("runId").GetString()!;
+
+        var responses = await Task.WhenAll(factory.CommitAsync(byIngredient), factory.CommitAsync(byVersion));
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+        await AssertFlaggedOnceAsync(first);
+        await AssertFlaggedOnceAsync(second);
+    }
+
+    [Fact]
+    public async Task BE_02b_a_committed_run_sent_again_adds_nothing()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var runId = (await factory.AnalyzeAsync("Ingredient", drink.IngredientId)).GetProperty("runId").GetString()!;
+        await (await factory.CommitAsync(runId)).ShouldBeAsync(HttpStatusCode.OK);
+
+        await (await factory.CommitAsync(runId)).ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IMPACT_ALREADY_COMMITTED");
+
+        await AssertFlaggedOnceAsync(drink);
+    }
+
+    [Fact]
+    public async Task BE_02b_a_release_and_an_impact_commit_on_the_same_drink_at_once_flag_once_and_fail_neither_with_a_500()
+    {
+        var drink = await factory.NewTaughtDrinkAsync();
+        var runId = (await factory.AnalyzeAsync("Ingredient", drink.IngredientId)).GetProperty("runId").GetString()!;
+
+        var release = factory.ReleaseNewVersionAsync(drink.RecipeId, new
+        {
+            steps = new[] { RecipeScenario.Step(1, "Brew the oolong differently", "TEA_BREWER", 400, [RecipeScenario.Use("ING-OOLONG", 17m, "g")], gate: "Water at 88 C") },
+        });
+        var commit = factory.CommitAsync(runId);
+        await Task.WhenAll(release, commit);
+
+        // Whichever went first flagged; the commit, if second, found its preview overtaken.
+        var committed = await commit;
+        Assert.True(committed.StatusCode is HttpStatusCode.OK or HttpStatusCode.Conflict, $"commit answered {(int)committed.StatusCode}");
+        if (committed.StatusCode == HttpStatusCode.Conflict)
+        {
+            await committed.ShouldBeErrorAsync(HttpStatusCode.Conflict, rule: "IMPACT_STALE");
+        }
+        await AssertFlaggedOnceAsync(drink);
+    }
+
+    /// <summary>
+    /// The state a single application leaves: the course out of date, and one audit entry and one notice for
+    /// the course and for each certificate - nothing flagged or told twice.
+    /// </summary>
+    private async Task AssertFlaggedOnceAsync(TaughtDrink drink)
+    {
+        Assert.Equal("OUT_OF_DATE", (await factory.GetCourseAsync(drink.CourseId)).StateOf());
+        Assert.Equal(1, await factory.WithDbAsync(db => db.AuditLogs.CountAsync(a =>
+            a.EntityType == "Course" && a.EntityId == drink.CourseId && a.Action == "MARK_OUT_OF_DATE")));
+        foreach (var certificateId in drink.CertificateIds)
+        {
+            Assert.Equal(1, await factory.WithDbAsync(db => db.AuditLogs.CountAsync(a =>
+                a.EntityType == "Certificate" && a.EntityId == certificateId && a.Action == "FLAG_RECERT")));
+        }
+        Assert.All(await factory.WithDbAsync(db => db.Certificates.AsNoTracking().Where(c => drink.CertificateIds.Contains(c.Id))
+            .Select(c => c.Status).ToListAsync()), status => Assert.Equal(Domain.Training.CertificateStatus.NeedsRecert, status));
+        Assert.Equal(1, await factory.WithDbAsync(db => db.Notifications.CountAsync(n =>
+            n.Subject == "Course out of date" && n.ReferenceType == "COURSE" && n.ReferenceId == drink.CourseId)));
+    }
+
     // ---------------------------------------------------------------- on release
 
     [Fact]

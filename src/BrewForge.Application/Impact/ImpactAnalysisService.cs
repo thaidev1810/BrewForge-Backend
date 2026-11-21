@@ -90,15 +90,24 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
     /// again at this moment; if it is no longer the one the run previewed (a certificate issued since, or one
     /// flagged by another run of the same change), nothing is applied and the commit is refused with
     /// <c>IMPACT_STALE</c>, each difference in <c>details</c>: the user analyses again and commits the new run.
-    /// Commits of runs of one trigger take turns, so the later sees what the earlier flagged.
+    /// Every commit takes turns with every other, whatever its trigger, and with the propagation of a release
+    /// (<see cref="ImpactApplyLock"/>): two runs of different triggers that touch one course cannot both apply,
+    /// the later sees what the earlier flagged and is refused as stale (BE-02b).
     /// </summary>
     public Task<ImpactAnalysisDto> CommitAsync(string runId, CancellationToken cancellationToken) =>
         db.InTransactionAsync(async () =>
         {
-            var peek = await HeaderAsync(runId, tracking: false, cancellationToken);
-            await db.AdvisoryLockAsync($"impact:{peek.TriggerEntity}:{peek.TriggerId}", cancellationToken);
+            await db.AdvisoryLockAsync(ImpactApplyLock, cancellationToken);
             return await CommitLockedAsync(runId, cancellationToken);
         }, cancellationToken);
+
+    /// <summary>
+    /// The lock every change that flags courses OUT_OF_DATE and certificates NEEDS_RECERT holds until its
+    /// transaction ends: impact commits and the propagation of a release. What they touch is only known once
+    /// computed, and runs of different triggers can touch the same rows, so they take turns as a whole; they
+    /// are rare, deliberate acts, and each takes a moment.
+    /// </summary>
+    public const string ImpactApplyLock = "impact-apply";
 
     private async Task<ImpactAnalysisDto> CommitLockedAsync(string runId, CancellationToken cancellationToken)
     {
@@ -145,6 +154,9 @@ public sealed class ImpactAnalysisService(IBrewForgeDbContext db, LaunchReadines
     /// </summary>
     public async Task PropagateSupersededAsync(long supersededVersionId, CancellationToken cancellationToken)
     {
+        // Within the transaction of the release, which took the lock first (a no-op wait here, kept so the
+        // propagation never runs unlocked if it is ever called from elsewhere).
+        await db.AdvisoryLockAsync(ImpactApplyLock, cancellationToken);
         var (trigger, affected) = await ComputeAsync(TriggerKind.RecipeVersion, supersededVersionId, tracking: true,
             cancellationToken);
         if (affected.IsEmpty) return;

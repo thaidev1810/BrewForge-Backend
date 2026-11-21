@@ -57,6 +57,12 @@ role, chi nhánh hoặc khóa tài khoản thu hồi **mọi** phiên ngay ở r
 - **BE-02**: commit đồng thời của cùng run → một `200`, một `IMPACT_ALREADY_COMMITTED` (như cũ); commit đồng thời của
   hai run khác nhau cùng một thay đổi → chạy lần lượt, run sau nhận `IMPACT_STALE`. Lỗi giữa chừng không để lại cập
   nhật dở dang.
+- **BE-02b (sửa 2026-11-21)**: hai run **khác trigger** (vd. Ingredient và RecipeVersion) cùng tác động một
+  course/chứng chỉ, commit đồng thời → **một `200`, một `409 IMPACT_STALE`** (`details`: `Course {id}:
+  NO_LONGER_AFFECTED`, `Certificate {id}: NO_LONGER_AFFECTED`); course chỉ có **một** audit `MARK_OUT_OF_DATE`, mỗi
+  chứng chỉ một `FLAG_RECERT`, một thông báo. Trước đây cả hai cùng `200` và áp dụng hai lần. Mọi commit impact và việc
+  phát hành phiên bản mới (tự gắn cờ course/chứng chỉ của bản cũ) giờ chạy lần lượt. Hai run tác động tài nguyên độc
+  lập vẫn cùng `200`. Contract không đổi.
 - **BE-05**: bộ nhắc hạn học (`TrainingReminderScheduler`) chạy song song (nhiều instance) không gửi trùng.
 - Mở đối tượng từ thông báo đi qua endpoint của đối tượng, nên vẫn kiểm quyền/chi nhánh: mất quyền → `403`/`404`,
   đối tượng không còn → `404`; FE chỉ hiện nội dung thông báo.

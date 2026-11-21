@@ -119,6 +119,10 @@ public sealed class RecipeReleaseService(IBrewForgeDbContext db, RecipeService r
 
         return await db.InTransactionAsync(async () =>
         {
+            // First of all: the release ends by flagging what the superseded version taught (BR-15), so it takes
+            // turns with impact commits (BE-02b). Taken before any row is touched, so that it never holds a row a
+            // commit waits for while itself waiting for the lock.
+            await db.AdvisoryLockAsync(ImpactAnalysisService.ImpactApplyLock, cancellationToken);
             // The validation run of this release is part of what is committed.
             release.SupersedePrevious();
             if (release.Superseded is { } previous)
